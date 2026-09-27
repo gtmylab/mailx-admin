@@ -45,7 +45,11 @@ ADMIN_WEB_PORT="9443"
 # Where to fetch the binary from.
 # Override with: MAILX_ADMIN_BINARY_URL=... ./installer.sh
 # Or place a file at /tmp/mailx-admin before running the installer.
-ADMIN_BINARY_URL="${MAILX_ADMIN_BINARY_URL:-https://github.com/gtmylab/mailx-admin/releases/latest/download/mailx-admin-linux-amd64}"
+# The published release asset is linux-amd64. Keep its name in one place: it is
+# used for the download URL and for the SHA256SUMS entry lookup.
+ADMIN_BINARY_ASSET="mailx-admin-linux-amd64"
+ADMIN_BINARY_URL="${MAILX_ADMIN_BINARY_URL:-https://github.com/gtmylab/mailx-admin/releases/latest/download/${ADMIN_BINARY_ASSET}}"
+ADMIN_BINARY_SHA_URL="${MAILX_ADMIN_SHA_URL:-https://github.com/gtmylab/mailx-admin/releases/latest/download/SHA256SUMS}"
 ADMIN_BINARY_LOCAL="${MAILX_ADMIN_BINARY_LOCAL:-/tmp/mailx-admin}"
 
 # ============================================================================
@@ -123,11 +127,14 @@ command_exists() {
 
 # Download a binary, verify it's executable, and install it.
 # Accepts: a local path (if file exists), otherwise a URL.
+# $5 (optional) is a SHA256SUMS-style URL: when given, the downloaded file must
+# match the entry named $4 before it is installed.
 install_binary_from_url() {
     local url=$1
     local local_path=$2
     local target=$3
     local expected_name=$4
+    local checksums_url=$5
 
     if [ -f "$local_path" ] && [ -s "$local_path" ]; then
         log_info "Using local binary at $local_path for $expected_name"
@@ -151,6 +158,31 @@ install_binary_from_url() {
     # Sanity check: does it look like a Linux ELF binary?
     if ! head -c 4 "${target}.tmp" | grep -q $'\x7fELF'; then
         log_warning "$expected_name does not look like a Linux ELF binary — continuing anyway"
+    fi
+
+    # Integrity check against the release's SHA256SUMS, when one is configured.
+    # An unreachable/missing checksum is non-fatal (offline mirrors, custom
+    # builds), but a MISMATCH is fatal so a truncated or substituted download
+    # never reaches /usr/local/bin.
+    if [ -n "$checksums_url" ]; then
+        local expected_sha=""
+        expected_sha=$(wget -qO- --timeout=30 "$checksums_url" 2>/dev/null | \
+            awk -v n="$expected_name" '$2 == n || $2 == "*" n { print $1; exit }')
+
+        if [ -z "$expected_sha" ]; then
+            log_warning "No checksum for $expected_name in $checksums_url - skipping verification"
+        else
+            local actual_sha=""
+            actual_sha=$(sha256sum "${target}.tmp" 2>/dev/null | awk '{ print $1 }')
+            if [ "$actual_sha" != "$expected_sha" ]; then
+                log_error "Checksum mismatch for $expected_name"
+                log_error "  expected: $expected_sha"
+                log_error "  actual:   $actual_sha"
+                rm -f "${target}.tmp"
+                return 1
+            fi
+            log_info "Checksum verified for $expected_name (sha256 ${actual_sha:0:12}...)"
+        fi
     fi
 
     mv "${target}.tmp" "$target"
@@ -456,8 +488,8 @@ update_postfix_config() {
     done
 
     declare -A config_urls=(
-        ["main.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/_main.cf"
-        ["master.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/_master.cf"
+        ["main.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_main.cf"
+        ["master.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_master.cf"
     )
 
     for file in "${!config_urls[@]}"; do
@@ -2306,7 +2338,7 @@ repair_postfix_config() {
     log_info "Backed up current configs with timestamp $timestamp"
 
     log_info "Downloading main.cf from GitHub..."
-    if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/main.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/_main.cf"; then
+    if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/main.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_main.cf"; then
         if [[ -s "${config_dir}/main.cf.tmp" ]]; then
             mv "${config_dir}/main.cf.tmp" "${config_dir}/main.cf"
             log_info "main.cf downloaded successfully"
@@ -2322,7 +2354,7 @@ repair_postfix_config() {
     fi
 
     log_info "Downloading master.cf from GitHub..."
-    if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/master.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/_master.cf"; then
+    if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/master.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_master.cf"; then
         if [[ -s "${config_dir}/master.cf.tmp" ]]; then
             mv "${config_dir}/master.cf.tmp" "${config_dir}/master.cf"
             log_info "master.cf downloaded successfully"
@@ -2415,7 +2447,7 @@ set_postfix_custom_port() {
     read -p "Re-download clean master.cf from GitHub? (recommended) (y/n): " redownload
     if [[ "$redownload" == "y" ]]; then
         log_info "Downloading clean master.cf from GitHub..."
-        if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/master.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/_master.cf"; then
+        if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/master.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/postfix_master.cf"; then
             if [[ -s "${config_dir}/master.cf.tmp" ]]; then
                 mv "${config_dir}/master.cf.tmp" "${config_dir}/master.cf"
                 sed -i "s/{EMAIL_DOMAIN}/$domain/g; s/{HOSTNAME}/$hostname/g" "${config_dir}/master.cf" 2>/dev/null || true
@@ -3051,7 +3083,19 @@ install_mailx_admin_panel() {
         log_info "mailx-admin binary already present at $ADMIN_BINARY_PATH"
         log_info "Set MAILX_ADMIN_FORCE_REINSTALL=1 to replace it with the release build"
     else
-        if ! install_binary_from_url "$ADMIN_BINARY_URL" "$ADMIN_BINARY_LOCAL" "$ADMIN_BINARY_PATH" "mailx-admin"; then
+        # Only $ADMIN_BINARY_ASSET (linux-amd64) is published. Installing it on
+        # another architecture produces a binary that dies with "Exec format
+        # error", so refuse early unless the operator supplied their own build
+        # (MAILX_ADMIN_BINARY_URL=... or a file at $ADMIN_BINARY_LOCAL).
+        local machine_arch
+        machine_arch=$(uname -m)
+        if [ "$machine_arch" != "x86_64" ] && [ -z "$MAILX_ADMIN_BINARY_URL" ] && [ ! -s "$ADMIN_BINARY_LOCAL" ]; then
+            log_error "No mailx-admin release binary for '$machine_arch' (published asset is ${ADMIN_BINARY_ASSET})."
+            log_error "Build from source, or set MAILX_ADMIN_BINARY_URL / MAILX_ADMIN_BINARY_LOCAL, then re-run."
+            return 1
+        fi
+
+        if ! install_binary_from_url "$ADMIN_BINARY_URL" "$ADMIN_BINARY_LOCAL" "$ADMIN_BINARY_PATH" "$ADMIN_BINARY_ASSET" "$ADMIN_BINARY_SHA_URL"; then
             log_warning "Could not install mailx-admin binary — panel will not start."
             log_warning "Place the binary at $ADMIN_BINARY_LOCAL and re-run this stage."
             return 1
