@@ -1,0 +1,102 @@
+{{define "sieve_rule_form"}}
+<div x-data="{ open: true }" x-show="open" x-cloak @close-modal.window="open = false"
+     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+  <div @click.outside="open = false"
+       class="w-full max-w-md rounded-lg border border-slate-800 bg-slate-900 shadow-2xl">
+    <header class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+      <h3 class="font-medium">
+        {{if eq .RuleType "vacation"}}Vacation responder
+        {{else if eq .RuleType "forward"}}Forward
+        {{else if eq .RuleType "move_folder"}}Move to folder
+        {{else if eq .RuleType "discard"}}Discard
+        {{else if eq .RuleType "mark_read"}}Mark as read{{end}}
+      </h3>
+      <button @click="open = false" class="text-slate-500 hover:text-slate-200">✕</button>
+    </header>
+
+    <form hx-post="/users/{{.UserID}}/sieve"
+          hx-target="#form-error"
+          hx-swap="innerHTML"
+          class="p-5 space-y-4">
+      <div id="form-error"></div>
+      <input type="hidden" name="rule_type" value="{{.RuleType}}">
+
+      {{if eq .RuleType "vacation"}}
+      <label class="block">
+        <span class="text-sm text-slate-400">Reply subject</span>
+        <input type="text" name="subject" value="Out of office" required
+               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+      </label>
+      <label class="block">
+        <span class="text-sm text-slate-400">Reply message</span>
+        <textarea name="message" rows="4" required
+                  class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">I am currently out of the office and will respond when I return.</textarea>
+      </label>
+      <label class="block">
+        <span class="text-sm text-slate-400">Reply at most once every N days</span>
+        <input type="number" name="days" value="7" min="1" max="30"
+               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+      </label>
+
+      {{else if eq .RuleType "forward"}}
+      <label class="block">
+        <span class="text-sm text-slate-400">Forward to</span>
+        <input type="email" name="address" required
+               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+      </label>
+      <label class="flex items-center gap-2">
+        <input type="checkbox" name="keep_copy" checked>
+        <span class="text-sm text-slate-300">Keep a copy in this mailbox</span>
+      </label>
+
+      {{else if eq .RuleType "move_folder"}}
+      <label class="block">
+        <span class="text-sm text-slate-400">Header to match</span>
+        <select name="match_header"
+                class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+          <option value="Subject">Subject</option>
+          <option value="From">From</option>
+          <option value="To">To</option>
+          <option value="List-Id">List-Id</option>
+        </select>
+      </label>
+      <label class="block">
+        <span class="text-sm text-slate-400">Contains</span>
+        <input type="text" name="match_contains" required
+               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+      </label>
+      <label class="block">
+        <span class="text-sm text-slate-400">Move to folder</span>
+        <input type="text" name="folder" required placeholder="Newsletters"
+               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+      </label>
+
+      {{else if or (eq .RuleType "discard") (eq .RuleType "mark_read")}}
+      <label class="block">
+        <span class="text-sm text-slate-400">Header to match</span>
+        <select name="match_header"
+                class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+          <option value="From">From</option>
+          <option value="Subject">Subject</option>
+          <option value="List-Id">List-Id</option>
+        </select>
+      </label>
+      <label class="block">
+        <span class="text-sm text-slate-400">Contains</span>
+        <input type="text" name="match_contains" required
+               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+      </label>
+      {{end}}
+
+      <div class="flex justify-end gap-2 pt-2">
+        <button type="button" @click="open = false"
+                class="rounded border border-slate-700 px-3 py-1.5 text-sm">Cancel</button>
+        <button type="submit"
+                class="rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-sm font-medium">
+          Add rule
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}

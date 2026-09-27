@@ -1,0 +1,104 @@
+{{define "content"}}
+<div class="max-w-5xl grid grid-cols-5 gap-6">
+  <div class="col-span-2">
+    <form hx-post="/tools/test-send"
+          hx-target="#ts-result"
+          hx-swap="innerHTML"
+          hx-indicator="#ts-spinner"
+          class="rounded-lg border border-slate-800 bg-slate-900 p-5 space-y-4">
+
+      <h2 class="font-medium">Send a test email</h2>
+
+      <div class="grid grid-cols-3 gap-3">
+        <label class="block col-span-2">
+          <span class="text-sm text-slate-400">SMTP host</span>
+          <input type="text" name="host" value="127.0.0.1"
+                 class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+        </label>
+        <label class="block">
+          <span class="text-sm text-slate-400">Port</span>
+          <input type="number" name="port" value="587" min="1" max="65535"
+                 class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+        </label>
+      </div>
+
+      <label class="block">
+        <span class="text-sm text-slate-400">TLS mode</span>
+        <select name="tls_mode"
+                class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+          <option value="starttls" selected>STARTTLS</option>
+          <option value="implicit">Implicit (SMTPS)</option>
+          <option value="none">None</option>
+        </select>
+      </label>
+
+      <div class="grid grid-cols-2 gap-3">
+        <label class="block">
+          <span class="text-sm text-slate-400">Username (optional)</span>
+          <input type="text" name="username"
+                 class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+        </label>
+        <label class="block">
+          <span class="text-sm text-slate-400">Password</span>
+          <input type="password" name="password"
+                 class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+        </label>
+      </div>
+
+      <label class="flex items-center gap-2">
+        <input type="checkbox" name="skip_verify">
+        <span class="text-sm text-slate-300">Skip certificate verification (debugging only)</span>
+      </label>
+
+      <label class="block">
+        <span class="text-sm text-slate-400">From</span>
+        <input type="email" name="from" required
+               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+      </label>
+
+      <label class="block">
+        <span class="text-sm text-slate-400">To</span>
+        <input type="email" name="to" required
+               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+      </label>
+
+      <label class="block">
+        <span class="text-sm text-slate-400">Subject</span>
+        <input type="text" name="subject" value="MailX test email"
+               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+      </label>
+
+      <label class="block">
+        <span class="text-sm text-slate-400">Body</span>
+        <textarea name="body" rows="4"
+                  class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">This is a test message from MailX Admin.</textarea>
+      </label>
+
+      <button type="submit"
+              class="w-full rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-2 font-medium flex items-center justify-center gap-2">
+        <span>Send test</span>
+        <span id="ts-spinner" class="htmx-indicator">⟳</span>
+      </button>
+    </form>
+
+    <div class="mt-6 rounded-lg border border-slate-800 bg-slate-900">
+      <header class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+        <h3 class="font-medium text-sm">Recent sends</h3>
+        <button hx-get="/tools/test-send/history" hx-target="#ts-history" hx-swap="innerHTML"
+                class="text-xs text-slate-400 hover:text-slate-200">Refresh</button>
+      </header>
+      <div id="ts-history" hx-get="/tools/test-send/history" hx-trigger="load" hx-swap="innerHTML">
+        <div class="p-4 text-sm text-slate-500">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-span-3">
+    <div id="ts-result">
+      <div class="rounded-lg border border-slate-800 bg-slate-900 p-8 text-center text-slate-500">
+        Fill in the form and click Send test.
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}

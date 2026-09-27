@@ -1,0 +1,19 @@
+{{define "content"}}
+<div class="grid grid-cols-2 gap-6">
+  {{range .Data.Domains}}
+  <a href="/domains/{{.ID}}" class="block rounded-lg border border-slate-800 bg-slate-900 p-5 hover:border-slate-700 transition">
+    <div class="flex items-start justify-between">
+      <div>
+        <div class="font-medium">{{.Name}}</div>
+        {{if .IsPrimary}}<div class="text-xs text-slate-500 mt-0.5">primary</div>{{end}}
+      </div>
+      {{if .DKIMPrivateKeyPath}}
+      <span class="rounded bg-emerald-950 border border-emerald-800 px-2 py-0.5 text-xs text-emerald-300">DKIM</span>
+      {{else}}
+      <span class="rounded bg-amber-950 border border-amber-800 px-2 py-0.5 text-xs text-amber-300">no DKIM</span>
+      {{end}}
+    </div>
+  </a>
+  {{end}}
+</div>
+{{end}}

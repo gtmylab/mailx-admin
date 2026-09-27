@@ -1,0 +1,67 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · MailX Admin</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+  <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased" hx-headers='{"X-CSRF-Token":"{{.CSRFToken}}"}'>
+<div class="min-h-screen flex">
+  {{template "sidebar" .}}
+
+  <main class="flex-1 overflow-x-hidden">
+    <header class="h-14 border-b border-slate-800 flex items-center justify-between px-6">
+      <h1 class="text-lg font-medium">{{.Title}}</h1>
+      <div class="flex items-center gap-4 text-sm">
+        {{with .Session}}
+        <span class="text-slate-400">{{.Username}}</span>
+        <span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-xs">{{.Role}}</span>
+        {{end}}
+        <form method="post" action="/logout">
+          <button class="text-slate-400 hover:text-slate-100">Sign out</button>
+        </form>
+      </div>
+    </header>
+
+    <div class="p-6">
+      {{if .Flash}}
+      <div class="mb-4 rounded border border-emerald-800 bg-emerald-950/50 px-4 py-3 text-sm text-emerald-200">
+        {{.Flash}}
+      </div>
+      {{end}}
+
+      {{template "content" .}}
+    </div>
+  </main>
+</div>
+<div id="modal-host"></div>
+<div id="toast-host"
+     x-data
+     @show-toast.window="
+       $el.innerHTML = $event.detail.html;
+       setTimeout(() => $el.innerHTML = '', 4000);
+     "
+     class="fixed bottom-4 right-4 space-y-2 z-40"></div>
+
+<script>
+  // Convert ?flash=... into a toast event on page load
+  document.addEventListener('DOMContentLoaded', () => {
+    const url = new URL(window.location.href);
+    const flash = url.searchParams.get('flash');
+    if (flash) {
+      window.dispatchEvent(new CustomEvent('show-toast', {
+        detail: {
+          html: `<div class="rounded border border-emerald-800 bg-emerald-950/80 px-4 py-2 text-sm text-emerald-200 shadow-lg">${flash}</div>`
+        }
+      }));
+      // Clean URL
+      url.searchParams.delete('flash');
+      window.history.replaceState({}, '', url.toString());
+    }
+  });
+</script>
+</body>
+</html>{{end}}

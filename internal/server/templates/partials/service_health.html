@@ -1,0 +1,15 @@
+{{define "service_health"}}
+<ul class="divide-y divide-slate-800 text-sm">
+  {{range .Data.Services}}
+  <li class="px-4 py-2 flex items-center justify-between">
+    <span>{{.Name}}</span>
+    <span class="flex items-center gap-2">
+      <span class="w-2 h-2 rounded-full
+        {{if eq .Status "active"}}bg-emerald-500
+        {{else}}bg-red-500{{end}}"></span>
+      <span class="text-slate-400 text-xs">{{.Status}}</span>
+    </span>
+  </li>
+  {{end}}
+</ul>
+{{end}}

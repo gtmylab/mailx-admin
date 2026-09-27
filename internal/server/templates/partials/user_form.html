@@ -1,0 +1,82 @@
+{{define "user_form"}}
+<div x-data="{ open: true }" x-show="open" x-cloak @close-modal.window="open = false"
+     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+  <div @click.outside="open = false" class="w-full max-w-md rounded-lg border border-slate-800 bg-slate-900 shadow-2xl">
+    <header class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+      <h3 class="font-medium">
+        {{if .User}}Edit user{{else}}Create user{{end}}
+      </h3>
+      <button type="button" @click="open = false" class="text-slate-500 hover:text-slate-200">✕</button>
+    </header>
+
+    <form hx-{{if .User}}patch{{else}}post{{end}}="{{.Action}}"
+          hx-target="#form-error"
+          hx-swap="innerHTML"
+          class="p-5 space-y-4">
+
+      <div id="form-error"></div>
+
+      {{if not .User}}
+      <label class="block">
+        <span class="text-sm text-slate-400">Domain</span>
+        <select name="domain_id" required
+                class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+          {{range .Domains}}
+          <option value="{{.ID}}">{{.Name}}</option>
+          {{end}}
+        </select>
+      </label>
+
+      <label class="block">
+        <span class="text-sm text-slate-400">Username</span>
+        <input type="text" name="username" required
+               pattern="[a-zA-Z0-9._-]+"
+               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+        <span class="text-xs text-slate-500 mt-1 block">Local part only (e.g. "alice"). Letters, digits, . _ -</span>
+      </label>
+
+      <label class="block" x-data="{ show: false }">
+        <span class="text-sm text-slate-400">Initial password</span>
+        <div class="relative">
+          <input :type="show ? 'text' : 'password'" name="password" required minlength="8"
+                 class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2 pr-16">
+          <button type="button" @click="show = !show"
+                  class="absolute right-2 top-2 text-xs text-slate-500 hover:text-slate-200"
+                  x-text="show ? 'hide' : 'show'">show</button>
+        </div>
+        <span class="text-xs text-slate-500 mt-1 block">Minimum 8 characters. Shown once; save it now or send to an alternate email.</span>
+      </label>
+      {{end}}
+
+      <label class="block">
+        <span class="text-sm text-slate-400">Quota (MB)</span>
+        <input type="number" name="quota_mb" min="1" value="{{if .User}}{{.User.QuotaMB}}{{else}}1024{{end}}"
+               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+      </label>
+
+      {{if .User}}
+      <label class="flex items-center gap-2">
+        <input type="checkbox" name="active" {{if .User.Active}}checked{{end}}>
+        <span class="text-sm text-slate-300">Active</span>
+      </label>
+      {{end}}
+
+      <label class="flex items-center gap-2">
+        <input type="checkbox" name="is_admin" {{if .User}}{{if .User.IsAdmin}}checked{{end}}{{end}}>
+        <span class="text-sm text-slate-300">Admin (can also sign in to this panel)</span>
+      </label>
+
+      <div class="flex justify-end gap-2 pt-2">
+        <button type="button" @click="open = false"
+                class="rounded border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
+          Cancel
+        </button>
+        <button type="submit"
+                class="rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-sm font-medium">
+          {{if .User}}Save{{else}}Preview{{end}}
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}

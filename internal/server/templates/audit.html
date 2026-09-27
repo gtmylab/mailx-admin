@@ -1,0 +1,37 @@
+{{define "content"}}
+<div class="rounded-lg border border-slate-800 bg-slate-900">
+  <header class="px-4 py-3 border-b border-slate-800">
+    <h2 class="font-medium">Audit Log</h2>
+  </header>
+  {{template "audit_table" .}}
+</div>
+{{end}}
+
+{{define "audit_table"}}
+<table class="w-full text-sm">
+  <thead class="text-xs text-slate-500 uppercase tracking-wider">
+    <tr>
+      <th class="text-left px-4 py-2">When</th>
+      <th class="text-left px-4 py-2">Actor</th>
+      <th class="text-left px-4 py-2">Action</th>
+      <th class="text-left px-4 py-2">Target</th>
+      <th class="text-left px-4 py-2">Result</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Data.Entries}}
+    <tr class="border-t border-slate-800">
+      <td class="px-4 py-2 text-slate-400">{{humanTime .Ts}}</td>
+      <td class="px-4 py-2">{{.Actor}}</td>
+      <td class="px-4 py-2 font-mono text-xs">{{.Action}}</td>
+      <td class="px-4 py-2 text-slate-400">{{.TargetType}} {{.TargetID}}</td>
+      <td class="px-4 py-2">
+        <span class="text-{{if eq .Result "ok"}}emerald{{else}}red{{end}}-400">{{.Result}}</span>
+      </td>
+    </tr>
+    {{else}}
+    <tr><td colspan="5" class="px-4 py-8 text-center text-slate-500">No activity yet.</td></tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}

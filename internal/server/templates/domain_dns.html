@@ -1,0 +1,41 @@
+{{define "content"}}
+<div class="max-w-4xl">
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h2 class="text-lg font-medium">DNS records for {{.Data.Domain.Name}}</h2>
+      <p class="text-sm text-slate-400 mt-1">
+        Add these records to your DNS provider, then click "Verify".
+      </p>
+    </div>
+    <div class="flex gap-2">
+      <a href="/domains/{{.Data.Domain.ID}}/dns/export"
+         class="rounded border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800">
+        Download .txt
+      </a>
+      <button hx-get="/domains/{{.Data.Domain.ID}}/dns/check"
+              hx-target="#dns-results"
+              hx-swap="innerHTML"
+              hx-indicator="#dns-spinner"
+              class="rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-sm font-medium flex items-center gap-2">
+        <span>Verify DNS</span>
+        <span id="dns-spinner" class="htmx-indicator">⟳</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="mb-4 rounded border border-slate-800 bg-slate-900 px-4 py-3 text-sm">
+    <span class="text-slate-400">Server IP:</span>
+    <code class="ml-2 font-mono">{{.Data.ServerIP}}</code>
+  </div>
+
+  <div id="dns-results">
+    {{if .Data.Checks}}
+      {{template "dns_check_results" .}}
+    {{else}}
+      <div class="rounded border border-slate-800 bg-slate-900 p-8 text-center text-slate-500">
+        No DNS check run yet. Click "Verify DNS" to check.
+      </div>
+    {{end}}
+  </div>
+</div>
+{{end}}

@@ -1,0 +1,97 @@
+{{define "content"}}
+<div class="max-w-5xl space-y-6">
+
+  <div class="rounded-lg border border-slate-800 bg-slate-900">
+    <header class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+      <h2 class="font-medium">System listeners</h2>
+      <span class="text-xs text-slate-500">Read-only — managed by the installer</span>
+    </header>
+    <table class="w-full text-sm">
+      <thead class="text-xs text-slate-500 uppercase tracking-wider">
+        <tr>
+          <th class="text-left px-4 py-2">Port</th>
+          <th class="text-left px-4 py-2">Service</th>
+          <th class="text-left px-4 py-2">Chroot</th>
+          <th class="text-left px-4 py-2">Command</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Data.System}}
+        <tr class="border-t border-slate-800">
+          <td class="px-4 py-2 font-mono text-xs">{{.Port}}</td>
+          <td class="px-4 py-2">{{.Type}}</td>
+          <td class="px-4 py-2 text-slate-400">{{.Chroot}}</td>
+          <td class="px-4 py-2 font-mono text-xs">{{.Command}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="rounded-lg border border-slate-800 bg-slate-900">
+    <header class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+      <h2 class="font-medium">Custom listeners</h2>
+      <button hx-get="/ports/new" hx-target="#modal-host" hx-swap="innerHTML"
+              class="rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-sm font-medium">
+        + Add port
+      </button>
+    </header>
+
+    {{if .Data.Custom}}
+    <table class="w-full text-sm">
+      <thead class="text-xs text-slate-500 uppercase tracking-wider">
+        <tr>
+          <th class="text-left px-4 py-2">Port</th>
+          <th class="text-left px-4 py-2">TLS</th>
+          <th class="text-left px-4 py-2">Auth</th>
+          <th class="text-left px-4 py-2">Description</th>
+          <th class="text-left px-4 py-2">Status</th>
+          <th class="text-right px-4 py-2">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Data.Custom}}
+        <tr class="border-t border-slate-800">
+          <td class="px-4 py-2 font-mono">{{.Port}}</td>
+          <td class="px-4 py-2 text-slate-400">{{.TLSMode}}</td>
+          <td class="px-4 py-2 text-slate-400">{{if .RequireSASL}}required{{else}}optional{{end}}</td>
+          <td class="px-4 py-2 text-slate-400 text-xs">{{.Description}}</td>
+          <td class="px-4 py-2">
+            {{if eq .Enabled 1}}<span class="text-emerald-400 text-xs">enabled</span>
+            {{else}}<span class="text-slate-500 text-xs">disabled</span>{{end}}
+          </td>
+          <td class="px-4 py-2 text-right">
+            <div x-data="{ confirming: false }" class="inline-block">
+              <button @click="confirming = true"
+                      class="rounded border border-red-900 px-2 py-1 text-xs text-red-300 hover:bg-red-950/50">Remove</button>
+              <div x-show="confirming" x-cloak
+                   class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+                <div @click.outside="confirming = false"
+                     class="w-full max-w-sm rounded-lg border border-red-800 bg-slate-900 p-5">
+                  <h3 class="font-medium text-red-300">Remove port {{.Port}}?</h3>
+                  <p class="mt-2 text-sm text-slate-400">
+                    Postfix will reload and stop listening on this port.
+                  </p>
+                  <div class="mt-4 flex justify-end gap-2">
+                    <button @click="confirming = false"
+                            class="rounded border border-slate-700 px-3 py-1.5 text-sm">Cancel</button>
+                    <button hx-delete="/ports/{{.ID}}"
+                            hx-target="#form-error"
+                            @click="confirming = false"
+                            class="rounded bg-red-600 hover:bg-red-500 px-3 py-1.5 text-sm">Remove</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <div class="p-8 text-center text-slate-500">No custom ports.</div>
+    {{end}}
+  </div>
+
+</div>
+{{end}}

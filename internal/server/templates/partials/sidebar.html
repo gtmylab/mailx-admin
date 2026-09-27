@@ -1,0 +1,31 @@
+{{define "sidebar"}}
+<aside class="w-60 shrink-0 border-r border-slate-800 bg-slate-950">
+  <div class="h-14 flex items-center justify-between px-6 border-b border-slate-800">
+    <span class="font-semibold tracking-tight">⚙ MailX Admin</span>
+    <span class="text-xs text-slate-500" title="Build version">{{.Version}}</span>
+  </div>
+
+  <nav class="p-3 text-sm space-y-1 overflow-y-auto" style="max-height: calc(100vh - 3.5rem);">
+
+    {{template "nav-item" (dict "Href" "/" "Label" "Dashboard" "Active" (eq .ActiveNav "dashboard"))}}
+
+    <div class="px-3 pt-4 pb-1 text-xs uppercase tracking-wider text-slate-500">Mail</div>
+    {{template "nav-item" (dict "Href" "/domains" "Label" "Domains" "Active" (eq .ActiveNav "domains"))}}
+    {{template "nav-item" (dict "Href" "/users"   "Label" "Users"   "Active" (eq .ActiveNav "users"))}}
+
+    <div class="px-3 pt-4 pb-1 text-xs uppercase tracking-wider text-slate-500">Delivery</div>
+    {{template "nav-item" (dict "Href" "/queue" "Label" "Queue" "Active" (eq .ActiveNav "queue"))}}
+    {{template "nav-item" (dict "Href" "/logs"  "Label" "Logs"  "Active" (eq .ActiveNav "logs"))}}
+    {{template "nav-item" (dict "Href" "/tools/test-send" "Label" "Test send" "Active" (eq .ActiveNav "testsend"))}}
+
+    <div class="px-3 pt-4 pb-1 text-xs uppercase tracking-wider text-slate-500">Security</div>
+    {{template "nav-item" (dict "Href" "/ssl"   "Label" "SSL"       "Active" (eq .ActiveNav "ssl"))}}
+    {{template "nav-item" (dict "Href" "/ports" "Label" "Ports"     "Active" (eq .ActiveNav "ports"))}}
+    {{template "nav-item" (dict "Href" "/audit" "Label" "Audit log" "Active" (eq .ActiveNav "audit"))}}
+
+    <div class="px-3 pt-4 pb-1 text-xs uppercase tracking-wider text-slate-500">System</div>
+    {{template "nav-item" (dict "Href" "/backup" "Label" "Backups" "Active" (eq .ActiveNav "backup"))}}
+
+  </nav>
+</aside>
+{{end}}

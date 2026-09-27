@@ -1,0 +1,34 @@
+{{define "testsend_result"}}
+<div class="rounded-lg border {{if .Result.Success}}border-emerald-800{{else}}border-red-800{{end}} bg-slate-900">
+  <header class="px-4 py-3 border-b {{if .Result.Success}}border-emerald-800 bg-emerald-950/30{{else}}border-red-800 bg-red-950/30{{end}}
+                 flex items-center justify-between">
+    <h3 class="font-medium">
+      {{if .Result.Success}}✓ Sent in {{.Result.Duration}}{{else}}✗ Failed in {{.Result.Duration}}{{end}}
+    </h3>
+    {{if .Result.Error}}
+    <span class="text-sm text-red-300">{{.Result.Error}}</span>
+    {{end}}
+  </header>
+
+  {{if .Result.TLS}}
+  <div class="px-4 py-2 border-b border-slate-800 bg-slate-950/50 text-xs">
+    <span class="text-slate-500">TLS:</span>
+    <span class="text-slate-300">{{.Result.TLS.Version}}</span>
+    <span class="text-slate-500 ml-3">Cipher:</span>
+    <span class="text-slate-300">{{.Result.TLS.CipherSuite}}</span>
+    <span class="text-slate-500 ml-3">Peer certs:</span>
+    <span class="text-slate-300">{{.Result.TLS.PeerCerts}}</span>
+    {{if .Result.TLS.NotAfter.Format "2006"}}
+    <span class="text-slate-500 ml-3">Expires:</span>
+    <span class="text-slate-300">{{.Result.TLS.NotAfter.Format "2006-01-02"}}</span>
+    {{end}}
+  </div>
+  {{end}}
+
+  <div class="p-4 max-h-[70vh] overflow-y-auto">
+    <div class="text-xs text-slate-500 mb-2">SMTP transcript</div>
+    <pre class="font-mono text-xs leading-relaxed"><code>{{range .Result.Transcript}}<span class="{{if eq .Dir "C"}}text-emerald-400{{else if eq .Dir "S"}}text-sky-400{{else}}text-slate-500 italic{{end}}">{{if eq .Dir "C"}}→ {{else if eq .Dir "S"}}← {{else}}• {{end}}{{.Text}}
+</span>{{end}}</code></pre>
+  </div>
+</div>
+{{end}}

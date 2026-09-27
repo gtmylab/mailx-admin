@@ -1,0 +1,18 @@
+{{define "testsend_history"}}
+<table class="w-full text-xs">
+  <tbody>
+    {{range .Rows}}
+    <tr class="border-t border-slate-800">
+      <td class="px-4 py-2">
+        {{if .Success}}<span class="text-emerald-400">✓</span>{{else}}<span class="text-red-400">✗</span>{{end}}
+      </td>
+      <td class="px-2 py-2 text-slate-300 truncate max-w-[200px]">{{.To}}</td>
+      <td class="px-2 py-2 text-slate-500">{{humanTime .Created}}</td>
+      <td class="px-2 py-2 text-slate-500 text-right">{{.Duration}}ms</td>
+    </tr>
+    {{else}}
+    <tr><td class="px-4 py-4 text-center text-slate-500">No sends yet.</td></tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}

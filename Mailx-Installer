@@ -1,0 +1,3695 @@
+#!/bin/bash
+
+# ============================================================================
+# MailX Server Installation Script - Production Ready
+# With Idempotent Operations and Resume Capability
+# Includes mailx-admin Go panel installation (Stage 13+14)
+# ============================================================================
+
+set +e
+
+# ============================================================================
+# Global Variables and Configuration
+# ============================================================================
+
+STATE_DIR="/usr/local/mailx_state"
+LOG_DIR="/var/log/mailx"
+LOG_FILE="$LOG_DIR/installation.log"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+# Create necessary directories
+mkdir -p "$STATE_DIR" "$LOG_DIR"
+
+# Enable logging
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# ----------------------------------------------------------------------------
+# mailx-admin (Go panel) configuration
+# ----------------------------------------------------------------------------
+ADMIN_BINARY_PATH="/usr/local/bin/mailx-admin"
+ADMIN_CONFIG_DIR="/etc/mailx"
+ADMIN_CONFIG_FILE="${ADMIN_CONFIG_DIR}/admin.toml"
+ADMIN_STATE_DIR="/var/lib/mailx"
+ADMIN_STATE_DB="${ADMIN_STATE_DIR}/state.db"
+ADMIN_BACKUP_DIR="/var/backups/mailx"
+ADMIN_SERVICE_NAME="mailx-admin"
+ADMIN_LISTEN_ADDR="127.0.0.1:9090"
+ADMIN_WEB_PORT="9443"
+
+# Where to fetch the binary from.
+# Override with: MAILX_ADMIN_BINARY_URL=... ./installer.sh
+# Or place a file at /tmp/mailx-admin before running the installer.
+ADMIN_BINARY_URL="${MAILX_ADMIN_BINARY_URL:-https://github.com/gtmylab/mailx-admin/releases/latest/download/mailx-admin-linux-amd64}"
+ADMIN_BINARY_LOCAL="${MAILX_ADMIN_BINARY_LOCAL:-/tmp/mailx-admin}"
+
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+mark_stage_complete() {
+    local stage=$1
+    echo "$(date +%Y-%m-%d_%H:%M:%S)" > "$STATE_DIR/${stage}.completed"
+    log_info "Stage '$stage' marked as complete"
+}
+
+is_stage_completed() {
+    local stage=$1
+    [ -f "$STATE_DIR/${stage}.completed" ]
+}
+
+file_exists_and_not_empty() {
+    [ -f "$1" ] && [ -s "$1" ]
+}
+
+is_service_running() {
+    systemctl is-active --quiet "$1" 2>/dev/null
+}
+
+is_package_installed() {
+    dpkg -l "$1" 2>/dev/null | grep -q "^ii"
+}
+
+check_string_in_file() {
+    local file=$1
+    local string=$2
+    grep -qF "$string" "$file" 2>/dev/null
+}
+
+generate_blowfish_secret() {
+    tr -dc 'a-zA-Z0-9./' < /dev/urandom | fold -w 32 | head -n 1
+}
+
+generate_password() {
+    local length=$1
+    local chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    local password=""
+    for i in $(seq 1 $length); do
+        password+=$(echo $chars | fold -w1 | shuf | head -n1)
+    done
+    echo $password
+}
+
+retrieve_file_data() {
+    local filepath=$1
+    if [ -f "$filepath" ]; then
+        cat "$filepath"
+    else
+        log_error "Error: Password file $filepath not found."
+        exit 1
+    fi
+}
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Download a binary, verify it's executable, and install it.
+# Accepts: a local path (if file exists), otherwise a URL.
+install_binary_from_url() {
+    local url=$1
+    local local_path=$2
+    local target=$3
+    local expected_name=$4
+
+    if [ -f "$local_path" ] && [ -s "$local_path" ]; then
+        log_info "Using local binary at $local_path for $expected_name"
+        install -m 0755 "$local_path" "$target"
+        return 0
+    fi
+
+    log_info "Downloading $expected_name from $url"
+    if ! retry_command "wget -q --timeout=60 --tries=3 -O ${target}.tmp $url"; then
+        log_error "Failed to download $expected_name"
+        rm -f "${target}.tmp"
+        return 1
+    fi
+
+    if [ ! -s "${target}.tmp" ]; then
+        log_error "Downloaded $expected_name is empty"
+        rm -f "${target}.tmp"
+        return 1
+    fi
+
+    # Sanity check: does it look like a Linux ELF binary?
+    if ! head -c 4 "${target}.tmp" | grep -q $'\x7fELF'; then
+        log_warning "$expected_name does not look like a Linux ELF binary — continuing anyway"
+    fi
+
+    mv "${target}.tmp" "$target"
+    chmod 0755 "$target"
+    return 0
+}
+
+# ============================================================================
+# Enhanced Error Handling and Retry Logic
+# ============================================================================
+
+hide_output() {
+    local OUTPUT=$(mktemp)
+    set +e
+    "$@" &> "$OUTPUT"
+    local E=$?
+    set -e
+
+    if [ $E != 0 ]; then
+        if grep -q "Could not resolve host\|Connection refused\|Connection timed out\|Network is unreachable" "$OUTPUT" 2>/dev/null; then
+            log_warning "Network error detected: $(head -1 "$OUTPUT")"
+            rm -f "$OUTPUT"
+            return 1
+        elif grep -q "dpkg was interrupted\|dpkg --configure -a" "$OUTPUT" 2>/dev/null; then
+            log_warning "Package manager interrupted. Running dpkg --configure -a..."
+            dpkg --configure -a
+            rm -f "$OUTPUT"
+            return 1
+        else
+            log_error "FAILED: $*"
+            echo "----------------------------------------"
+            cat "$OUTPUT"
+            echo "----------------------------------------"
+            rm -f "$OUTPUT"
+            exit $E
+        fi
+    fi
+    rm -f "$OUTPUT"
+    return 0
+}
+
+retry_command() {
+    local max_attempts=7
+    local attempt=1
+    local delay=10
+    local command="$@"
+
+    while [ $attempt -le $max_attempts ]; do
+        if eval "$command" 2>&1; then
+            return 0
+        fi
+
+        log_warning "Command failed (attempt $attempt/$max_attempts). Retrying in $delay seconds..."
+        sleep $delay
+        attempt=$((attempt + 1))
+        delay=$((delay * 2))
+    done
+
+    log_error "Command failed after $max_attempts attempts: $command"
+    return 1
+}
+
+apt_get_quiet() {
+    DEBIAN_FRONTEND=noninteractive hide_output apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" "$@"
+}
+
+apt_install() {
+    log_info "Installing packages: $@"
+    retry_command apt_get_quiet install "$@"
+}
+
+restart_service() {
+    log_info "Restarting service: $1"
+    hide_output service "$1" restart
+}
+
+# ============================================================================
+# Configuration Functions
+# ============================================================================
+
+update_php_ini() {
+    local setting=$1
+    local value=$2
+    local ini_file=$3
+
+    if [ -f "$ini_file" ]; then
+        if grep -q "^${setting} = " "$ini_file"; then
+            sed -i "s/^${setting} = .*/${setting} = ${value}/" "$ini_file"
+        else
+            echo "${setting} = ${value}" >> "$ini_file"
+        fi
+    fi
+}
+
+configure_dovecot_quota() {
+    if [ -f "/etc/dovecot/conf.d/90-quota.conf" ]; then
+        log_info "Dovecot quota already configured, skipping..."
+        return 0
+    fi
+
+    log_info "Configuring Dovecot for quota support..."
+
+    cp /etc/dovecot/dovecot.conf /etc/dovecot/dovecot.conf.bak 2>/dev/null || true
+    cp /etc/dovecot/conf.d/10-mail.conf /etc/dovecot/conf.d/10-mail.conf.bak 2>/dev/null || true
+
+    new_mail_location="mbox:~/mail:INBOX=/var/mail/%u"
+    escaped_mail_location=$(echo "$new_mail_location" | sed 's/\//\\\//g')
+    sed -i "s/^mail_location = .*$/mail_location = $escaped_mail_location/" /etc/dovecot/conf.d/10-mail.conf 2>/dev/null || true
+
+    cat <<EOT > /etc/dovecot/conf.d/90-quota.conf
+plugin {
+  quota = maildir:User quota
+  quota_rule = *:storage=1G
+}
+
+protocol imap {
+  mail_plugins = \$mail_plugins quota
+}
+
+protocol pop3 {
+  mail_plugins = \$mail_plugins quota
+}
+EOT
+
+    log_info "Dovecot quota configuration complete."
+}
+
+configure_dovecot_sasl() {
+    if [ -f "/etc/dovecot/conf.d/10-master.conf" ] && [ -S "/var/spool/postfix/private/auth" ]; then
+        log_info "Dovecot SASL already configured, skipping..."
+        return 0
+    fi
+
+    log_info "Configuring Dovecot SASL..."
+
+    apt_install dovecot-sieve dovecot-managesieved dovecot-lmtp sasl2-bin
+
+    if ! id vmail >/dev/null 2>&1; then
+        groupadd -g 5000 vmail
+        useradd -g vmail -u 5000 vmail -d /var/mail/vmail -m
+        chown -R vmail:vmail /var/mail/vmail
+    fi
+
+    mkdir -p /var/spool/postfix/private
+    chown -R postfix:postfix /var/spool/postfix/private
+    chmod -R 0750 /var/spool/postfix/private
+
+    [ -e /var/spool/postfix/private/auth ] && rm -rf /var/spool/postfix/private/auth
+
+    cat <<EOF > /etc/dovecot/conf.d/10-master.conf
+service auth {
+  unix_listener /var/spool/postfix/private/auth {
+    mode = 0660
+    user = postfix
+    group = postfix
+  }
+}
+
+service imap-login {
+  inet_listener imap {
+    port = 143
+  }
+  inet_listener imaps {
+    port = 993
+    ssl = yes
+  }
+}
+
+service pop3-login {
+  inet_listener pop3 {
+    port = 110
+  }
+  inet_listener pop3s {
+    port = 995
+    ssl = yes
+  }
+}
+
+service lmtp {
+  unix_listener /var/spool/postfix/private/dovecot-lmtp {
+    mode = 0600
+    user = postfix
+    group = postfix
+  }
+}
+
+service auth-worker {
+  user = root
+}
+EOF
+
+    cat <<EOF > /etc/dovecot/conf.d/10-auth.conf
+disable_plaintext_auth = no
+auth_mechanisms = plain login
+!include auth-system.conf.ext
+EOF
+
+    cat <<EOF > /etc/dovecot/conf.d/10-mail.conf
+mail_location = maildir:~/Maildir
+
+namespace inbox {
+  inbox = yes
+  mailbox Drafts {
+    auto = subscribe
+    special_use = \\Drafts
+  }
+  mailbox Junk {
+    auto = subscribe
+    special_use = \\Junk
+  }
+  mailbox Sent {
+    auto = subscribe
+    special_use = \\Sent
+  }
+  mailbox Trash {
+    auto = subscribe
+    special_use = \\Trash
+  }
+}
+EOF
+
+    # Sieve configuration for per-user scripts managed by mailx-admin
+    cat > /etc/dovecot/conf.d/90-sieve.conf <<'EOF'
+# Managed by mailx-admin — DO NOT EDIT
+# Per-user scripts: /var/mail/vhosts/<domain>/<user>/sieve/managesieve.sieve
+
+plugin {
+  sieve = file:/var/mail/vhosts/%d/%n/sieve/managesieve.sieve
+  sieve_default = file:/var/mail/vhosts/%d/%n/sieve/managesieve.sieve
+  sieve_dir = /var/mail/vhosts/%d/%n/sieve
+}
+EOF
+
+    # Ensure lmtp is enabled for Sieve processing on delivery
+    if ! grep -qE '^protocols\s*=' /etc/dovecot/dovecot.conf; then
+        echo "protocols = imap pop3 lmtp" >> /etc/dovecot/dovecot.conf
+    else
+        sed -i 's/^protocols\s*=.*/protocols = imap pop3 lmtp/' /etc/dovecot/dovecot.conf
+    fi
+
+    if ! dovecot -n 2>/dev/null; then
+        log_warning "Dovecot configuration validation failed, but continuing..."
+    fi
+
+    systemctl stop dovecot 2>/dev/null || true
+    sleep 2
+    systemctl start dovecot || {
+        log_error "Dovecot failed to start. Check logs: journalctl -u dovecot -n 20"
+        return 1
+    }
+
+    if [ -S /var/spool/postfix/private/auth ]; then
+        log_info "Dovecot SASL configured successfully"
+    else
+        log_warning "SASL socket not created immediately, may need manual check"
+    fi
+
+    systemctl restart postfix 2>/dev/null || true
+}
+
+verify_postfix_dovecot_connection() {
+    log_info "Verifying Postfix-Dovecot SASL connection..."
+    if ls /var/spool/postfix/private/auth >/dev/null 2>&1; then
+        log_info "Postfix can access Dovecot auth socket - configuration OK"
+        return 0
+    else
+        log_warning "Postfix cannot access Dovecot auth socket"
+        return 1
+    fi
+}
+
+test_sasl_authentication() {
+    log_info "Testing SASL authentication..."
+    echo "auth plain" | nc -w 2 localhost 587 2>/dev/null | grep -q "VXNlcm5hbWU6" && \
+        log_info "SASL PLAIN authentication available" || \
+        log_warning "SASL PLAIN authentication NOT available"
+
+    echo "auth login" | nc -w 2 localhost 587 2>/dev/null | grep -q "VXNlcm5hbWU6" && \
+        log_info "SASL LOGIN authentication available" || \
+        log_warning "SASL LOGIN authentication NOT available"
+}
+
+update_postfix_config() {
+    local domain="$1"
+    local hostname="$2"
+    local config_dir="/etc/postfix"
+    local backup_dir="${config_dir}/backups"
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+
+    if [ -f "$config_dir/main.cf" ] && grep -q "$domain" "$config_dir/main.cf" 2>/dev/null; then
+        log_info "Postfix already configured for domain $domain, skipping..."
+        return 0
+    fi
+
+    log_info "Updating Postfix configuration for domain: $domain, hostname: $hostname"
+
+    mkdir -p "$backup_dir"
+
+    for file in main.cf master.cf; do
+        if [[ -f "${config_dir}/${file}" ]]; then
+            cp -p "${config_dir}/${file}" "${backup_dir}/${file}.bak_${timestamp}" 2>/dev/null || true
+        fi
+    done
+
+    declare -A config_urls=(
+        ["main.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/_main.cf"
+        ["master.cf"]="https://raw.githubusercontent.com/gtmylab/mailx/main/_master.cf"
+    )
+
+    for file in "${!config_urls[@]}"; do
+        url="${config_urls[$file]}"
+        log_info "Downloading $file from $url"
+
+        if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/${file}.tmp $url"; then
+            if [[ -s "${config_dir}/${file}.tmp" ]]; then
+                mv "${config_dir}/${file}.tmp" "${config_dir}/${file}"
+                log_info "Successfully downloaded $file"
+            else
+                log_error "Downloaded file is empty: $file"
+                return 1
+            fi
+        else
+            log_error "Failed to download $file"
+            return 1
+        fi
+    done
+
+    for file in main.cf master.cf; do
+        if [[ -f "${config_dir}/${file}" ]]; then
+            sed -i.bak "s/{EMAIL_DOMAIN}/$domain/g; s/{HOSTNAME}/$hostname/g" "${config_dir}/${file}" 2>/dev/null || true
+        fi
+    done
+
+    if [[ ! -f "$config_dir/helo_access" ]]; then
+        echo "$hostname OK" > "$config_dir/helo_access"
+        echo ".$domain OK" >> "$config_dir/helo_access"
+        postmap "$config_dir/helo_access" 2>/dev/null || true
+    fi
+
+    if [[ ! -f "$config_dir/virtual_domains" ]]; then
+        echo "$domain OK" > "$config_dir/virtual_domains"
+        postmap "$config_dir/virtual_domains" 2>/dev/null || true
+    fi
+
+    # Route virtual delivery through Dovecot LMTP so Sieve runs
+    postconf -e "virtual_transport = lmtp:unix:private/dovecot-lmtp"
+
+    if postfix check 2>/dev/null; then
+        log_info "Postfix configuration validated"
+    else
+        log_warning "Postfix configuration check had warnings"
+    fi
+
+    restart_service postfix
+    return 0
+}
+
+update_postfix_virtual() {
+    local domain=$1
+    local username=$2
+
+    if ! check_string_in_file "/etc/postfix/virtual" "$username@$domain"; then
+        echo "$username@$domain $username" >> /etc/postfix/virtual
+        postmap /etc/postfix/virtual 2>/dev/null
+        log_info "Updated /etc/postfix/virtual with $username@$domain"
+    fi
+}
+
+setup_postfix_header_checks() {
+    local hostname=$1
+
+    log_info "Configuring Postfix header checks..."
+
+    cat <<EOF > /etc/postfix/header_checks
+/^Received: from \S+ \(.*\[.*\]\)/ REPLACE Received: from $hostname (localhost [127.0.0.1])
+/^X-Originating-IP:/ IGNORE
+EOF
+
+    chmod 644 /etc/postfix/header_checks
+    postconf -e "header_checks = regexp:/etc/postfix/header_checks"
+
+    log_info "Postfix header checks configured successfully."
+}
+
+# ============================================================================
+# PHPMyAdmin Installation
+# ============================================================================
+
+setup_phpmyadmin() {
+    if [ -d "/var/www/html/phpmyadmin" ] && [ -f "/var/www/html/phpmyadmin/config.inc.php" ]; then
+        log_info "PHPMyAdmin already installed, skipping..."
+        return 0
+    fi
+
+    log_info "Installing phpMyAdmin..."
+
+    PMA_VERSION="5.1.1"
+    PMA_DIR="/var/www/html/phpmyadmin"
+    PMA_URL="https://files.phpmyadmin.net/phpMyAdmin/${PMA_VERSION}/phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
+    PMA_TAR="phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
+    PMA_TAR_DIR="phpMyAdmin-${PMA_VERSION}-all-languages"
+
+    local CURRENT_DIR=$(pwd)
+    cd /tmp || {
+        log_error "Failed to change to /tmp directory"
+        return 1
+    }
+
+    rm -rf "$PMA_TAR_DIR" "$PMA_TAR" 2>/dev/null || true
+
+    log_info "Downloading phpMyAdmin version $PMA_VERSION..."
+    local download_success=false
+
+    for i in {1..3}; do
+        if wget -q --timeout=30 --tries=3 "$PMA_URL" -O "$PMA_TAR" 2>/dev/null; then
+            if [ -s "$PMA_TAR" ]; then
+                download_success=true
+                break
+            fi
+        fi
+        log_warning "Download attempt $i failed, retrying..."
+        sleep 5
+    done
+
+    if [ "$download_success" != "true" ]; then
+        log_error "Failed to download phpMyAdmin after multiple attempts"
+        cd "$CURRENT_DIR" 2>/dev/null || true
+        return 1
+    fi
+
+    log_info "Extracting phpMyAdmin..."
+    if ! tar -xzf "$PMA_TAR" 2>/dev/null; then
+        log_error "Failed to extract phpMyAdmin"
+        rm -f "$PMA_TAR" 2>/dev/null || true
+        cd "$CURRENT_DIR" 2>/dev/null || true
+        return 1
+    fi
+
+    if [ ! -d "$PMA_TAR_DIR" ]; then
+        log_error "Extraction failed - directory not found"
+        rm -f "$PMA_TAR" 2>/dev/null || true
+        cd "$CURRENT_DIR" 2>/dev/null || true
+        return 1
+    fi
+
+    if [ -d "$PMA_DIR" ]; then
+        log_info "Removing existing phpMyAdmin directory..."
+        rm -rf "$PMA_DIR"
+    fi
+
+    mv "$PMA_TAR_DIR" "$PMA_DIR"
+    rm -f "$PMA_TAR"
+
+    SECRET=$(generate_blowfish_secret)
+
+    if [ -f "$PMA_DIR/config.sample.inc.php" ]; then
+        cp "$PMA_DIR/config.sample.inc.php" "$PMA_DIR/config.inc.php"
+        sed -i "s|\(\$cfg\['blowfish_secret'\]\).*|\1 = '$SECRET';|" "$PMA_DIR/config.inc.php"
+    else
+        log_warning "Config sample not found, creating default config..."
+        cat > "$PMA_DIR/config.inc.php" <<EOF
+<?php
+\$cfg['blowfish_secret'] = '$SECRET';
+\$i = 0;
+\$i++;
+\$cfg['Servers'][\$i]['auth_type'] = 'cookie';
+\$cfg['Servers'][\$i]['host'] = 'localhost';
+\$cfg['Servers'][\$i]['compress'] = false;
+\$cfg['Servers'][\$i]['AllowNoPassword'] = false;
+?>
+EOF
+    fi
+
+    chown -R www-data:www-data "$PMA_DIR"
+    chmod -R 755 "$PMA_DIR"
+    find "$PMA_DIR" -type f -exec chmod 644 {} \;
+
+    cd "$CURRENT_DIR" 2>/dev/null || true
+
+    if [ -f "$PMA_DIR/config.inc.php" ]; then
+        log_info "PHPMyAdmin installation completed successfully"
+        return 0
+    else
+        log_error "PHPMyAdmin installation verification failed"
+        return 1
+    fi
+}
+
+# ============================================================================
+# Stage Execution Helper
+# ============================================================================
+
+execute_stage() {
+    local stage_name=$1
+    local stage_function=$2
+    shift 2
+
+    if is_stage_completed "$stage_name"; then
+        log_info "Stage '$stage_name' already completed, skipping..."
+        return 0
+    fi
+
+    log_info "=== Stage: $stage_name ==="
+
+    set +e
+    $stage_function "$@"
+    local exit_code=$?
+    set -e
+
+    if [ $exit_code -eq 0 ]; then
+        mark_stage_complete "$stage_name"
+        log_info "Stage '$stage_name' completed successfully"
+        return 0
+    else
+        log_error "Stage '$stage_name' failed with exit code $exit_code"
+        return 1
+    fi
+}
+
+# ============================================================================
+# State Cleanup
+# ============================================================================
+
+cleanup_state() {
+    local stage=$1
+
+    if [ -z "$stage" ]; then
+        read -p "Are you sure you want to remove all state files? (y/n): " confirm
+        if [[ "$confirm" == "y" ]]; then
+            rm -f "$STATE_DIR"/*.completed
+            log_info "All state files removed"
+        fi
+    else
+        if [ "$stage" == "phpmyadmin_installation" ]; then
+            if [ -d "/var/www/html/phpmyadmin" ] && [ ! -f "/var/www/html/phpmyadmin/config.inc.php" ]; then
+                log_info "Removing incomplete phpMyAdmin installation..."
+                rm -rf "/var/www/html/phpmyadmin"
+            fi
+        fi
+
+        if [ "$stage" == "mailx_admin_installation" ]; then
+            log_info "Stopping mailx-admin service..."
+            systemctl stop mailx-admin 2>/dev/null || true
+        fi
+
+        rm -f "$STATE_DIR/${stage}.completed"
+        log_info "State for stage '$stage' removed"
+    fi
+}
+
+# ============================================================================
+# DKIM Functions
+# ============================================================================
+
+extract_dkim_record() {
+    local txt_file=$1
+
+    if [ ! -f "$txt_file" ]; then
+        echo ""
+        return 1
+    fi
+
+    local result
+    result=$(grep -o '"[^"]*"' "$txt_file" 2>/dev/null | sed 's/"//g' | tr -d '\n\t' | sed 's/  */ /g; s/^ //; s/ $//')
+
+    if [ -z "$result" ]; then
+        result=$(awk -F'"' '{for(i=2;i<=NF;i+=2) printf "%s",$i}' "$txt_file" 2>/dev/null | sed 's/  */ /g; s/^ //; s/ $//')
+    fi
+
+    echo "$result"
+}
+
+generate_dkim_key() {
+    local DOMAIN=$1
+    local SELECTOR="default"
+    local DKIM_BASE="/etc/opendkim"
+    local KEY_DIR="$DKIM_BASE/keys/$DOMAIN"
+    local KEY_FILE="$KEY_DIR/$SELECTOR.private"
+    local TXT_FILE="$KEY_DIR/$SELECTOR.txt"
+
+    if ! command -v opendkim-genkey &> /dev/null; then
+        log_info "Installing OpenDKIM packages..."
+        apt_install opendkim opendkim-tools
+    fi
+
+    if ! id opendkim &>/dev/null; then
+        groupadd -r opendkim 2>/dev/null || true
+        useradd -r -g opendkim -s /usr/sbin/nologin opendkim 2>/dev/null || true
+    fi
+
+    if [ -f "$KEY_FILE" ]; then
+        log_info "DKIM key already exists for domain $DOMAIN"
+
+        if [ -f "$TXT_FILE" ]; then
+            local DKIM_RECORD
+            DKIM_RECORD=$(extract_dkim_record "$TXT_FILE")
+            if [ -n "$DKIM_RECORD" ]; then
+                echo "$DKIM_RECORD" > /tmp/dkim_txt_record.txt
+                echo "$DKIM_RECORD" > /usr/local/mailx_dkim_record.txt
+                log_info "DKIM TXT record extracted: $SELECTOR._domainkey.$DOMAIN"
+            fi
+        fi
+
+        chown opendkim:opendkim "$KEY_FILE" 2>/dev/null || true
+        chmod 600 "$KEY_FILE" 2>/dev/null || true
+        return 0
+    fi
+
+    log_info "Generating DKIM key for domain $DOMAIN..."
+
+    mkdir -p "$KEY_DIR"
+    chown -R opendkim:opendkim "$DKIM_BASE" 2>/dev/null || true
+    chmod 750 "$DKIM_BASE"
+    chmod 750 "$DKIM_BASE/keys"
+    chmod 750 "$KEY_DIR"
+
+    local CURRENT_DIR=$(pwd)
+    cd "$KEY_DIR" || {
+        log_error "Failed to change to key directory: $KEY_DIR"
+        return 1
+    }
+
+    if ! opendkim-genkey -s "$SELECTOR" -d "$DOMAIN" -b 2048; then
+        log_error "Failed to generate DKIM key"
+        cd "$CURRENT_DIR" 2>/dev/null || true
+        return 1
+    fi
+
+    chmod 600 "$SELECTOR.private"
+    chmod 644 "$SELECTOR.txt"
+    chown opendkim:opendkim "$SELECTOR.private" "$SELECTOR.txt"
+
+    local DKIM_RECORD
+    DKIM_RECORD=$(extract_dkim_record "$SELECTOR.txt")
+
+    if [ -n "$DKIM_RECORD" ]; then
+        echo "$DKIM_RECORD" > /tmp/dkim_txt_record.txt
+        echo "$DKIM_RECORD" > /usr/local/mailx_dkim_record.txt
+        log_info "DKIM key generated successfully"
+        log_info "DKIM TXT record: $SELECTOR._domainkey.$DOMAIN = \"$DKIM_RECORD\""
+    else
+        log_error "Failed to extract DKIM TXT record from generated file"
+        cd "$CURRENT_DIR" 2>/dev/null || true
+        return 1
+    fi
+
+    cd "$CURRENT_DIR" 2>/dev/null || true
+    return 0
+}
+
+configure_opendkim() {
+    local DOMAIN=$1
+    local SELECTOR="default"
+    local OPENDKIM_CONF="/etc/opendkim.conf"
+    local OPENDKIM_DIR="/etc/opendkim"
+    local SOCKET_DIR="/var/spool/postfix/opendkim"
+
+    log_info "Configuring OpenDKIM for domain $DOMAIN..."
+
+    systemctl stop opendkim 2>/dev/null || true
+    pkill -f opendkim 2>/dev/null || true
+    sleep 1
+
+    mkdir -p "$SOCKET_DIR"
+    mkdir -p /var/run/opendkim
+    chown opendkim:postfix "$SOCKET_DIR"
+    chmod 775 "$SOCKET_DIR"
+    chown opendkim:opendkim /var/run/opendkim
+    chmod 755 /var/run/opendkim
+    chmod g+s "$SOCKET_DIR"
+
+    rm -f "$SOCKET_DIR/opendkim.sock" 2>/dev/null || true
+
+    mkdir -p "$OPENDKIM_DIR/keys/$DOMAIN"
+
+    chown -R opendkim:opendkim "$OPENDKIM_DIR" 2>/dev/null || true
+    chmod 750 "$OPENDKIM_DIR"
+    chmod 750 "$OPENDKIM_DIR/keys"
+    chmod 750 "$OPENDKIM_DIR/keys/$DOMAIN"
+
+    if [ -f "$OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.private" ]; then
+        chmod 600 "$OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.private"
+        chown opendkim:opendkim "$OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.private"
+    else
+        log_error "DKIM private key not found: $OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.private"
+        return 1
+    fi
+
+    cat > "$OPENDKIM_CONF" <<EOF
+Syslog                  yes
+SyslogSuccess           yes
+LogWhy                  yes
+
+Canonicalization        relaxed/simple
+Mode                    sv
+SubDomains              no
+OversignHeaders         From
+SignatureAlgorithm      rsa-sha256
+UMask                   007
+
+UserID                  opendkim:opendkim
+
+Socket                  local:$SOCKET_DIR/opendkim.sock
+
+Domain                  $DOMAIN
+Selector                $SELECTOR
+KeyFile                 $OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.private
+
+AutoRestart             yes
+AutoRestartRate         10/1M
+DNSTimeout              5
+EOF
+
+    cat > "$OPENDKIM_DIR/KeyTable" <<EOF
+$SELECTOR._domainkey.$DOMAIN $DOMAIN:$SELECTOR:$OPENDKIM_DIR/keys/$DOMAIN/$SELECTOR.private
+EOF
+
+    cat > "$OPENDKIM_DIR/SigningTable" <<EOF
+*@$DOMAIN $SELECTOR._domainkey.$DOMAIN
+EOF
+
+    cat > "$OPENDKIM_DIR/TrustedHosts" <<EOF
+127.0.0.1
+::1
+localhost
+$DOMAIN
+mail.$DOMAIN
+EOF
+
+    chmod 644 "$OPENDKIM_CONF"
+    chmod 644 "$OPENDKIM_DIR/KeyTable"
+    chmod 644 "$OPENDKIM_DIR/SigningTable"
+    chmod 644 "$OPENDKIM_DIR/TrustedHosts"
+
+    cat > /etc/systemd/system/opendkim.service <<'EOF'
+[Unit]
+Description=OpenDKIM DomainKeys Identified Mail Milter
+After=network.target
+
+[Service]
+Type=simple
+User=opendkim
+Group=opendkim
+ExecStart=/usr/sbin/opendkim -x /etc/opendkim.conf -f
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+
+    log_info "Starting OpenDKIM service..."
+    systemctl start opendkim
+
+    sleep 3
+
+    if systemctl is-active --quiet opendkim; then
+        log_info "OpenDKIM started successfully"
+
+        if [ -S "$SOCKET_DIR/opendkim.sock" ]; then
+            log_info "OpenDKIM socket created: $SOCKET_DIR/opendkim.sock"
+            chmod 660 "$SOCKET_DIR/opendkim.sock"
+            chown opendkim:postfix "$SOCKET_DIR/opendkim.sock"
+        else
+            log_warning "OpenDKIM socket not found, restarting service..."
+            systemctl restart opendkim
+            sleep 2
+            if [ -S "$SOCKET_DIR/opendkim.sock" ]; then
+                chmod 660 "$SOCKET_DIR/opendkim.sock"
+                chown opendkim:postfix "$SOCKET_DIR/opendkim.sock"
+            fi
+        fi
+
+        systemctl enable opendkim 2>/dev/null || true
+
+        log_info "Configuring Postfix for DKIM signing..."
+        postconf -e "milter_default_action = accept"
+        postconf -e "milter_protocol = 2"
+        postconf -e "smtpd_milters = unix:opendkim/opendkim.sock"
+        postconf -e "non_smtpd_milters = unix:opendkim/opendkim.sock"
+
+        systemctl restart postfix
+
+        log_info "Postfix configured for DKIM signing"
+        return 0
+    else
+        log_error "OpenDKIM failed to start"
+        journalctl -u opendkim -n 20 --no-pager 2>/dev/null || true
+        return 1
+    fi
+}
+
+verify_dkim() {
+    local DOMAIN=$1
+    local SELECTOR="default"
+
+    log_info "Verifying DKIM configuration..."
+
+    if ! systemctl is-active --quiet opendkim; then
+        log_warning "OpenDKIM is not running"
+        return 1
+    fi
+    log_info "OpenDKIM service is running"
+
+    if [ -S "/var/spool/postfix/opendkim/opendkim.sock" ]; then
+        local SOCKET_PERMS
+        SOCKET_PERMS=$(stat -c "%a %U:%G" /var/spool/postfix/opendkim/opendkim.sock 2>/dev/null || echo "unknown")
+        log_info "Socket permissions: $SOCKET_PERMS"
+    else
+        log_warning "OpenDKIM socket not found"
+        return 1
+    fi
+
+    log_info "Testing DKIM key (may fail if DNS not propagated)..."
+    if opendkim-testkey -d "$DOMAIN" -s "$SELECTOR" 2>&1 | grep -q "key OK"; then
+        log_info "DKIM key verification successful"
+    else
+        log_warning "DKIM key test failed (DNS may not be configured yet)"
+        log_info "After adding the DNS record, verify with: opendkim-testkey -d $DOMAIN -s $SELECTOR -vvv"
+    fi
+
+    if [ -f "/tmp/dkim_txt_record.txt" ]; then
+        log_info "Required DNS TXT record:"
+        log_info "  Host: $SELECTOR._domainkey.$DOMAIN"
+        log_info "  Value: \"$(cat /tmp/dkim_txt_record.txt)\""
+    fi
+
+    return 0
+}
+
+# ============================================================================
+# SSL Certificate Functions
+# ============================================================================
+
+configure_ssl_services() {
+    local domain=$1
+    local cert_path="/etc/letsencrypt/live/$domain"
+
+    if [ ! -d "$cert_path" ]; then
+        log_warning "SSL certificate not found for $domain, skipping service configuration"
+        return 1
+    fi
+
+    if [ -f "/etc/apache2/sites-available/adminportal.conf" ]; then
+        sed -i "s|SSLCertificateFile.*|SSLCertificateFile $cert_path/fullchain.pem|" /etc/apache2/sites-available/adminportal.conf 2>/dev/null || true
+        sed -i "s|SSLCertificateKeyFile.*|SSLCertificateKeyFile $cert_path/privkey.pem|" /etc/apache2/sites-available/adminportal.conf 2>/dev/null || true
+    fi
+
+    postconf -e "smtpd_tls_cert_file=$cert_path/fullchain.pem" 2>/dev/null || true
+    postconf -e "smtpd_tls_key_file=$cert_path/privkey.pem" 2>/dev/null || true
+
+    if [ -f "/etc/dovecot/conf.d/10-ssl.conf" ]; then
+        sed -i "s|ssl_cert =.*|ssl_cert = <$cert_path/fullchain.pem|" /etc/dovecot/conf.d/10-ssl.conf 2>/dev/null || true
+        sed -i "s|ssl_key =.*|ssl_key = <$cert_path/privkey.pem|" /etc/dovecot/conf.d/10-ssl.conf 2>/dev/null || true
+    fi
+
+    log_info "SSL services configured for domain $domain"
+}
+
+setup_ssl_renewal() {
+    if [ -f "/usr/local/bin/ssl_renewal.sh" ]; then
+        log_info "SSL renewal already configured, skipping..."
+        return 0
+    fi
+
+    cat << 'EOF' > /usr/local/bin/ssl_renewal.sh
+#!/bin/bash
+certbot renew --quiet --post-hook "systemctl reload postfix dovecot apache2"
+EOF
+
+    chmod +x /usr/local/bin/ssl_renewal.sh
+    (crontab -l 2>/dev/null | grep -v "ssl_renewal.sh"; echo "0 3 * * * /usr/local/bin/ssl_renewal.sh") | crontab - 2>/dev/null || true
+
+    log_info "Automatic SSL renewal configured."
+}
+
+# ============================================================================
+# SSL Certificate Management — View, Renew, Notify
+# ============================================================================
+
+get_ssl_domain() {
+    local domain
+    domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
+    if [ -z "$domain" ]; then
+        domain=$(certbot certificates 2>/dev/null \
+            | awk -F': ' '/Certificate Name/ {print $2; exit}' \
+            | tr -d '[:space:]')
+    fi
+    echo "$domain"
+}
+
+show_ssl_details() {
+    echo ""
+    echo "=============================================="
+    echo "   SSL Certificate Details"
+    echo "=============================================="
+    echo ""
+
+    if ! command -v certbot &>/dev/null; then
+        log_error "certbot is not installed. SSL is not configured on this server."
+        return 1
+    fi
+
+    local primary_domain
+    primary_domain=$(get_ssl_domain)
+
+    if [ -z "$primary_domain" ]; then
+        log_warning "No primary domain recorded and no certbot certs found."
+        log_info "Listing all certbot certificates:"
+        certbot certificates 2>/dev/null || echo "  (none)"
+        return 1
+    fi
+
+    local cert_path="/etc/letsencrypt/live/$primary_domain"
+    if [ ! -d "$cert_path" ]; then
+        log_error "Certificate directory not found: $cert_path"
+        log_info "Listing available certbot certificates:"
+        certbot certificates 2>/dev/null || echo "  (none)"
+        return 1
+    fi
+
+    local fullchain="$cert_path/fullchain.pem"
+    if [ ! -f "$fullchain" ]; then
+        log_error "fullchain.pem not found at $fullchain"
+        return 1
+    fi
+
+    local subject issuer not_before not_after serial sigalg
+    subject=$(openssl x509 -in "$fullchain" -noout -subject 2>/dev/null | sed 's/^subject=//')
+    issuer=$(openssl x509 -in "$fullchain" -noout -issuer  2>/dev/null | sed 's/^issuer=//')
+    not_before=$(openssl x509 -in "$fullchain" -noout -startdate 2>/dev/null | cut -d= -f2)
+    not_after=$(openssl x509 -in "$fullchain" -noout -enddate   2>/dev/null | cut -d= -f2)
+    serial=$(openssl x509 -in "$fullchain" -noout -serial 2>/dev/null | cut -d= -f2)
+    sigalg=$(openssl x509 -in "$fullchain" -noout -text 2>/dev/null \
+        | awk -F': ' '/Signature Algorithm/ {print $2; exit}')
+
+    local not_after_epoch now_epoch days_left hours_left human_left
+    not_after_epoch=$(date -d "$not_after" +%s 2>/dev/null)
+    now_epoch=$(date +%s)
+    days_left=$(( (not_after_epoch - now_epoch) / 86400 ))
+    hours_left=$(( ((not_after_epoch - now_epoch) % 86400) / 3600 ))
+
+    if [ "$days_left" -lt 0 ]; then
+        human_left="EXPIRED $(( -days_left )) days ago"
+    elif [ "$days_left" -eq 0 ]; then
+        human_left="$hours_left hours"
+    else
+        human_left="$days_left days, $hours_left hours"
+    fi
+
+    local sans
+    sans=$(openssl x509 -in "$fullchain" -noout -text 2>/dev/null \
+        | awk '/X509v3 Subject Alternative Name/ {getline; gsub(/^[ \t]+/, ""); print; exit}')
+
+    local key_bits key_type
+    key_bits=$(openssl x509 -in "$fullchain" -noout -text 2>/dev/null \
+        | awk -F'[()]' '/Public-Key:/ {print $2; exit}')
+    key_type=$(openssl x509 -in "$fullchain" -noout -text 2>/dev/null \
+        | awk '/Public Key Algorithm/ {print $3; exit}')
+
+    local chain_count
+    chain_count=$(grep -c "BEGIN CERTIFICATE" "$fullchain" 2>/dev/null)
+
+    echo "Primary domain : $primary_domain"
+    echo "Cert directory : $cert_path"
+    echo ""
+    echo "Subject        : $subject"
+    echo "Issuer         : $issuer"
+    echo "Serial         : $serial"
+    echo "Signature alg  : $sigalg"
+    echo "Public key     : $key_type ${key_bits}"
+    echo "Chain length   : $chain_count certificate(s)"
+    echo ""
+    echo "Valid from     : $not_before"
+    echo "Valid until    : $not_after"
+    echo "Expires in     : $human_left"
+    echo ""
+    echo "SANs           :"
+    if [ -n "$sans" ]; then
+        echo "$sans" | tr ',' '\n' | sed 's/^[ \t]*/  - /'
+    else
+        echo "  (none)"
+    fi
+    echo ""
+
+    if [ "$days_left" -lt 0 ]; then
+        echo -e "${RED}STATUS: EXPIRED${NC}"
+    elif [ "$days_left" -le 7 ]; then
+        echo -e "${RED}STATUS: CRITICAL — expires in $days_left day(s)${NC}"
+    elif [ "$days_left" -le 21 ]; then
+        echo -e "${YELLOW}STATUS: WARNING — expires in $days_left day(s)${NC}"
+    else
+        echo -e "${GREEN}STATUS: OK${NC}"
+    fi
+    echo ""
+
+    if [ -f "/etc/letsencrypt/renewal/$primary_domain.conf" ]; then
+        echo "Renewal configuration:"
+        grep -E '^(authenticator|installer|webroot_path|archive_dir|server)\s*=' \
+            "/etc/letsencrypt/renewal/$primary_domain.conf" 2>/dev/null \
+            | sed 's/^/  /' || true
+        echo ""
+    fi
+
+    echo "Auto-renewal mechanisms:"
+    if systemctl is-enabled certbot.timer >/dev/null 2>&1; then
+        local next_run
+        next_run=$(systemctl list-timers certbot.timer --no-pager 2>/dev/null \
+            | awk 'NR==2 {print $1" "$2" "$3}')
+        echo "  ✓ certbot.timer enabled (next: ${next_run:-unknown})"
+    else
+        echo "  ✗ certbot.timer NOT enabled"
+    fi
+
+    if crontab -l 2>/dev/null | grep -q "ssl_renewal.sh"; then
+        echo "  ✓ Cron entry for ssl_renewal.sh present"
+    else
+        echo "  ✗ No cron entry for ssl_renewal.sh"
+    fi
+
+    if [ -x "/usr/local/bin/ssl_renewal.sh" ]; then
+        echo "  ✓ /usr/local/bin/ssl_renewal.sh exists"
+    else
+        echo "  ✗ /usr/local/bin/ssl_renewal.sh missing"
+    fi
+    echo ""
+
+    echo "All certificates on this server:"
+    certbot certificates 2>/dev/null | sed 's/^/  /' || echo "  (none)"
+    echo ""
+}
+
+renew_ssl_now() {
+    echo ""
+    echo "=============================================="
+    echo "   Renew SSL Certificates Now"
+    echo "=============================================="
+    echo ""
+
+    if ! command -v certbot &>/dev/null; then
+        log_error "certbot is not installed."
+        return 1
+    fi
+
+    local primary_domain
+    primary_domain=$(get_ssl_domain)
+
+    if [ -z "$primary_domain" ]; then
+        log_error "No domain configured. Run the installer first."
+        return 1
+    fi
+
+    echo "Primary domain : $primary_domain"
+    echo ""
+    echo "Choose renewal mode:"
+    echo "  1) Normal renew (only if < 30 days left)"
+    echo "  2) Force renew  (regardless of expiry)"
+    echo "  3) Dry run      (test only, no changes)"
+    echo "  4) Cancel"
+    echo ""
+    read -p "Choice (1-4): " mode
+
+    case "$mode" in
+        1)
+            log_info "Running normal renewal..."
+            if certbot renew --quiet --post-hook "systemctl reload postfix dovecot apache2"; then
+                log_info "Renewal completed"
+            else
+                log_error "Renewal failed"
+                notify_ssl_failure "Normal renewal failed at $(date)"
+                return 1
+            fi
+            ;;
+        2)
+            log_info "Forcing renewal for $primary_domain..."
+            if certbot certonly --force-renewal \
+                -d "$primary_domain" \
+                -d "mail.$primary_domain" \
+                -d "admin.$primary_domain" \
+                --non-interactive --agree-tos \
+                --email "admin@$primary_domain" \
+                --post-hook "systemctl reload postfix dovecot apache2"; then
+                log_info "Forced renewal completed"
+            else
+                log_error "Forced renewal failed"
+                notify_ssl_failure "Forced renewal failed at $(date)"
+                return 1
+            fi
+            ;;
+        3)
+            log_info "Running dry-run (no changes will be made)..."
+            if certbot renew --dry-run; then
+                log_info "Dry run succeeded — actual renewal should work"
+            else
+                log_error "Dry run failed — investigate before renewing"
+                return 1
+            fi
+            ;;
+        4)
+            log_info "Cancelled."
+            return 0
+            ;;
+        *)
+            log_error "Invalid choice"
+            return 1
+            ;;
+    esac
+
+    echo ""
+    log_info "Post-renewal certificate status:"
+    show_ssl_details
+}
+
+notify_ssl_failure() {
+    local reason="$1"
+    local admin_email
+    admin_email=$(cat /usr/local/mailx_admin_email.txt 2>/dev/null | tr -d '[:space:]')
+    local domain
+    domain=$(get_ssl_domain)
+    local hostname
+    hostname=$(hostname)
+
+    local fail_log="/var/log/mailx/ssl_renewal_failures.log"
+    mkdir -p "$(dirname "$fail_log")"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $reason" >> "$fail_log"
+
+    if [ -z "$admin_email" ]; then
+        log_warning "No admin email configured for SSL notifications (saved to $fail_log)"
+        return 0
+    fi
+
+    local body="===========================================
+SSL RENEWAL FAILURE — ACTION REQUIRED
+===========================================
+
+Server    : $hostname
+Domain    : ${domain:-unknown}
+Time      : $(date '+%Y-%m-%d %H:%M:%S')
+Reason    : $reason
+
+WHAT TO DO:
+-----------
+1. SSH into the server
+2. Run: certbot renew --dry-run
+3. Check logs: tail -n 50 /var/log/letsencrypt/letsencrypt.log
+4. Common causes:
+   - Port 80 blocked (HTTP-01 challenge fails)
+   - DNS changed / domain no longer points here
+   - Rate limit hit
+   - Webroot path missing
+
+MANUAL RENEWAL:
+---------------
+certbot renew --force-renewal
+systemctl reload postfix dovecot apache2
+
+Check current cert status:
+   Run the MailX script -> option 15 (View SSL Certificate Details)
+
+Failure log: $fail_log
+==========================================="
+
+    echo -e "$body" | mail -s "[$hostname] SSL renewal FAILED for ${domain:-unknown}" \
+        -a "From: admin@${domain:-localhost}" "$admin_email" 2>/dev/null || \
+        log_warning "Failed to send SSL failure email to $admin_email"
+}
+
+configure_ssl_autorenewal() {
+    echo ""
+    echo "=============================================="
+    echo "   Configure SSL Auto-Renewal & Notifications"
+    echo "=============================================="
+    echo ""
+
+    if ! command -v certbot &>/dev/null; then
+        log_error "certbot is not installed. Run the installer first."
+        return 1
+    fi
+
+    local primary_domain
+    primary_domain=$(get_ssl_domain)
+
+    local default_admin="admin@${primary_domain:-example.com}"
+    local current_admin
+    current_admin=$(cat /usr/local/mailx_admin_email.txt 2>/dev/null || echo "")
+
+    echo "Current admin email for notifications: ${current_admin:-<not set>}"
+    read -p "Enter admin email for SSL notifications [$default_admin]: " admin_email
+    admin_email="${admin_email:-$default_admin}"
+
+    if [[ ! "$admin_email" =~ ^[^@]+@[^@]+\.[^@]+$ ]]; then
+        log_error "Invalid email address: $admin_email"
+        return 1
+    fi
+
+    echo "$admin_email" > /usr/local/mailx_admin_email.txt
+    chmod 600 /usr/local/mailx_admin_email.txt
+    log_info "Admin email saved: $admin_email"
+
+    local current_days
+    current_days=$(cat /usr/local/mailx_ssl_warn_days.txt 2>/dev/null || echo "14")
+    echo ""
+    echo "Current warning threshold: $current_days days before expiry"
+    read -p "Notify when cert has fewer than N days left [14]: " warn_days
+    warn_days="${warn_days:-14}"
+
+    if ! [[ "$warn_days" =~ ^[0-9]+$ ]] || [ "$warn_days" -lt 1 ] || [ "$warn_days" -gt 89 ]; then
+        log_error "Threshold must be between 1 and 89 days"
+        return 1
+    fi
+
+    echo "$warn_days" > /usr/local/mailx_ssl_warn_days.txt
+    log_info "Warning threshold set to $warn_days days"
+
+    log_info "Creating renewal wrapper: /usr/local/bin/ssl_renewal.sh"
+
+    cat > /usr/local/bin/ssl_renewal.sh <<'RENEWAL_EOF'
+#!/bin/bash
+ADMIN_EMAIL_FILE="/usr/local/mailx_admin_email.txt"
+WARN_DAYS_FILE="/usr/local/mailx_ssl_warn_days.txt"
+DOMAIN_FILE="/usr/local/roundcube_mail_domain.txt"
+FAIL_LOG="/var/log/mailx/ssl_renewal_failures.log"
+STATE_DIR="/usr/local/mailx_state"
+
+mkdir -p "$(dirname "$FAIL_LOG")" "$STATE_DIR"
+
+ADMIN_EMAIL=$(cat "$ADMIN_EMAIL_FILE" 2>/dev/null | tr -d '[:space:]')
+WARN_DAYS=$(cat "$WARN_DAYS_FILE" 2>/dev/null | tr -d '[:space:]')
+DOMAIN=$(cat "$DOMAIN_FILE" 2>/dev/null | tr -d '[:space:]')
+WARN_DAYS=${WARN_DAYS:-14}
+HOSTNAME=$(hostname)
+
+log_fail() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$FAIL_LOG"
+}
+
+send_mail() {
+    local subject="$1"
+    local body="$2"
+    if [ -n "$ADMIN_EMAIL" ]; then
+        echo -e "$body" | mail -s "$subject" \
+            -a "From: admin@${DOMAIN:-localhost}" "$ADMIN_EMAIL" 2>/dev/null || true
+    fi
+}
+
+CERTBOT_LOG=$(mktemp)
+if certbot renew --quiet \
+        --deploy-hook "systemctl reload postfix dovecot apache2" \
+        > "$CERTBOT_LOG" 2>&1; then
+    RENEW_RC=0
+else
+    RENEW_RC=$?
+fi
+
+if [ "$RENEW_RC" -ne 0 ]; then
+    TODAY=$(date +%Y-%m-%d)
+    LAST_ALERT_FILE="$STATE_DIR/ssl_last_fail_alert"
+    LAST_ALERT=$(cat "$LAST_ALERT_FILE" 2>/dev/null)
+    if [ "$LAST_ALERT" != "$TODAY" ]; then
+        echo "$TODAY" > "$LAST_ALERT_FILE"
+        log_fail "certbot renew failed (rc=$RENEW_RC)"
+        send_mail "[$HOSTNAME] SSL renewal FAILED for ${DOMAIN:-unknown}" \
+"SSL RENEWAL FAILURE
+
+Server    : $HOSTNAME
+Domain    : ${DOMAIN:-unknown}
+Time      : $(date '+%Y-%m-%d %H:%M:%S')
+
+Certbot output (last 30 lines):
+$(tail -n 30 "$CERTBOT_LOG")
+
+MANUAL RENEWAL:
+   certbot renew --force-renewal
+   systemctl reload postfix dovecot apache2"
+    fi
+    rm -f "$CERTBOT_LOG"
+    exit 1
+fi
+rm -f "$CERTBOT_LOG"
+
+if [ -n "$DOMAIN" ] && [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+    END_DATE=$(openssl x509 -enddate -noout \
+        -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" 2>/dev/null | cut -d= -f2)
+    if [ -n "$END_DATE" ]; then
+        END_EPOCH=$(date -d "$END_DATE" +%s 2>/dev/null)
+        NOW_EPOCH=$(date +%s)
+        DAYS_LEFT=$(( (END_EPOCH - NOW_EPOCH) / 86400 ))
+
+        if [ "$DAYS_LEFT" -lt "$WARN_DAYS" ] && [ "$DAYS_LEFT" -ge 0 ]; then
+            TODAY=$(date +%Y-%m-%d)
+            LAST_WARN_FILE="$STATE_DIR/ssl_last_warn_alert"
+            LAST_WARN=$(cat "$LAST_WARN_FILE" 2>/dev/null)
+            if [ "$LAST_WARN" != "$TODAY" ]; then
+                echo "$TODAY" > "$LAST_WARN_FILE"
+                send_mail "[$HOSTNAME] SSL cert for ${DOMAIN} expires in $DAYS_LEFT days" \
+"SSL CERTIFICATE EXPIRY WARNING
+
+Server     : $HOSTNAME
+Domain     : $DOMAIN
+Expires    : $END_DATE
+Days left  : $DAYS_LEFT (threshold: $WARN_DAYS)
+
+Renewal either failed silently or has not yet run.
+Run the MailX script -> option 15 to inspect, or option 16 to force renewal."
+            fi
+        fi
+    fi
+fi
+
+exit 0
+RENEWAL_EOF
+
+    chmod +x /usr/local/bin/ssl_renewal.sh
+    log_info "Renewal wrapper installed"
+
+    log_info "Installing cron entries (03:17 + 15:17 daily)..."
+    (
+        crontab -l 2>/dev/null | grep -v "ssl_renewal.sh"
+        echo "17 3 * * * /usr/local/bin/ssl_renewal.sh"
+        echo "17 15 * * * /usr/local/bin/ssl_renewal.sh"
+    ) | crontab - 2>/dev/null || true
+
+    if systemctl list-unit-files 2>/dev/null | grep -q "^certbot.timer"; then
+        systemctl enable --now certbot.timer 2>/dev/null || true
+        log_info "certbot.timer enabled (systemd-native renewal)"
+    fi
+
+    echo ""
+    log_info "Auto-renewal configuration summary:"
+    echo "  Admin email      : $admin_email"
+    echo "  Warning threshold: $warn_days days"
+    echo "  Wrapper script   : /usr/local/bin/ssl_renewal.sh"
+    echo "  Failure log      : /var/log/mailx/ssl_renewal_failures.log"
+    echo ""
+
+    if crontab -l 2>/dev/null | grep -q "ssl_renewal.sh"; then
+        echo "  ✓ Cron entries installed:"
+        crontab -l 2>/dev/null | grep "ssl_renewal.sh" | sed 's/^/    /'
+    else
+        echo "  ✗ Failed to install cron entries"
+    fi
+    echo ""
+
+    read -p "Send a test notification email now? (y/n): " send_test
+    if [[ "$send_test" == "y" ]]; then
+        notify_ssl_failure "TEST notification from configure_ssl_autorenewal at $(date)"
+        log_info "Test notification triggered — check $admin_email"
+    fi
+
+    echo ""
+    log_info "SSL auto-renewal and notifications configured successfully."
+    echo ""
+}
+
+manage_ssl_certificates() {
+    local action=$1
+    local domain=${2:-$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')}
+    local webroot="/var/www/html"
+
+    if [ -z "$domain" ]; then
+        log_error "No domain specified for SSL certificate"
+        return 1
+    fi
+
+    case "$action" in
+        install)
+            if [ -d "/etc/letsencrypt/live/$domain" ]; then
+                log_info "SSL certificate already installed for $domain"
+                configure_ssl_services "$domain"
+                return 0
+            fi
+
+            if ! command -v certbot &> /dev/null; then
+                log_info "Installing certbot..."
+                apt_install certbot python3-certbot-apache
+            fi
+
+            mkdir -p "$webroot/.well-known/acme-challenge"
+            chown -R www-data:www-data "$webroot"
+
+            log_info "Attempting to install Let's Encrypt SSL certificate for $domain..."
+
+            # Include admin.<domain> in SANs so the panel has TLS
+            if retry_command "certbot certonly --webroot -w $webroot -d $domain -d mail.$domain -d admin.$domain --non-interactive --agree-tos --email admin@$domain --keep-until-expiring"; then
+                configure_ssl_services "$domain"
+                setup_ssl_renewal
+                log_info "SSL certificate installed successfully"
+                return 0
+            else
+                log_warning "SSL cert with admin.<domain> failed — trying without admin SAN"
+                if retry_command "certbot certonly --webroot -w $webroot -d $domain -d mail.$domain --non-interactive --agree-tos --email admin@$domain --keep-until-expiring"; then
+                    configure_ssl_services "$domain"
+                    setup_ssl_renewal
+                    log_info "SSL certificate installed (without admin SAN)"
+                    return 0
+                fi
+                log_error "Failed to obtain SSL certificate"
+                return 1
+            fi
+            ;;
+
+        renew)
+            log_info "Renewing SSL certificates..."
+            certbot renew --quiet --post-hook "systemctl reload postfix dovecot apache2" || true
+            ;;
+
+        change)
+            local new_domain=$2
+            if [[ -z "$new_domain" ]]; then
+                log_error "New domain not specified"
+                return 1
+            fi
+
+            log_info "Changing SSL certificate from $domain to $new_domain..."
+            certbot certonly --webroot -w "$webroot" \
+                -d "$new_domain" -d "mail.$new_domain" -d "admin.$new_domain" \
+                --non-interactive --agree-tos --email admin@$new_domain \
+                --keep-until-expiring --force-renewal || true
+
+            configure_ssl_services "$new_domain"
+            ;;
+
+        *)
+            log_error "Usage: manage_ssl_certificates [install|renew|change newdomain.com]"
+            return 1
+            ;;
+    esac
+}
+
+# ============================================================================
+# User Management
+# ============================================================================
+
+add_roundcube_user() {
+    local username=$1
+    local password=$2
+    local quota_size=$3
+    local domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
+    local email="$username@$domain"
+    local ROUNDCUBE_DB_USER="roundcube"
+    local ROUNDCUBE_DB_NAME="roundcubemail"
+
+    if id "$username" >/dev/null 2>&1; then
+        log_info "User $username already exists, skipping creation..."
+        return 0
+    fi
+
+    useradd -m -s /bin/bash "$username"
+    echo "$username:$password" | chpasswd
+
+    mkdir -p "/home/$username/Maildir/"{cur,new,tmp}
+    chown -R "$username:$username" "/home/$username/Maildir"
+
+    echo "quota_rule = *:storage=${quota_size}M" > "/home/$username/.dovecot.quota"
+    chown "$username:$username" "/home/$username/.dovecot.quota"
+
+    echo "$email $username" >> /etc/postfix/virtual
+    postmap /etc/postfix/virtual
+
+    ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
+
+    USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se "INSERT INTO users (username, mail_host, created, last_login, language, preferences) VALUES ('$username', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE'); SELECT LAST_INSERT_ID();" 2>/dev/null || echo "")
+
+    if [ -n "$USER_ID" ]; then
+        mysql $ROUNDCUBE_DB_NAME -e "INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$email', '$email', '', '1');" 2>/dev/null || true
+    fi
+
+    systemctl restart postfix dovecot 2>/dev/null || true
+
+    send_welcome_email "$email" "$username"
+
+    log_info "User $username created successfully with email $email"
+}
+
+send_welcome_email() {
+    local recipient_email=$1
+    local roundcube_user=$2
+    local domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
+    [ -z "$domain" ] && domain="localhost"
+
+    local subject="Welcome to Roundcube Webmail, $roundcube_user"
+    local body="Dear User,\n\nCongratulations! Your Roundcube email has been successfully set up.\n\nHere are your login details:\n\nEmail Address: $recipient_email\nUsername: $roundcube_user\n\nYou can access your Roundcube webmail interface anytime\n\nThank you,\nAdmin Team"
+
+    echo -e "$body" | mail -s "$subject" -a "From: admin@$domain" "$recipient_email" 2>/dev/null || true
+}
+
+# ============================================================================
+# Notification Email
+# ============================================================================
+
+send_notification_email() {
+    local recipient_email=$1
+    local roundcube_url=$2
+    local roundcube_db_user=$3
+    local roundcube_db_password=$4
+    local mailx_url=$5
+    local txt_record=$6
+    local selector=$7
+    local db_url=$8
+    local DOMAIN=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
+    [ -z "$DOMAIN" ] && DOMAIN="localhost"
+
+    if [ -z "$txt_record" ] || [ "$txt_record" == "Not available" ]; then
+        if [ -f "/tmp/dkim_txt_record.txt" ]; then
+            txt_record=$(cat /tmp/dkim_txt_record.txt)
+        elif [ -f "/etc/opendkim/keys/$DOMAIN/default.txt" ]; then
+            txt_record=$(extract_dkim_record "/etc/opendkim/keys/$DOMAIN/default.txt")
+        fi
+    fi
+
+    local dkim_host="$selector._domainkey.$DOMAIN"
+    local dkim_value="$txt_record"
+
+    local server_ip=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+
+    local admin_url="https://admin.$DOMAIN"
+
+    local subject="MailX Installation Successful - DNS Records Required"
+    local body="===========================================
+MailX Installation Complete - DNS Configuration Required
+===========================================
+
+Your MailX server has been successfully installed and configured.
+
+INSTALLATION DETAILS:
+-------------------
+Email Domain: $DOMAIN
+Hostname: $(hostname)
+Server IP: $server_ip
+
+ACCESS URLs:
+-----------
+Admin Panel: $admin_url
+Webmail: $roundcube_url
+Mailx Portal: $mailx_url
+Database Admin: $db_url
+
+ADMIN PANEL:
+-----------
+Initial admin credentials are saved on the server at:
+  /root/.mailx-admin-initial-password
+Change the password immediately after first login.
+
+DNS RECORDS TO ADD (CRITICAL FOR EMAIL DELIVERY):
+------------------------------------------------
+
+1. DKIM Record (Required for email authentication):
+   Type: TXT
+   Host: $dkim_host
+   Value: \"$dkim_value\"
+
+2. SPF Record (Required to prevent spoofing):
+   Type: TXT
+   Host: $DOMAIN
+   Value: \"v=spf1 mx a ip4:$server_ip ~all\"
+
+3. DMARC Record (Optional but recommended):
+   Type: TXT
+   Host: _dmarc.$DOMAIN
+   Value: \"v=DMARC1; p=none; rua=mailto:admin@$DOMAIN\"
+
+4. MX Record (Mail exchange):
+   Type: MX
+   Host: $DOMAIN
+   Value: mail.$DOMAIN
+   Priority: 10
+
+5. A Records:
+   Type: A
+   Host: $DOMAIN          -> $server_ip
+   Type: A
+   Host: mail.$DOMAIN     -> $server_ip
+   Type: A
+   Host: admin.$DOMAIN    -> $server_ip
+
+VERIFICATION COMMANDS:
+---------------------
+After adding DNS records, verify with:
+- dig TXT $dkim_host
+- dig TXT $DOMAIN | grep SPF
+- dig MX $DOMAIN
+
+IMPORTANT NOTES:
+---------------
+1. DNS propagation may take up to 24-48 hours
+2. Email delivery may be affected until DKIM/SPF are properly configured
+3. Save this email for future reference
+4. To change any settings, log in to the admin panel
+
+Best regards,
+MailX Installation System
+==========================================="
+
+    echo -e "$body" | mail -s "$subject" -a "From: admin@$DOMAIN" "$recipient_email" 2>/dev/null || {
+        log_warning "Failed to send notification email, saving to file..."
+        echo "$body" > /tmp/mailx_notification.txt
+        log_info "Notification saved to /tmp/mailx_notification.txt"
+    }
+
+    cat > /tmp/mailx_dns_records.txt <<EOF
+DKIM Record:
+Type: TXT
+Host: $dkim_host
+Value: "$dkim_value"
+
+SPF Record:
+Type: TXT
+Host: $DOMAIN
+Value: "v=spf1 mx a ip4:$server_ip ~all"
+
+MX Record:
+Type: MX
+Host: $DOMAIN
+Value: mail.$DOMAIN
+Priority: 10
+EOF
+
+    log_info "DNS records saved to /tmp/mailx_dns_records.txt"
+    log_info "DKIM TXT record: $dkim_host = \"$dkim_value\""
+}
+
+# ============================================================================
+# Roundcube Installation
+# ============================================================================
+
+install_roundcube_application() {
+    local EMAIL_DOMAIN=$1
+    local HOSTNAME=$2
+
+    log_info "=== Stage 9: Roundcube Installation ==="
+
+    local ROUNDCUBE_DB_PASSWORD=$(cat /usr/local/roundcube_db_pwd.txt)
+    local ROUNDCUBE_DB_USER="roundcube"
+    local ROUNDCUBE_DB_NAME="roundcubemail"
+    local ROUNDCUBE_ADMIN_EMAIL="admin@$EMAIL_DOMAIN"
+    local ROUNDCUBE_ADMIN_PASS=$(openssl rand -base64 12)
+
+    local CURRENT_DIR=$(pwd)
+
+    cd /var/www/html || {
+        log_error "Failed to change to /var/www/html"
+        return 1
+    }
+
+    if [ -d "roundcube" ] && [ ! -f "roundcube/config/config.inc.php" ]; then
+        log_info "Removing incomplete Roundcube installation..."
+        rm -rf roundcube
+    fi
+
+    if [ -d "roundcube" ] && [ -f "roundcube/config/config.inc.php" ]; then
+        log_info "Roundcube already installed, verifying configuration..."
+        if grep -q "db_dsnw" roundcube/config/config.inc.php 2>/dev/null; then
+            log_info "Roundcube already properly configured, skipping..."
+            cd "$CURRENT_DIR" 2>/dev/null || true
+            return 0
+        else
+            log_warning "Roundcube installed but config incomplete, reconfiguring..."
+        fi
+    fi
+
+    log_info "Downloading Roundcube..."
+    local RC_VERSION="1.5.0"
+    local RC_FILE="roundcubemail-${RC_VERSION}-complete.tar.gz"
+    local RC_URL="https://github.com/roundcube/roundcubemail/releases/download/${RC_VERSION}/${RC_FILE}"
+
+    [ -f "$RC_FILE" ] && rm -f "$RC_FILE"
+
+    local download_success=false
+    for i in {1..3}; do
+        if wget -q --timeout=30 --tries=3 "$RC_URL" -O "$RC_FILE" 2>/dev/null; then
+            if [ -s "$RC_FILE" ]; then
+                download_success=true
+                break
+            fi
+        fi
+        log_warning "Download attempt $i failed, retrying..."
+        sleep 5
+    done
+
+    if [ "$download_success" != "true" ]; then
+        log_error "Failed to download Roundcube"
+        cd "$CURRENT_DIR" 2>/dev/null || true
+        return 1
+    fi
+
+    log_info "Extracting Roundcube..."
+    if ! tar -xzf "$RC_FILE" 2>/dev/null; then
+        log_error "Failed to extract Roundcube"
+        rm -f "$RC_FILE"
+        cd "$CURRENT_DIR" 2>/dev/null || true
+        return 1
+    fi
+
+    local extracted_dir=""
+    for dir in roundcubemail-*/; do
+        if [ -d "$dir" ]; then
+            extracted_dir="${dir%/}"
+            break
+        fi
+    done
+
+    if [ -z "$extracted_dir" ]; then
+        log_error "Could not find extracted Roundcube directory"
+        rm -f "$RC_FILE"
+        cd "$CURRENT_DIR" 2>/dev/null || true
+        return 1
+    fi
+
+    [ -d "roundcube" ] && rm -rf roundcube
+
+    mv "$extracted_dir" roundcube || {
+        log_error "Failed to move Roundcube to final location"
+        rm -f "$RC_FILE"
+        cd "$CURRENT_DIR" 2>/dev/null || true
+        return 1
+    }
+
+    rm -f "$RC_FILE"
+
+    cd roundcube || {
+        log_error "Failed to change to roundcube directory"
+        cd "$CURRENT_DIR" 2>/dev/null || true
+        return 1
+    }
+
+    if [ ! -d "config" ]; then
+        log_error "Config directory not found in Roundcube installation"
+        cd "$CURRENT_DIR" 2>/dev/null || true
+        return 1
+    fi
+
+    if [ -f "config/config.inc.php.sample" ]; then
+        cp config/config.inc.php.sample config/config.inc.php
+        log_info "Config file created from sample"
+    else
+        log_warning "Config sample not found, creating default config..."
+        cat > config/config.inc.php <<'EOF'
+<?php
+$config = array();
+$config['db_dsnw'] = '';
+$config['default_host'] = 'localhost';
+$config['smtp_server'] = 'localhost';
+$config['smtp_port'] = 25;
+$config['support_url'] = '';
+$config['mail_domain'] = '';
+$config['product_name'] = 'Roundcube Webmail';
+$config['des_key'] = '';
+$config['plugins'] = array();
+$config['skin'] = 'elastic';
+?>
+EOF
+    fi
+
+    log_info "Configuring Roundcube database..."
+    sed -i "s|\$config\['db_dsnw'\] = .*|\$config\['db_dsnw'\] = 'mysql://$ROUNDCUBE_DB_USER:$ROUNDCUBE_DB_PASSWORD@localhost/$ROUNDCUBE_DB_NAME';|" config/config.inc.php
+    sed -i "s|\$config\['default_host'\] = .*|\$config\['default_host'\] = 'localhost';|" config/config.inc.php
+    sed -i "s|\$config\['smtp_server'\] = .*|\$config\['smtp_server'\] = 'localhost';|" config/config.inc.php
+    sed -i "s|\$config\['smtp_port'\] = .*|\$config\['smtp_port'\] = 25;|" config/config.inc.php
+    sed -i "s|\$config\['support_url'\] = .*|\$config\['support_url'\] = 'mailto:$ROUNDCUBE_ADMIN_EMAIL';|" config/config.inc.php
+
+    if ! grep -q "mail_domain" config/config.inc.php; then
+        sed -i "/\$config\['smtp_server'\]/a \$config['mail_domain'] = '$EMAIL_DOMAIN';" config/config.inc.php
+    else
+        sed -i "s|\$config\['mail_domain'\] = .*|\$config\['mail_domain'\] = '$EMAIL_DOMAIN';|" config/config.inc.php
+    fi
+
+    if grep -q "\$config\['des_key'\] = ''" config/config.inc.php; then
+        local DES_KEY=$(openssl rand -base64 24)
+        sed -i "s|\$config\['des_key'\] = '';|\$config\['des_key'\] = '$DES_KEY';|" config/config.inc.php
+    fi
+
+    log_info "Initializing Roundcube database schema..."
+    if [ -f "bin/initdb.sh" ]; then
+        chmod +x bin/initdb.sh
+        if ! ./bin/initdb.sh --dir=./SQL --create 2>/dev/null; then
+            log_warning "Database initialization had issues, but continuing..."
+        fi
+    else
+        log_warning "initdb.sh not found, skipping database initialization"
+    fi
+
+    log_info "Setting Roundcube permissions..."
+    chown -R www-data:www-data . 2>/dev/null || true
+    find . -type d -exec chmod 755 {} \; 2>/dev/null || true
+    find . -type f -exec chmod 644 {} \; 2>/dev/null || true
+    chmod 775 temp logs 2>/dev/null || true
+
+    log_info "Adding admin user..."
+    add_roundcube_user "admin" "$ROUNDCUBE_ADMIN_PASS" 1000
+
+    cd "$CURRENT_DIR" 2>/dev/null || true
+
+    if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
+        log_info "Roundcube installation completed successfully"
+        return 0
+    else
+        log_error "Roundcube installation verification failed"
+        return 1
+    fi
+}
+
+verify_roundcube_installation() {
+    local EMAIL_DOMAIN=$1
+
+    log_info "Verifying Roundcube installation..."
+
+    if [ ! -d "/var/www/html/roundcube" ]; then
+        log_error "Roundcube directory not found"
+        return 1
+    fi
+
+    if [ ! -f "/var/www/html/roundcube/config/config.inc.php" ]; then
+        log_error "Roundcube config file not found"
+        return 1
+    fi
+
+    local ROUNDCUBE_DB_PASSWORD=$(cat /usr/local/roundcube_db_pwd.txt)
+    local ROUNDCUBE_DB_USER="roundcube"
+    local ROUNDCUBE_DB_NAME="roundcubemail"
+
+    if mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" -e "USE $ROUNDCUBE_DB_NAME;" 2>/dev/null; then
+        log_info "Roundcube database connection successful"
+    else
+        log_warning "Roundcube database connection failed, reinitializing..."
+        local CURRENT_DIR=$(pwd)
+        cd /var/www/html/roundcube
+        ./bin/initdb.sh --dir=./SQL --create 2>/dev/null || true
+        cd "$CURRENT_DIR" 2>/dev/null || true
+    fi
+
+    local admin_exists=$(mysql -u "$ROUNDCUBE_DB_USER" -p"$ROUNDCUBE_DB_PASSWORD" -e "SELECT username FROM $ROUNDCUBE_DB_NAME.users WHERE username='admin';" 2>/dev/null | grep -c "admin")
+
+    if [ "$admin_exists" -eq 0 ]; then
+        log_warning "Admin user not found, creating..."
+        add_roundcube_user "admin" "$(openssl rand -base64 12)" 1000
+    fi
+
+    return 0
+}
+
+# ============================================================================
+# Misc Management Functions
+# ============================================================================
+
+send_test_message() {
+    if ! dpkg -l | grep -q mailutils; then
+        apt-get update && apt-get install -y mailutils
+    fi
+
+    local email_to=$1
+    local email_subject=$2
+    local email_body=$3
+    local email_domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
+    [ -z "$email_domain" ] && email_domain="localhost"
+
+    echo -e "$email_body" | mail -s "$email_subject" -a "From: admin@$email_domain" "$email_to" 2>/dev/null || true
+    log_info "Test mail sent to $email_to"
+}
+
+uninstall_roundcube() {
+    local MYSQL_ROOT_PASSWORD=$(cat /usr/local/mysql_root_pwd.txt 2>/dev/null || echo "")
+
+    if [ -n "$MYSQL_ROOT_PASSWORD" ]; then
+        mysql -e "DROP DATABASE IF EXISTS roundcubemail;" 2>/dev/null || true
+        mysql -e "DROP USER IF EXISTS 'roundcube'@'localhost';" 2>/dev/null || true
+    fi
+
+    rm -rf /var/www/html/roundcube
+    log_info "Roundcube uninstallation completed"
+}
+
+uninstall_all() {
+    echo ""
+    echo "=============================================="
+    echo "  MailX Complete Uninstaller"
+    echo "=============================================="
+    echo ""
+    echo "This will COMPLETELY remove all MailX components:"
+    echo "  - Postfix, Dovecot, OpenDKIM (mail services)"
+    echo "  - mailx-admin panel + state database"
+    echo "  - MySQL Server and all databases"
+    echo "  - Apache2 and all virtual hosts"
+    echo "  - PHP 5.6, 8.1, 8.3, 8.4 and all extensions"
+    echo "  - Roundcube, PHPMyAdmin, MailX web files"
+    echo "  - SSL certificates (Let's Encrypt)"
+    echo "  - All created users (vmail, opendkim)"
+    echo "  - All config files, logs, and state data"
+    echo "  - ondrej/php PPA"
+    echo ""
+    echo "WARNING: This action is IRREVERSIBLE!"
+    echo ""
+    read -p "Type 'UNINSTALL' to confirm complete removal: " CONFIRM
+    if [[ "$CONFIRM" != "UNINSTALL" ]]; then
+        log_info "Uninstall cancelled."
+        return 0
+    fi
+
+    log_info "Starting complete MailX uninstallation..."
+
+    # ── Step 1: Stop all services ──
+    log_info "Stopping all services..."
+    local services="postfix dovecot apache2 mysql opendkim mailx-admin php8.1-fpm php8.3-fpm php8.4-fpm php5.6-fpm certbot.timer"
+    for svc in $services; do
+        systemctl stop "$svc" 2>/dev/null || true
+        systemctl disable "$svc" 2>/dev/null || true
+    done
+
+    # ── Step 2: Drop MySQL databases and users ──
+    log_info "Removing MySQL databases and users..."
+    if systemctl start mysql 2>/dev/null; then
+        mysql -e "DROP DATABASE IF EXISTS roundcubemail;" 2>/dev/null || true
+        mysql -e "DROP USER IF EXISTS 'roundcube'@'localhost';" 2>/dev/null || true
+        mysql -e "FLUSH PRIVILEGES;" 2>/dev/null || true
+        systemctl stop mysql 2>/dev/null || true
+    fi
+
+    # ── Step 3: Remove custom systemd units ──
+    log_info "Removing custom systemd units..."
+    rm -f /etc/systemd/system/opendkim.service
+    rm -f /etc/systemd/system/mailx-admin.service
+    systemctl daemon-reload 2>/dev/null || true
+
+    # ── Step 4: Remove crontab entries ──
+    log_info "Removing crontab entries..."
+    (crontab -l 2>/dev/null | grep -v "ssl_renewal.sh") | crontab - 2>/dev/null || true
+
+    # ── Step 5: Disable Apache sites ──
+    log_info "Disabling Apache sites..."
+    for site in roundcube adminportal mailx phpmyadmin mailx-admin 000-default default-ssl; do
+        a2dissite "$site" 2>/dev/null || true
+    done
+
+    # ── Step 6: Purge packages ──
+    log_info "Purging installed packages..."
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get -y remove --purge \
+        postfix postfix-mysql mailutils \
+        dovecot-core dovecot-imapd dovecot-pop3d dovecot-mysql dovecot-sieve dovecot-managesieved dovecot-lmtp \
+        sasl2-bin \
+        opendkim opendkim-tools \
+        mysql-server mysql-client mysql-common \
+        apache2 libapache2-mod-fcgid \
+        certbot python3-certbot-apache \
+        2>/dev/null || true
+
+    local php_pkgs
+    php_pkgs=$(dpkg -l 2>/dev/null | awk '/^ii.*php/ {print $2}')
+    if [ -n "$php_pkgs" ]; then
+        apt-get -y remove --purge $php_pkgs 2>/dev/null || true
+    fi
+
+    # Postgres if the panel used it
+    if [ -f "${STATE_DIR}/admin_db_driver" ] && [ "$(cat ${STATE_DIR}/admin_db_driver)" = "postgres" ]; then
+        apt-get -y remove --purge postgresql postgresql-contrib postgresql-client postgresql-common 2>/dev/null || true
+        rm -rf /etc/postgresql /var/lib/postgresql /var/log/postgresql
+    fi
+
+    # ── Step 7: Remove ondrej/php PPA ──
+    log_info "Removing ondrej/php PPA..."
+    if command -v add-apt-repository &>/dev/null; then
+        add-apt-repository --remove ppa:ondrej/php -y 2>/dev/null || true
+    fi
+    rm -f /etc/apt/sources.list.d/ondrej-*.list /etc/apt/sources.list.d/ondrej-*.list.save 2>/dev/null || true
+
+    # ── Step 8: Remove configuration directories ──
+    log_info "Removing configuration directories..."
+    rm -rf /etc/postfix
+    rm -rf /etc/dovecot
+    rm -rf /etc/opendkim /etc/opendkim.conf
+    rm -rf /etc/apache2
+    rm -rf /etc/mysql
+    rm -rf /etc/php
+    rm -rf /etc/mailx
+
+    # ── Step 9: Remove data directories ──
+    log_info "Removing data directories..."
+    rm -rf /var/lib/mysql
+    rm -rf /var/lib/dovecot
+    rm -rf /var/lib/opendkim
+    rm -rf /var/lib/mailx
+    rm -rf /var/lib/postfix
+    rm -rf /var/spool/postfix
+    rm -rf /var/mail/vmail
+    rm -rf /var/mail/vhosts
+    rm -rf /var/run/opendkim
+    rm -rf /var/backups/mailx
+
+    # ── Step 10: Remove web directories ──
+    log_info "Removing web directories..."
+    rm -rf /var/www/html/roundcube
+    rm -rf /var/www/html/phpmyadmin
+    rm -rf /var/www/html/mailx
+    rm -rf /var/www/html/adminportal
+    rm -rf /var/www/html/.well-known
+
+    # ── Step 11: Remove log files ──
+    log_info "Removing log files..."
+    rm -rf /var/log/mailx
+    rm -rf /var/log/mysql*
+    rm -rf /var/log/mail.*
+    rm -rf /var/log/dovecot*
+    rm -rf /var/log/opendkim*
+
+    # ── Step 12: Remove persistent files ──
+    log_info "Removing MailX data files..."
+    rm -f /usr/local/bin/mailx-admin
+    rm -f /usr/local/mysql_root_pwd.txt
+    rm -f /usr/local/roundcube_db_pwd.txt
+    rm -f /usr/local/roundcube_mail_domain.txt
+    rm -f /usr/local/mailx_dkim_record.txt
+    rm -f /usr/local/bin/ssl_renewal.sh
+    rm -f /usr/local/mailx_admin_email.txt
+    rm -f /usr/local/mailx_ssl_warn_days.txt
+    rm -f /tmp/dkim_txt_record.txt
+    rm -f /tmp/mailx_dns_records.txt
+    rm -f /tmp/mailx_notification.txt
+    rm -f /root/.mailx-admin-initial-password
+    rm -f ~/.my.cnf
+
+    # ── Step 13: Remove Let's Encrypt data ──
+    log_info "Removing Let's Encrypt data..."
+    rm -rf /etc/letsencrypt
+    rm -rf /var/lib/letsencrypt
+    rm -rf /var/log/letsencrypt
+
+    # ── Step 14: Remove system users ──
+    log_info "Removing system users and groups..."
+    userdel -r vmail 2>/dev/null || true
+    groupdel vmail 2>/dev/null || true
+    userdel opendkim 2>/dev/null || true
+    groupdel opendkim 2>/dev/null || true
+    userdel mysql 2>/dev/null || true
+    groupdel mysql 2>/dev/null || true
+    userdel postfix 2>/dev/null || true
+    groupdel postfix 2>/dev/null || true
+
+    # ── Step 15: Remove state directory ──
+    log_info "Removing state tracking..."
+    rm -rf "$STATE_DIR"
+
+    # ── Step 16: Clean apt cache ──
+    log_info "Cleaning up package cache..."
+    apt-get -y autoremove --purge 2>/dev/null || true
+    apt-get -y autoclean 2>/dev/null || true
+    apt-get -y clean 2>/dev/null || true
+    apt-get -qq update > /dev/null 2>&1 || true
+
+    # ── Step 17: Reset hostname ──
+    log_info "Resetting hostname..."
+    echo "localhost" > /etc/hostname
+    hostnamectl set-hostname "localhost" 2>/dev/null || true
+    sed -i 's/^127\.0\.0\.1.*/127.0.0.1 localhost/' /etc/hosts 2>/dev/null || true
+    rm -f /etc/mailname
+
+    echo ""
+    echo "=============================================="
+    log_info "MailX has been completely uninstalled."
+    echo "=============================================="
+    echo ""
+    echo "System has been returned to its original state."
+    echo "A reboot is recommended: reboot"
+    echo ""
+}
+
+change_domain_hostname() {
+    local old_domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
+    local old_hostname=$(hostname)
+
+    if [ -z "$old_domain" ]; then
+        log_error "No existing domain found"
+        return 1
+    fi
+
+    echo "Current Domain: $old_domain"
+    echo "Current Hostname: $old_hostname"
+    echo
+
+    read -p "Enter new email domain (e.g., example.com): " new_domain
+    read -p "Enter new hostname (e.g., mail.example.com): " new_hostname
+
+    if [[ -z "$new_domain" || -z "$new_hostname" ]]; then
+        log_error "Both domain and hostname are required."
+        return 1
+    fi
+
+    echo "$new_hostname" > /etc/hostname
+    hostnamectl set-hostname "$new_hostname"
+    sed -i "s/$old_hostname/$new_hostname/g" /etc/hosts
+
+    echo "$new_hostname" > /etc/mailname
+    echo "$new_domain" > /usr/local/roundcube_mail_domain.txt
+
+    sed -i "s/$old_domain/$new_domain/g" /etc/postfix/main.cf 2>/dev/null || true
+    sed -i "s/$old_hostname/$new_hostname/g" /etc/postfix/main.cf 2>/dev/null || true
+
+    if [ -f "/etc/postfix/header_checks" ]; then
+        sed -i "s/$old_hostname/$new_hostname/g" /etc/postfix/header_checks
+    fi
+
+    if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
+        sed -i "s/$old_domain/$new_domain/g" /var/www/html/roundcube/config/config.inc.php
+        sed -i "s/mail_domain'] = .*/mail_domain'] = '$new_domain';/" /var/www/html/roundcube/config/config.inc.php
+    fi
+
+    for config_file in /etc/apache2/sites-available/*.conf; do
+        [ -f "$config_file" ] && sed -i "s/$old_domain/$new_domain/g" "$config_file" 2>/dev/null || true
+        [ -f "$config_file" ] && sed -i "s/$old_hostname/$new_hostname/g" "$config_file" 2>/dev/null || true
+    done
+
+    generate_dkim_key "$new_domain"
+    configure_opendkim "$new_domain"
+
+    restart_service postfix
+    restart_service dovecot
+    restart_service apache2
+
+    manage_ssl_certificates change "$new_domain"
+
+    log_info "Domain changed successfully to $new_domain with hostname $new_hostname"
+}
+
+repair_postfix_config() {
+    echo ""
+    echo "=============================================="
+    echo "   Postfix Configuration Repair"
+    echo "=============================================="
+    echo ""
+
+    local domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
+    local host=$(hostname)
+
+    if [ -z "$domain" ]; then
+        read -p "Enter your email domain (e.g., example.com): " domain
+    fi
+    if [ -z "$host" ] || [ "$host" = "localhost" ]; then
+        read -p "Enter your hostname (e.g., mail.example.com): " host
+    fi
+
+    echo "Domain:   $domain"
+    echo "Hostname: $host"
+
+    local config_dir="/etc/postfix"
+
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    cp "$config_dir/main.cf" "$config_dir/main.cf.pre-repair_${timestamp}" 2>/dev/null || true
+    cp "$config_dir/master.cf" "$config_dir/master.cf.pre-repair_${timestamp}" 2>/dev/null || true
+    log_info "Backed up current configs with timestamp $timestamp"
+
+    log_info "Downloading main.cf from GitHub..."
+    if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/main.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/_main.cf"; then
+        if [[ -s "${config_dir}/main.cf.tmp" ]]; then
+            mv "${config_dir}/main.cf.tmp" "${config_dir}/main.cf"
+            log_info "main.cf downloaded successfully"
+        else
+            rm -f "${config_dir}/main.cf.tmp"
+            log_error "Downloaded main.cf was empty"
+            return 1
+        fi
+    else
+        rm -f "${config_dir}/main.cf.tmp"
+        log_error "Failed to download main.cf"
+        return 1
+    fi
+
+    log_info "Downloading master.cf from GitHub..."
+    if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/master.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/_master.cf"; then
+        if [[ -s "${config_dir}/master.cf.tmp" ]]; then
+            mv "${config_dir}/master.cf.tmp" "${config_dir}/master.cf"
+            log_info "master.cf downloaded successfully"
+        else
+            rm -f "${config_dir}/master.cf.tmp"
+            log_error "Downloaded master.cf was empty"
+            return 1
+        fi
+    else
+        rm -f "${config_dir}/master.cf.tmp"
+        log_error "Failed to download master.cf"
+        return 1
+    fi
+
+    sed -i "s/{EMAIL_DOMAIN}/$domain/g; s/{HOSTNAME}/$host/g" "${config_dir}/main.cf" 2>/dev/null || true
+    sed -i "s/{EMAIL_DOMAIN}/$domain/g; s/{HOSTNAME}/$host/g" "${config_dir}/master.cf" 2>/dev/null || true
+    log_info "Placeholders replaced with domain=$domain hostname=$host"
+
+    echo "$host OK" > "$config_dir/helo_access"
+    echo ".$domain OK" >> "$config_dir/helo_access"
+    postmap "$config_dir/helo_access" 2>/dev/null || true
+
+    echo "$domain OK" > "$config_dir/virtual_domains"
+    postmap "$config_dir/virtual_domains" 2>/dev/null || true
+
+    if [ ! -f "$config_dir/virtual" ]; then
+        touch "$config_dir/virtual"
+        postmap "$config_dir/virtual" 2>/dev/null || true
+    fi
+
+    setup_postfix_header_checks "$host"
+
+    postconf -e "milter_default_action = accept"
+    postconf -e "milter_protocol = 2"
+    postconf -e "smtpd_milters = unix:opendkim/opendkim.sock"
+    postconf -e "non_smtpd_milters = unix:opendkim/opendkim.sock"
+    postconf -e "virtual_transport = lmtp:unix:private/dovecot-lmtp"
+    log_info "DKIM milter and LMTP settings re-applied"
+
+    local cert_path="/etc/letsencrypt/live/$domain"
+    if [ -d "$cert_path" ]; then
+        postconf -e "smtpd_tls_cert_file=$cert_path/fullchain.pem"
+        postconf -e "smtpd_tls_key_file=$cert_path/privkey.pem"
+        log_info "SSL certificate paths re-applied"
+    fi
+
+    if postfix check 2>/dev/null; then
+        log_info "Postfix configuration validated successfully"
+    else
+        log_warning "Postfix configuration check had warnings"
+    fi
+
+    restart_service postfix
+
+    echo ""
+    echo "=============================================="
+    log_info "Postfix configuration repaired successfully!"
+    echo "=============================================="
+    echo ""
+}
+
+set_postfix_custom_port() {
+    echo ""
+    echo "Current Postfix listening ports:"
+    grep -E '^(smtp|submission|smtps|[0-9]+)\s+inet' /etc/postfix/master.cf 2>/dev/null | awk '{print "  " $1}' || echo "  (unable to read master.cf)"
+    echo ""
+
+    read -p "Enter new SMTP port number to ADD (e.g., 2525, 2580): " new_port
+
+    if [[ ! "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
+        log_error "Invalid port number"
+        return 1
+    fi
+
+    if grep -qE "^${new_port}\s+inet" /etc/postfix/master.cf 2>/dev/null; then
+        log_warning "Port $new_port is already configured in master.cf"
+        read -p "Replace existing entry? (y/n): " replace_confirm
+        if [[ "$replace_confirm" != "y" ]]; then
+            return 0
+        fi
+        sed -i "/^${new_port}\s\+inet/,/^[^[:space:]]/{/^${new_port}\s\+inet/d; /^\s\+-o /d}" /etc/postfix/master.cf
+    fi
+
+    cp /etc/postfix/master.cf /etc/postfix/master.cf.bak
+
+    local config_dir="/etc/postfix"
+    local domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
+    local hostname=$(hostname)
+
+    read -p "Re-download clean master.cf from GitHub? (recommended) (y/n): " redownload
+    if [[ "$redownload" == "y" ]]; then
+        log_info "Downloading clean master.cf from GitHub..."
+        if retry_command "wget -q --timeout=30 --tries=3 -O ${config_dir}/master.cf.tmp https://raw.githubusercontent.com/gtmylab/mailx/main/_master.cf"; then
+            if [[ -s "${config_dir}/master.cf.tmp" ]]; then
+                mv "${config_dir}/master.cf.tmp" "${config_dir}/master.cf"
+                sed -i "s/{EMAIL_DOMAIN}/$domain/g; s/{HOSTNAME}/$hostname/g" "${config_dir}/master.cf" 2>/dev/null || true
+                log_info "Clean master.cf restored from GitHub"
+            else
+                rm -f "${config_dir}/master.cf.tmp"
+                log_warning "Downloaded file was empty, keeping existing master.cf"
+            fi
+        else
+            rm -f "${config_dir}/master.cf.tmp"
+            log_warning "Download failed, keeping existing master.cf"
+        fi
+    fi
+
+    log_info "Adding custom SMTP port $new_port..."
+    cat <<EOF >> /etc/postfix/master.cf
+
+# Custom SMTP port $new_port
+${new_port}      inet  n       -       y       -       -       smtpd
+  -o syslog_name=postfix/smtp-${new_port}
+  -o smtpd_tls_security_level=may
+  -o smtpd_sasl_auth_enable=yes
+  -o smtpd_client_restrictions=permit_sasl_authenticated,reject
+  -o smtpd_sender_login_maps=hash:/etc/postfix/virtual
+  -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject
+  -o milter_macro_daemon_name=ORIGINATING
+EOF
+
+    if [ -f "/var/www/html/roundcube/config/config.inc.php" ]; then
+        sed -i "s/\$config\['smtp_port'\] = .*/\$config\['smtp_port'\] = $new_port;/" /var/www/html/roundcube/config/config.inc.php
+    fi
+
+    if command -v ufw &>/dev/null; then
+        ufw allow "$new_port"/tcp 2>/dev/null || true
+    fi
+
+    if postfix check 2>/dev/null; then
+        log_info "Postfix configuration validated"
+    else
+        log_warning "Postfix configuration check had warnings (non-fatal)"
+    fi
+
+    restart_service postfix
+
+    echo ""
+    echo "Postfix now listening on:"
+    grep -E '^(smtp|submission|smtps|[0-9]+)\s+inet' /etc/postfix/master.cf 2>/dev/null | awk '{print "  " $1}' || true
+    echo ""
+    log_info "Custom SMTP port $new_port added successfully"
+}
+
+add_domain() {
+    local domain=$1
+    local domain_file="/usr/local/roundcube_mail_domain.txt"
+    local helo_access_file="/etc/postfix/helo_access"
+    local virtual_domains_file="/etc/postfix/virtual_domains"
+
+    if check_string_in_file "$domain_file" "$domain"; then
+        log_warning "Domain $domain already exists"
+        return 1
+    fi
+
+    echo "$domain" >> "$domain_file"
+
+    if [ ! -f "$helo_access_file" ]; then
+        touch "$helo_access_file"
+        chmod 640 "$helo_access_file"
+        chown root:postfix "$helo_access_file"
+    fi
+
+    if ! grep -qF ".$domain OK" "$helo_access_file" 2>/dev/null; then
+        echo ".$domain OK" >> "$helo_access_file"
+        postmap "$helo_access_file" 2>/dev/null || true
+    fi
+
+    if [ ! -f "$virtual_domains_file" ]; then
+        touch "$virtual_domains_file"
+        chmod 640 "$virtual_domains_file"
+        chown root:postfix "$virtual_domains_file"
+    fi
+
+    if ! grep -qF "$domain OK" "$virtual_domains_file" 2>/dev/null; then
+        echo "$domain OK" >> "$virtual_domains_file"
+        postmap "$virtual_domains_file" 2>/dev/null || true
+    fi
+
+    log_info "Domain $domain added successfully"
+}
+
+remove_domain() {
+    local domain=$1
+    local domain_file="/usr/local/roundcube_mail_domain.txt"
+    local helo_access_file="/etc/postfix/helo_access"
+    local virtual_domains_file="/etc/postfix/virtual_domains"
+    local temp_file=$(mktemp)
+
+    local domain_count=$(wc -l < "$domain_file" | tr -d ' ')
+    if [ "$domain_count" -le 1 ]; then
+        log_error "Cannot remove the last domain"
+        return 1
+    fi
+
+    if ! check_string_in_file "$domain_file" "$domain"; then
+        log_error "Domain $domain does not exist"
+        return 1
+    fi
+
+    grep -v "^$domain$" "$domain_file" > "$temp_file"
+    mv "$temp_file" "$domain_file"
+
+    if [ -f "$helo_access_file" ]; then
+        grep -vF ".$domain OK" "$helo_access_file" > "$temp_file"
+        mv "$temp_file" "$helo_access_file"
+        postmap "$helo_access_file" 2>/dev/null || true
+    fi
+
+    if [ -f "$virtual_domains_file" ]; then
+        grep -vF "$domain OK" "$virtual_domains_file" > "$temp_file"
+        mv "$temp_file" "$virtual_domains_file"
+        postmap "$virtual_domains_file" 2>/dev/null || true
+    fi
+
+    log_info "Domain $domain removed successfully"
+}
+
+show_installation_status() {
+    echo "=== MailX Installation Status ==="
+    echo
+    echo "Completed stages:"
+    if [ -d "$STATE_DIR" ]; then
+        ls -1 "$STATE_DIR"/*.completed 2>/dev/null | while read file; do
+            stage=$(basename "$file" .completed)
+            echo "  ✓ $stage"
+        done
+    fi
+    echo
+    echo "Services status:"
+    for service in apache2 postfix dovecot mysql opendkim mailx-admin; do
+        if systemctl is-active --quiet "$service" 2>/dev/null; then
+            echo "  ✓ $service is running"
+        else
+            echo "  ✗ $service is not running"
+        fi
+    done
+    echo
+    echo "Applications status:"
+    [ -d "/var/www/html/roundcube" ] && echo "  ✓ Roundcube installed" || echo "  ✗ Roundcube not installed"
+    [ -d "/var/www/html/phpmyadmin" ] && echo "  ✓ PHPMyAdmin installed" || echo "  ✗ PHPMyAdmin not installed"
+    [ -d "/var/www/html/mailx" ] && echo "  ✓ Mailx web installed" || echo "  ✗ Mailx web not installed"
+
+    local primary_domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$primary_domain" ] && [ -f "/etc/letsencrypt/live/$primary_domain/fullchain.pem" ]; then
+        echo "  ✓ SSL Certificate installed"
+    else
+        echo "  ✗ SSL Certificate not installed"
+    fi
+
+    if [ -f "/etc/opendkim/keys/$primary_domain/default.private" ] 2>/dev/null; then
+        echo "  ✓ DKIM key generated"
+    else
+        echo "  ✗ DKIM key not generated"
+    fi
+    if systemctl is-active --quiet opendkim 2>/dev/null; then
+        echo "  ✓ DKIM signing active"
+    else
+        echo "  ✗ DKIM signing not active"
+    fi
+    echo
+    echo "Admin panel status:"
+    if [ -x "$ADMIN_BINARY_PATH" ]; then
+        echo "  ✓ Binary installed: $ADMIN_BINARY_PATH"
+    else
+        echo "  ✗ Binary not installed"
+    fi
+    if [ -f "$ADMIN_CONFIG_FILE" ]; then
+        echo "  ✓ Config present: $ADMIN_CONFIG_FILE"
+        local driver
+        driver=$(grep -E '^driver\s*=' "$ADMIN_CONFIG_FILE" | head -1 | cut -d'"' -f2)
+        echo "    DB driver: ${driver:-unknown}"
+    else
+        echo "  ✗ Config missing"
+    fi
+    if curl -sf "http://${ADMIN_LISTEN_ADDR}/login" >/dev/null 2>&1; then
+        echo "  ✓ Panel is responding on ${ADMIN_LISTEN_ADDR}"
+    else
+        echo "  ✗ Panel is not responding"
+    fi
+    if [ -f /root/.mailx-admin-initial-password ]; then
+        echo "  ℹ Initial password file: /root/.mailx-admin-initial-password"
+    fi
+    echo
+}
+
+# ============================================================================
+# DKIM Record Viewing & Resending
+# ============================================================================
+
+show_dkim_record() {
+    local DOMAIN=""
+    if [ -f /usr/local/roundcube_mail_domain.txt ]; then
+        DOMAIN=$(cat /usr/local/roundcube_mail_domain.txt | tr -d '[:space:]')
+    fi
+    local SELECTOR="default"
+
+    if [ -z "$DOMAIN" ]; then
+        log_error "No domain configured. Run the installer first."
+        return 1
+    fi
+
+    echo
+    echo "=== DKIM Record for $DOMAIN ==="
+    echo
+
+    local DKIM_RECORD=""
+    local TXT_FILE="/etc/opendkim/keys/$DOMAIN/$SELECTOR.txt"
+    if [ -f "$TXT_FILE" ]; then
+        DKIM_RECORD=$(extract_dkim_record "$TXT_FILE")
+    fi
+    if [ -z "$DKIM_RECORD" ]; then
+        local found_txt
+        found_txt=$(find /etc/opendkim/keys -name "$SELECTOR.txt" -type f 2>/dev/null | head -1)
+        if [ -n "$found_txt" ]; then
+            DKIM_RECORD=$(extract_dkim_record "$found_txt")
+        fi
+    fi
+    if [ -z "$DKIM_RECORD" ] && [ -f /usr/local/mailx_dkim_record.txt ]; then
+        DKIM_RECORD=$(cat /usr/local/mailx_dkim_record.txt)
+    fi
+    if [ -z "$DKIM_RECORD" ] && [ -f /tmp/dkim_txt_record.txt ]; then
+        DKIM_RECORD=$(cat /tmp/dkim_txt_record.txt)
+    fi
+
+    if [ -n "$DKIM_RECORD" ] && [ ! -f /usr/local/mailx_dkim_record.txt ]; then
+        echo "$DKIM_RECORD" > /usr/local/mailx_dkim_record.txt
+    fi
+
+    if [ -z "$DKIM_RECORD" ]; then
+        log_error "No DKIM record found."
+        return 1
+    fi
+
+    local server_ip=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+
+    echo "1. DKIM Record:"
+    echo "   Type:  TXT"
+    echo "   Host:  $SELECTOR._domainkey.$DOMAIN"
+    echo "   Value: \"$DKIM_RECORD\""
+    echo
+    echo "2. SPF Record:"
+    echo "   Type:  TXT"
+    echo "   Host:  $DOMAIN"
+    echo "   Value: \"v=spf1 mx a ip4:$server_ip ~all\""
+    echo
+    echo "3. DMARC Record:"
+    echo "   Type:  TXT"
+    echo "   Host:  _dmarc.$DOMAIN"
+    echo "   Value: \"v=DMARC1; p=none; rua=mailto:admin@$DOMAIN\""
+    echo
+    echo "4. MX Record:"
+    echo "   Type:     MX"
+    echo "   Host:     $DOMAIN"
+    echo "   Value:    mail.$DOMAIN"
+    echo "   Priority: 10"
+    echo
+    echo "5. A Records:"
+    echo "   $DOMAIN        -> $server_ip"
+    echo "   mail.$DOMAIN   -> $server_ip"
+    echo "   admin.$DOMAIN  -> $server_ip"
+    echo
+}
+
+resend_dkim_record() {
+    local recipient=$1
+    local DOMAIN=""
+    if [ -f /usr/local/roundcube_mail_domain.txt ]; then
+        DOMAIN=$(cat /usr/local/roundcube_mail_domain.txt | tr -d '[:space:]')
+    fi
+    local SELECTOR="default"
+
+    if [ -z "$DOMAIN" ]; then
+        log_error "No domain configured. Run the installer first."
+        return 1
+    fi
+
+    if [ -z "$recipient" ]; then
+        log_error "No recipient email provided."
+        return 1
+    fi
+
+    local DKIM_RECORD=""
+    local TXT_FILE="/etc/opendkim/keys/$DOMAIN/$SELECTOR.txt"
+    if [ -f "$TXT_FILE" ]; then
+        DKIM_RECORD=$(extract_dkim_record "$TXT_FILE")
+    fi
+    if [ -z "$DKIM_RECORD" ]; then
+        local found_txt
+        found_txt=$(find /etc/opendkim/keys -name "$SELECTOR.txt" -type f 2>/dev/null | head -1)
+        if [ -n "$found_txt" ]; then
+            DKIM_RECORD=$(extract_dkim_record "$found_txt")
+        fi
+    fi
+    if [ -z "$DKIM_RECORD" ] && [ -f /usr/local/mailx_dkim_record.txt ]; then
+        DKIM_RECORD=$(cat /usr/local/mailx_dkim_record.txt)
+    fi
+    if [ -z "$DKIM_RECORD" ] && [ -f /tmp/dkim_txt_record.txt ]; then
+        DKIM_RECORD=$(cat /tmp/dkim_txt_record.txt)
+    fi
+
+    if [ -z "$DKIM_RECORD" ]; then
+        log_error "No DKIM record found."
+        return 1
+    fi
+
+    local server_ip=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+    local dkim_host="$SELECTOR._domainkey.$DOMAIN"
+
+    local body="===========================================
+DKIM & DNS Records for $DOMAIN
+===========================================
+
+1. DKIM Record:
+   Type: TXT
+   Host: $dkim_host
+   Value: \"$DKIM_RECORD\"
+
+2. SPF Record:
+   Type: TXT
+   Host: $DOMAIN
+   Value: \"v=spf1 mx a ip4:$server_ip ~all\"
+
+3. DMARC Record:
+   Type: TXT
+   Host: _dmarc.$DOMAIN
+   Value: \"v=DMARC1; p=none; rua=mailto:admin@$DOMAIN\"
+
+4. MX Record:
+   Type: MX
+   Host: $DOMAIN
+   Value: mail.$DOMAIN
+   Priority: 10
+
+5. A Records:
+   $DOMAIN        -> $server_ip
+   mail.$DOMAIN   -> $server_ip
+   admin.$DOMAIN  -> $server_ip
+
+VERIFICATION:
+   dig TXT $dkim_host
+   dig TXT $DOMAIN | grep SPF
+   dig MX $DOMAIN
+
+==========================================="
+
+    echo -e "$body" | mail -s "MailX DNS Records for $DOMAIN" -a "From: admin@$DOMAIN" "$recipient" 2>/dev/null
+    if [ $? -eq 0 ]; then
+        log_info "DKIM & DNS records sent to $recipient"
+    else
+        log_error "Failed to send email. Displaying records on screen instead:"
+        echo -e "$body"
+    fi
+}
+
+# ============================================================================
+# Network diagnostics
+# ============================================================================
+
+fix_network_for_ppa() {
+    log_info "Checking network connectivity to PPA..."
+
+    if ! curl -s --connect-timeout 5 https://ppa.launchpadcontent.net > /dev/null; then
+        log_warning "Cannot reach PPA server, checking DNS..."
+
+        echo "nameserver 8.8.8.8" > /etc/resolv.conf
+        echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+
+        systemd-resolve --flush-caches 2>/dev/null || true
+
+        sleep 2
+        if ! curl -s --connect-timeout 5 https://ppa.launchpadcontent.net > /dev/null; then
+            log_warning "Still cannot reach PPA. Will proceed with fallback..."
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+# ============================================================================
+# mailx-admin — panel-specific helpers
+# ============================================================================
+
+# Write /etc/mailx/admin.toml based on the chosen DB driver.
+write_admin_toml() {
+    local driver=$1
+    local admin_db_password=$2
+    local email_domain=$3
+    local hostname=$4
+
+    mkdir -p "$ADMIN_CONFIG_DIR"
+    chmod 700 "$ADMIN_CONFIG_DIR"
+
+    if [ "$driver" = "sqlite" ]; then
+        cat > "$ADMIN_CONFIG_FILE" <<EOF
+# MailX Admin configuration
+# Generated by installer on $(date -Iseconds)
+# Edit carefully — the panel reads this on every start.
+
+[server]
+listen_addr = "${ADMIN_LISTEN_ADDR}"
+base_url    = "https://admin.${email_domain}"
+hostname    = "${hostname}"
+
+[database]
+driver = "sqlite"
+
+[database.sqlite]
+path = "${ADMIN_STATE_DB}"
+
+[database.postgres]
+host     = "127.0.0.1"
+port     = 5432
+user     = "mailx_admin"
+password = ""
+dbname   = "mailx_admin"
+sslmode  = "disable"
+
+[mail]
+postfix_conf_dir    = "/etc/postfix"
+dovecot_conf_dir    = "/etc/dovecot"
+opendkim_dir        = "/etc/opendkim"
+primary_domain_file = "/usr/local/roundcube_mail_domain.txt"
+
+[dns]
+resolver = "1.1.1.1:53"
+
+[logs]
+mail_log_path  = "/var/log/mail.log"
+retention_days = 30
+EOF
+    else
+        cat > "$ADMIN_CONFIG_FILE" <<EOF
+# MailX Admin configuration
+# Generated by installer on $(date -Iseconds)
+
+[server]
+listen_addr = "${ADMIN_LISTEN_ADDR}"
+base_url    = "https://admin.${email_domain}"
+hostname    = "${hostname}"
+
+[database]
+driver = "postgres"
+
+[database.sqlite]
+path = "${ADMIN_STATE_DB}"
+
+[database.postgres]
+host     = "127.0.0.1"
+port     = 5432
+user     = "mailx_admin"
+password = "${admin_db_password}"
+dbname   = "mailx_admin"
+sslmode  = "disable"
+
+[mail]
+postfix_conf_dir    = "/etc/postfix"
+dovecot_conf_dir    = "/etc/dovecot"
+opendkim_dir        = "/etc/opendkim"
+primary_domain_file = "/usr/local/roundcube_mail_domain.txt"
+
+[dns]
+resolver = "1.1.1.1:53"
+
+[logs]
+mail_log_path  = "/var/log/mail.log"
+retention_days = 30
+EOF
+    fi
+
+    chmod 600 "$ADMIN_CONFIG_FILE"
+}
+
+# Ensure the panel systemd unit exists and is configured.
+install_admin_systemd_unit() {
+    cat > "/etc/systemd/system/${ADMIN_SERVICE_NAME}.service" <<EOF
+[Unit]
+Description=MailX Admin Panel
+Documentation=https://github.com/gtmylab/mailx-admin
+After=network.target postfix.service dovecot.service
+Wants=postfix.service dovecot.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=${ADMIN_BINARY_PATH} serve --config ${ADMIN_CONFIG_FILE} --require-seed
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mailx-admin
+
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable "${ADMIN_SERVICE_NAME}" 2>/dev/null || true
+}
+
+# Write the Apache vhost for the panel (reverse proxy).
+install_admin_apache_vhost() {
+    local hostname=$1
+    local email_domain=$2
+
+    a2enmod proxy proxy_http ssl headers > /dev/null 2>&1
+
+    local cert_path="/etc/letsencrypt/live/${hostname}"
+
+    cat > /etc/apache2/sites-available/mailx-admin.conf <<EOF
+# MailX Admin Panel — generated by installer
+# Reverse-proxies HTTPS to the Go binary on ${ADMIN_LISTEN_ADDR}
+
+<VirtualHost *:${ADMIN_WEB_PORT}>
+    ServerName admin.${email_domain}
+
+    SSLEngine on
+    SSLCertificateFile    ${cert_path}/fullchain.pem
+    SSLCertificateKeyFile ${cert_path}/privkey.pem
+
+    Header always set Strict-Transport-Security "max-age=31536000"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    ProxyPreserveHost On
+    ProxyRequests Off
+
+    # Block external access to /metrics
+    <Location /metrics>
+        Require all denied
+    </Location>
+
+    # SSE endpoint — buffering off for live log tailing
+    <Location /events>
+        ProxyPass        http://${ADMIN_LISTEN_ADDR}/events
+        ProxyPassReverse http://${ADMIN_LISTEN_ADDR}/events
+        Header set X-Accel-Buffering no
+        SetEnv proxy-sendchunked 1
+        SetEnv proxy-sendcl 0
+    </Location>
+
+    ProxyPass        / http://${ADMIN_LISTEN_ADDR}/
+    ProxyPassReverse / http://${ADMIN_LISTEN_ADDR}/
+
+    ErrorLog \${APACHE_LOG_DIR}/mailx-admin_error.log
+    CustomLog \${APACHE_LOG_DIR}/mailx-admin_access.log combined
+</VirtualHost>
+EOF
+
+    a2ensite mailx-admin.conf > /dev/null 2>&1
+    apache2ctl configtest 2>/dev/null && systemctl reload apache2 || true
+}
+
+# Stage 13 body — extracted so it can be called from the main stage runner.
+install_mailx_admin_panel() {
+    local EMAIL_DOMAIN=$1
+    local HOSTNAME=$2
+
+    log_info "=== Stage 13: MailX Admin Panel Installation ==="
+
+    # ---- 13a. Prerequisites ----
+    apt_install sqlite3 ca-certificates curl
+
+    # ---- 13b. Ask which DB driver ----
+    echo ""
+    echo "MailX Admin needs its own state database."
+    echo "This is separate from the Roundcube MySQL database."
+    echo ""
+    echo "  1) SQLite     (recommended for a single server, low memory)"
+    echo "  2) PostgreSQL (recommended for multi-server or high concurrency)"
+    echo ""
+    read -p "Choose admin DB driver [1]: " admin_db_choice
+    admin_db_choice="${admin_db_choice:-1}"
+
+    local admin_db_driver="sqlite"
+    if [ "$admin_db_choice" = "2" ]; then
+        admin_db_driver="postgres"
+    fi
+    echo "$admin_db_driver" > "${STATE_DIR}/admin_db_driver"
+
+    mkdir -p "$ADMIN_CONFIG_DIR" "$ADMIN_STATE_DIR" "$ADMIN_BACKUP_DIR"
+    chmod 700 "$ADMIN_CONFIG_DIR" "$ADMIN_STATE_DIR"
+
+    # ---- 13c. PostgreSQL setup ----
+    local admin_db_password=""
+    if [ "$admin_db_driver" = "postgres" ]; then
+        if ! command_exists psql; then
+            log_info "Installing PostgreSQL..."
+            apt_install postgresql postgresql-contrib
+        fi
+
+        admin_db_password=$(generate_password 32)
+        echo "$admin_db_password" > "${ADMIN_CONFIG_DIR}/pg_password"
+        chmod 600 "${ADMIN_CONFIG_DIR}/pg_password"
+
+        if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='mailx_admin'" | grep -q 1; then
+            sudo -u postgres psql -c "CREATE ROLE mailx_admin LOGIN PASSWORD '${admin_db_password}';"
+            log_info "Created PostgreSQL role: mailx_admin"
+        else
+            sudo -u postgres psql -c "ALTER ROLE mailx_admin WITH PASSWORD '${admin_db_password}';"
+            log_info "Updated PostgreSQL role password: mailx_admin"
+        fi
+
+        if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='mailx_admin'" | grep -q 1; then
+            sudo -u postgres createdb -O mailx_admin mailx_admin
+            log_info "Created PostgreSQL database: mailx_admin"
+        fi
+    fi
+
+    # ---- 13d. Write admin.toml ----
+    log_info "Writing $ADMIN_CONFIG_FILE"
+    write_admin_toml "$admin_db_driver" "$admin_db_password" "$EMAIL_DOMAIN" "$HOSTNAME"
+
+    # ---- 13e. Download & install the binary ----
+    if [ -x "$ADMIN_BINARY_PATH" ] && [ -z "$MAILX_ADMIN_FORCE_REINSTALL" ]; then
+        log_info "mailx-admin binary already present at $ADMIN_BINARY_PATH"
+        log_info "Set MAILX_ADMIN_FORCE_REINSTALL=1 to replace it with the release build"
+    else
+        if ! install_binary_from_url "$ADMIN_BINARY_URL" "$ADMIN_BINARY_LOCAL" "$ADMIN_BINARY_PATH" "mailx-admin"; then
+            log_warning "Could not install mailx-admin binary — panel will not start."
+            log_warning "Place the binary at $ADMIN_BINARY_LOCAL and re-run this stage."
+            return 1
+        fi
+        log_info "Installed $ADMIN_BINARY_PATH"
+    fi
+
+    # Provenance: record exactly which build now sits on this host. Logged on
+    # every run, not only fresh installs, because an existing binary is kept
+    # as-is (and therefore stays version-pinned) unless
+    # MAILX_ADMIN_FORCE_REINSTALL=1 forces a replacement.
+    log_info "Installed version: $("$ADMIN_BINARY_PATH" --version 2>/dev/null || echo unknown)"
+
+    # ---- 13f. Migrations ----
+    log_info "Running database migrations..."
+    if ! "$ADMIN_BINARY_PATH" migrate --config "$ADMIN_CONFIG_FILE"; then
+        log_error "Database migration failed"
+        return 1
+    fi
+
+    # ---- 13g. Seed ----
+    log_info "Seeding admin DB from existing server configs..."
+    "$ADMIN_BINARY_PATH" seed --config "$ADMIN_CONFIG_FILE" --yes 2>&1 | tee -a "$LOG_FILE" || \
+        log_warning "Seed failed or was skipped — run 'mailx-admin seed' manually later"
+
+    # ---- 13h. Initial admin user ----
+    if ! "$ADMIN_BINARY_PATH" user list --config "$ADMIN_CONFIG_FILE" 2>/dev/null | grep -q admin; then
+        local initial_admin_pw
+        initial_admin_pw=$(generate_password 24)
+
+        echo "$initial_admin_pw" | "$ADMIN_BINARY_PATH" user create admin \
+            --config "$ADMIN_CONFIG_FILE" --role admin 2>&1 | tee -a "$LOG_FILE"
+
+        echo "$initial_admin_pw" > /root/.mailx-admin-initial-password
+        chmod 600 /root/.mailx-admin-initial-password
+        log_info "Initial admin password saved to /root/.mailx-admin-initial-password"
+    else
+        log_info "Admin user already exists"
+    fi
+
+    # ---- 13i. systemd unit ----
+    log_info "Installing systemd unit: ${ADMIN_SERVICE_NAME}.service"
+    install_admin_systemd_unit
+
+    systemctl restart "${ADMIN_SERVICE_NAME}" || {
+        log_error "mailx-admin failed to start. Check: journalctl -u ${ADMIN_SERVICE_NAME} -n 40"
+        return 1
+    }
+
+    # ---- 13j. Health check ----
+    log_info "Waiting for mailx-admin to become responsive..."
+    local waited=0
+    while [ $waited -lt 20 ]; do
+        if curl -sf "http://${ADMIN_LISTEN_ADDR}/login" >/dev/null 2>&1; then
+            log_info "mailx-admin is responding on ${ADMIN_LISTEN_ADDR}"
+            break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    if [ $waited -ge 20 ]; then
+        log_warning "mailx-admin did not respond within 20s — check journalctl -u ${ADMIN_SERVICE_NAME}"
+    fi
+
+    log_info "MailX Admin panel installed successfully"
+}
+
+# Stage 14 body — Apache vhost for the panel.
+install_mailx_admin_vhost() {
+    local EMAIL_DOMAIN=$1
+    local HOSTNAME=$2
+
+    log_info "=== Stage 14: Admin Panel Apache Vhost ==="
+
+    # Cert with admin SAN must exist (obtained in Stage 8)
+    local cert_path="/etc/letsencrypt/live/${HOSTNAME}"
+    if [ ! -f "${cert_path}/fullchain.pem" ]; then
+        log_warning "SSL cert for ${HOSTNAME} not found — vhost will be written but may fail"
+    fi
+
+    install_admin_apache_vhost "$HOSTNAME" "$EMAIL_DOMAIN"
+
+    log_info "Admin vhost installed at https://admin.${EMAIL_DOMAIN}:${ADMIN_WEB_PORT}"
+}
+
+# ============================================================================
+# Main Installation Function with Checkpoints
+# ============================================================================
+
+install_roundcube() {
+    local EMAIL_DOMAIN=$1
+    local HOSTNAME=$2
+    local ADMIN_MAILX_EMAIL=$3
+
+    # Stage 1: System Preparation
+    if ! is_stage_completed "system_preparation"; then
+        log_info "=== Stage 1: System Preparation ==="
+
+        echo "$HOSTNAME" > /etc/hostname
+        sed -i "s/127.0.0.1.*/127.0.0.1 localhost $HOSTNAME/" /etc/hosts
+        hostnamectl set-hostname $HOSTNAME 2>/dev/null || true
+
+        if [[ "$HOSTNAME" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+            echo "$HOSTNAME" | tee /etc/mailname > /dev/null
+        fi
+
+        apt-get -qq update > /dev/null
+
+        mark_stage_complete "system_preparation"
+    fi
+
+    # Stage 2: MySQL Installation
+    if ! is_stage_completed "mysql_installation"; then
+        log_info "=== Stage 2: MySQL Installation ==="
+
+        local MYSQL_ROOT_PASSWORD=$(cat /usr/local/mysql_root_pwd.txt)
+        local ROUNDCUBE_DB_PASSWORD=$(cat /usr/local/roundcube_db_pwd.txt)
+        local ROUNDCUBE_DB_USER="roundcube"
+        local ROUNDCUBE_DB_NAME="roundcubemail"
+
+        export DEBIAN_FRONTEND=noninteractive
+        debconf-set-selections <<< "mysql-server mysql-server/root_password password $MYSQL_ROOT_PASSWORD"
+        debconf-set-selections <<< "mysql-server mysql-server/root_password_again password $MYSQL_ROOT_PASSWORD"
+        apt-get -qq install -y mysql-server > /dev/null
+
+        cat <<EOF > ~/.my.cnf
+[client]
+user=root
+password=$MYSQL_ROOT_PASSWORD
+EOF
+        chmod 600 ~/.my.cnf
+
+        mysql -e "CREATE DATABASE IF NOT EXISTS $ROUNDCUBE_DB_NAME;" 2>/dev/null
+        mysql -e "CREATE USER IF NOT EXISTS '$ROUNDCUBE_DB_USER'@'localhost' IDENTIFIED BY '$ROUNDCUBE_DB_PASSWORD';" 2>/dev/null
+        mysql -e "GRANT ALL PRIVILEGES ON $ROUNDCUBE_DB_NAME.* TO '$ROUNDCUBE_DB_USER'@'localhost';" 2>/dev/null
+        mysql -e "FLUSH PRIVILEGES;" 2>/dev/null
+
+        mark_stage_complete "mysql_installation"
+    fi
+
+    # Stage 3: PHP and Basic Packages
+    if ! is_stage_completed "php_installation"; then
+        log_info "=== Stage 3: PHP and Basic Packages Installation ==="
+        fix_network_for_ppa
+
+        apt_install software-properties-common
+
+        LC_ALL=C.UTF-8 add-apt-repository ppa:ondrej/php -y > /dev/null 2>&1
+        apt-get -qq update > /dev/null
+
+        log_info "Installing PHP 8.1..."
+        apt_install php8.1 php8.1-fpm php8.1-cli php8.1-common php8.1-curl php8.1-mysql php8.1-xml php8.1-mbstring php8.1-zip php8.1-intl php8.1-pspell
+
+        log_info "Installing PHP 8.3..."
+        apt_install php8.3 php8.3-fpm php8.3-cli php8.3-common php8.3-curl php8.3-mysql php8.3-xml php8.3-mbstring php8.3-zip php8.3-intl php8.3-pspell
+
+        log_info "Installing PHP 8.4..."
+        apt_install php8.4 php8.4-fpm php8.4-cli php8.4-common php8.4-curl php8.4-mysql php8.4-xml php8.4-mbstring php8.4-zip php8.4-intl php8.4-pspell
+
+        log_info "Installing PHP 5.6..."
+        apt_install php5.6 php5.6-fpm php5.6-cli php5.6-common php5.6-curl php5.6-mysql php5.6-xml php5.6-mbstring php5.6-zip php5.6-intl php5.6-pspell
+
+        mark_stage_complete "php_installation"
+    fi
+
+    # Stage 4: Mail Server Installation
+    if ! is_stage_completed "mail_server_installation"; then
+        log_info "=== Stage 4: Mail Server Installation ==="
+
+        apt_install net-tools mailutils dovecot-core dovecot-imapd dovecot-pop3d dovecot-mysql swaks
+
+        configure_dovecot_quota
+        configure_dovecot_sasl
+
+        systemctl restart dovecot 2>/dev/null || true
+
+        verify_postfix_dovecot_connection
+        test_sasl_authentication
+
+        mark_stage_complete "mail_server_installation"
+    fi
+
+    # Stage 5: Apache Installation
+    if ! is_stage_completed "apache_installation"; then
+        log_info "=== Stage 5: Apache Installation ==="
+
+        apt_install apache2 libapache2-mod-fcgid
+
+        if [ ! -d "/etc/apache2" ]; then
+            apt-get install --reinstall -y apache2
+        fi
+
+        if [ -f "/etc/apache2/ports.conf" ]; then
+            cp /etc/apache2/ports.conf /etc/apache2/ports.conf.bak
+            retry_command wget -qO /etc/apache2/ports.conf https://raw.githubusercontent.com/gtmylab/mailx/main/apache2/ports.conf
+        fi
+
+        a2enmod actions fcgid alias proxy_fcgi ssl headers rewrite proxy proxy_http > /dev/null 2>&1
+
+        mkdir -p /etc/php/8.1/fpm/pool.d /etc/php/8.3/fpm/pool.d /etc/php/8.4/fpm/pool.d /etc/php/5.6/fpm/pool.d
+
+        retry_command wget -qO /etc/php/8.1/fpm/pool.d/www.conf https://raw.githubusercontent.com/gtmylab/mailx/main/php8/www.conf
+        retry_command wget -qO /etc/php/8.3/fpm/pool.d/www.conf https://raw.githubusercontent.com/gtmylab/mailx/main/php8/3/www.conf
+        retry_command wget -qO /etc/php/8.4/fpm/pool.d/www.conf https://raw.githubusercontent.com/gtmylab/mailx/main/php8/4/www.conf
+        retry_command wget -qO /etc/php/5.6/fpm/pool.d/www.conf https://raw.githubusercontent.com/gtmylab/mailx/main/php5/www.conf
+
+        update_php_ini "post_max_size" "50M" "/etc/php/5.6/fpm/php.ini"
+        update_php_ini "upload_max_filesize" "50M" "/etc/php/5.6/fpm/php.ini"
+
+        systemctl restart php8.1-fpm php8.3-fpm php8.4-fpm php5.6-fpm 2>/dev/null || true
+
+        mark_stage_complete "apache_installation"
+    fi
+
+    # Stage 6: Apache Virtual Hosts
+    if ! is_stage_completed "apache_vhosts"; then
+        log_info "=== Stage 6: Apache Virtual Hosts Configuration ==="
+
+        mkdir -p /var/www/html/{roundcube,mailx,adminportal,phpmyadmin,.well-known/acme-challenge}
+        chown -R www-data:www-data /var/www/html
+
+        cat <<EOF > /etc/apache2/sites-available/roundcube.conf
+<VirtualHost *:8080>
+    ServerName $HOSTNAME
+    DocumentRoot /var/www/html/roundcube
+    <Directory /var/www/html/roundcube/>
+        Options +FollowSymlinks
+        AllowOverride All
+        <IfModule mod_dir.c>
+            DirectoryIndex index.php
+        </IfModule>
+    </Directory>
+    <FilesMatch \.php\$>
+        SetHandler "proxy:unix:/run/php/php8.1-fpm.sock|fcgi://localhost"
+    </FilesMatch>
+    ErrorLog \${APACHE_LOG_DIR}/roundcube_error.log
+    CustomLog \${APACHE_LOG_DIR}/roundcube_access.log combined
+</VirtualHost>
+EOF
+
+        cat <<EOF > /etc/apache2/sites-available/adminportal.conf
+<VirtualHost *:9090>
+    ServerName $HOSTNAME
+    DocumentRoot /var/www/html/adminportal
+    <Directory /var/www/html/adminportal/>
+        Options +FollowSymLinks -Indexes
+        AllowOverride All
+        Require all granted
+        <IfModule mod_dir.c>
+            DirectoryIndex index.php
+        </IfModule>
+    </Directory>
+    <FilesMatch \.php\$>
+        SetHandler "proxy:unix:/run/php/php8.4-fpm.sock|fcgi://localhost"
+    </FilesMatch>
+    ErrorLog \${APACHE_LOG_DIR}/adminportal_error.log
+    CustomLog \${APACHE_LOG_DIR}/adminportal_access.log combined
+</VirtualHost>
+EOF
+
+        cat <<EOF > /etc/apache2/sites-available/mailx.conf
+<VirtualHost *:8081>
+    ServerName $EMAIL_DOMAIN
+    DocumentRoot /var/www/html/mailx
+    <Directory /var/www/html/mailx/>
+        Options +FollowSymlinks
+        AllowOverride All
+        <IfModule mod_dir.c>
+            DirectoryIndex index.php
+        </IfModule>
+    </Directory>
+    <FilesMatch \.php\$>
+        SetHandler "proxy:unix:/run/php/php5.6-fpm.sock|fcgi://localhost"
+    </FilesMatch>
+    ErrorLog \${APACHE_LOG_DIR}/mailx_error.log
+    CustomLog \${APACHE_LOG_DIR}/mailx_access.log combined
+</VirtualHost>
+EOF
+
+        cat <<EOF > /etc/apache2/sites-available/phpmyadmin.conf
+<VirtualHost *:8082>
+    ServerName $HOSTNAME
+    DocumentRoot /var/www/html/phpmyadmin
+    <Directory /var/www/html/phpmyadmin/>
+        Options +FollowSymlinks
+        AllowOverride All
+        <IfModule mod_dir.c>
+            DirectoryIndex index.php
+        </IfModule>
+    </Directory>
+    <FilesMatch \.php\$>
+        SetHandler "proxy:unix:/run/php/php8.1-fpm.sock|fcgi://localhost"
+    </FilesMatch>
+    ErrorLog \${APACHE_LOG_DIR}/phpmyadmin_error.log
+    CustomLog \${APACHE_LOG_DIR}/phpmyadmin_access.log combined
+</VirtualHost>
+EOF
+
+        a2ensite roundcube.conf adminportal.conf mailx.conf phpmyadmin.conf > /dev/null 2>&1
+
+        mark_stage_complete "apache_vhosts"
+    fi
+
+    # Stage 7: PHPMyAdmin Installation
+    if ! is_stage_completed "phpmyadmin_installation"; then
+        log_info "=== Stage 7: PHPMyAdmin Installation ==="
+        setup_phpmyadmin
+        mark_stage_complete "phpmyadmin_installation"
+    fi
+
+    # Stage 8: SSL Certificate Installation
+    if ! is_stage_completed "ssl_installation"; then
+        log_info "=== Stage 8: SSL Certificate Installation ==="
+
+        if manage_ssl_certificates install "$HOSTNAME"; then
+            mark_stage_complete "ssl_installation"
+        else
+            log_warning "SSL certificate installation failed. Will retry on next run."
+        fi
+    fi
+
+    # Stage 9: Roundcube Installation
+    if ! is_stage_completed "roundcube_installation"; then
+        if execute_stage "roundcube_installation" install_roundcube_application "$EMAIL_DOMAIN" "$HOSTNAME"; then
+            log_info "Roundcube installed successfully"
+        else
+            log_warning "Roundcube installation had issues, attempting verification..."
+            verify_roundcube_installation "$EMAIL_DOMAIN"
+        fi
+    fi
+
+    # Stage 10: Postfix Configuration
+    if ! is_stage_completed "postfix_configuration"; then
+        log_info "=== Stage 10: Postfix Configuration ==="
+
+        update_postfix_config "$EMAIL_DOMAIN" "$HOSTNAME"
+        update_postfix_virtual "$EMAIL_DOMAIN" "admin"
+        setup_postfix_header_checks "$HOSTNAME"
+
+        if postfix check 2>/dev/null; then
+            log_info "Postfix configuration validated successfully"
+        else
+            log_warning "Postfix configuration check had warnings"
+        fi
+
+        restart_service postfix
+        mark_stage_complete "postfix_configuration"
+    fi
+
+    # Stage 11: DKIM Generation and Configuration
+    if ! is_stage_completed "dkim_generation"; then
+        log_info "=== Stage 11: DKIM Generation and Configuration ==="
+
+        if generate_dkim_key "$EMAIL_DOMAIN"; then
+            log_info "DKIM key generated/verified"
+
+            if configure_opendkim "$EMAIL_DOMAIN"; then
+                log_info "OpenDKIM service configured successfully"
+                verify_dkim "$EMAIL_DOMAIN"
+                mark_stage_complete "dkim_generation"
+            else
+                log_warning "OpenDKIM service configuration had issues"
+                mark_stage_complete "dkim_generation"
+            fi
+        else
+            log_error "DKIM key generation failed"
+        fi
+    fi
+
+    # Stage 12: Additional Files
+    if ! is_stage_completed "additional_files"; then
+        log_info "=== Stage 12: Additional Files ==="
+
+        mkdir -p /var/www/html/mailx
+        retry_command wget -qO /var/www/html/mailx/index.php https://raw.githubusercontent.com/gtmylab/mailx/main/mailer.php
+        chown -R www-data:www-data /var/www/html/mailx
+
+        mkdir -p /var/www/html/adminportal
+        chown -R www-data:www-data /var/www/html/adminportal
+
+        mark_stage_complete "additional_files"
+    fi
+
+    # Stage 13: mailx-admin panel installation
+    if ! is_stage_completed "mailx_admin_installation"; then
+        if execute_stage "mailx_admin_installation" install_mailx_admin_panel "$EMAIL_DOMAIN" "$HOSTNAME"; then
+            log_info "mailx-admin panel installed successfully"
+        else
+            log_warning "mailx-admin panel installation failed — mail flow is unaffected"
+            log_warning "Retry by re-running the installer"
+        fi
+    fi
+
+    # Stage 14: mailx-admin Apache vhost
+    if ! is_stage_completed "mailx_admin_vhost"; then
+        if execute_stage "mailx_admin_vhost" install_mailx_admin_vhost "$EMAIL_DOMAIN" "$HOSTNAME"; then
+            log_info "mailx-admin vhost configured"
+        else
+            log_warning "mailx-admin vhost setup failed"
+        fi
+    fi
+
+    # Final: Restart Services
+    log_info "=== Final: Restarting Services ==="
+    systemctl restart opendkim 2>/dev/null || true
+    sleep 2
+    systemctl restart apache2 dovecot 2>/dev/null || true
+
+    # Dry-run reconcile to prove parity
+    if [ -x "$ADMIN_BINARY_PATH" ] && [ -f "$ADMIN_CONFIG_FILE" ]; then
+        log_info "Running post-install reconcile (dry-run)..."
+        "$ADMIN_BINARY_PATH" reconcile --config "$ADMIN_CONFIG_FILE" --dry-run 2>&1 | tee -a "$LOG_FILE" || true
+    fi
+
+    # Notification email
+    if ! is_stage_completed "notification_sent"; then
+        local DKIM_RECORD=""
+        if [ -f "/tmp/dkim_txt_record.txt" ]; then
+            DKIM_RECORD=$(cat /tmp/dkim_txt_record.txt)
+        fi
+
+        send_notification_email "$ADMIN_MAILX_EMAIL" "http://$HOSTNAME:8080" "roundcube" \
+            "$(cat /usr/local/roundcube_db_pwd.txt)" \
+            "http://$EMAIL_DOMAIN:8081" "$DKIM_RECORD" "default" "http://$HOSTNAME:8082"
+
+        mark_stage_complete "notification_sent"
+    fi
+
+    log_info "MailX Installation Completed Successfully!"
+    log_info ""
+    log_info "Admin panel:      https://admin.$EMAIL_DOMAIN:$ADMIN_WEB_PORT"
+    log_info "Initial password: /root/.mailx-admin-initial-password"
+}
+
+# ============================================================================
+# Main Script Execution
+# ============================================================================
+
+clear
+echo "=== MailX Server Installation Script ==="
+echo "Version: 2.0 (Production Ready with Resume Capability)"
+echo
+
+if [ "$(id -u)" != "0" ]; then
+    log_error "This script must be run as root."
+    exit 1
+fi
+
+echo "Select an option:"
+echo "1. Install MailX"
+echo "2. Add MailX User"
+echo "3. Send a test mail"
+echo "4. Uninstall Roundcube"
+echo "5. Uninstall MailX (Full)"
+echo "6. Change Domain"
+echo "7. Change SMTP port"
+echo "8. Add Email Domain"
+echo "9. Remove Email Domain"
+echo "10. Show Installation Status"
+echo "11. Cleanup State (Reset Installation)"
+echo "12. View DKIM / DNS Records"
+echo "13. Resend DKIM / DNS Records to Email"
+echo "14. Repair Postfix Configuration"
+echo "15. View SSL Certificate Details"
+echo "16. Renew SSL Certificates Now"
+echo "17. Configure SSL Auto-Renewal & Notifications"
+echo "18. Show Admin Panel URL & Credentials"
+echo "19. Restart Admin Panel"
+echo "20. Exit"
+
+read -p "Enter your choice (1-20): " choice
+
+case $choice in
+    1)
+        clear
+        log_info "Welcome to the MailX Server Installation Script!"
+        echo
+
+        while true; do
+            read -p "Please enter the email domain (e.g., example.com): " EMAIL_DOMAIN
+            read -p "Please enter the hostname (e.g., mail.example.com): " HOSTNAME
+            read -p "Please enter the admin email address: " ADMIN_MAILX_EMAIL
+            echo
+
+            if [[ -z "$EMAIL_DOMAIN" || -z "$HOSTNAME" || -z "$ADMIN_MAILX_EMAIL" ]]; then
+                log_error "All fields are mandatory. Please provide values for all."
+                continue
+            fi
+
+            if [[ ! "$HOSTNAME" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+                log_error "'$HOSTNAME' is not a fully qualified domain name."
+                continue
+            fi
+
+            echo "You have entered:"
+            echo "Email Domain: $EMAIL_DOMAIN"
+            echo "Hostname: $HOSTNAME"
+            echo "Admin Email: $ADMIN_MAILX_EMAIL"
+            echo
+            read -p "Is this information correct? (y/n): " CONFIRM
+
+            if [ "$CONFIRM" = "y" ]; then
+                break
+            else
+                echo "Please re-enter the information."
+            fi
+        done
+
+        MYSQL_ROOT_PASSWORD=$(generate_password 16)
+        ROUNDCUBE_DB_PASSWORD=$(generate_password 16)
+
+        echo "$MYSQL_ROOT_PASSWORD" > /usr/local/mysql_root_pwd.txt
+        echo "$ROUNDCUBE_DB_PASSWORD" > /usr/local/roundcube_db_pwd.txt
+        echo "$EMAIL_DOMAIN" > /usr/local/roundcube_mail_domain.txt
+
+        install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$ADMIN_MAILX_EMAIL"
+        ;;
+
+    2)
+        read -p "Enter new username: " username
+        read -sp "Enter password for $username@$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null || echo 'domain'): " password
+        echo
+        add_roundcube_user "$username" "$password" 2000
+        ;;
+
+    3)
+        read -p "Email to: " email_to
+        read -p "Subject: " email_subject
+        read -p "Message Body: " email_body
+        send_test_message "$email_to" "$email_subject" "$email_body"
+        ;;
+
+    4)
+        read -p "Are you sure you want to uninstall Roundcube? (yes/no): " RECONFIRM
+        if [[ "$RECONFIRM" == "yes" ]]; then
+            uninstall_roundcube
+        else
+            echo "Exiting."
+        fi
+        ;;
+
+    5)
+        uninstall_all
+        ;;
+
+    6)
+        change_domain_hostname
+        ;;
+
+    7)
+        set_postfix_custom_port
+        ;;
+
+    8)
+        read -p "Enter domain to add (e.g., example.com): " new_domain
+        add_domain "$new_domain"
+        ;;
+
+    9)
+        read -p "Enter domain to remove (e.g., example.com): " domain_to_remove
+        remove_domain "$domain_to_remove"
+        ;;
+
+    10)
+        show_installation_status
+        ;;
+
+    11)
+        read -p "Enter stage to cleanup (or 'all' for all stages): " stage
+        cleanup_state "$stage"
+        ;;
+
+    12)
+        show_dkim_record
+        ;;
+
+    13)
+        read -p "Enter email address to send DKIM/DNS records to: " dkim_email
+        resend_dkim_record "$dkim_email"
+        ;;
+
+    14)
+        repair_postfix_config
+        ;;
+
+    15)
+        show_ssl_details
+        ;;
+
+    16)
+        renew_ssl_now
+        ;;
+
+    17)
+        configure_ssl_autorenewal
+        ;;
+
+    18)
+        echo ""
+        echo "=============================================="
+        echo "   MailX Admin Panel"
+        echo "=============================================="
+        echo ""
+        panel_domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
+        echo "URL:           https://admin.${panel_domain}:${ADMIN_WEB_PORT}"
+        echo "Local URL:     http://${ADMIN_LISTEN_ADDR}"
+        echo "Config:        ${ADMIN_CONFIG_FILE}"
+        echo "Service:       systemctl status ${ADMIN_SERVICE_NAME}"
+        echo "Logs:          journalctl -u ${ADMIN_SERVICE_NAME} -f"
+        echo ""
+        if [ -f /root/.mailx-admin-initial-password ]; then
+            echo "Initial admin credentials:"
+            echo "  Username: admin"
+            echo "  Password: $(cat /root/.mailx-admin-initial-password)"
+            echo ""
+            echo "  (Change this immediately after first login.)"
+        else
+            echo "Initial password file not found."
+            echo "Reset with: mailx-admin user passwd admin --config ${ADMIN_CONFIG_FILE}"
+        fi
+        echo ""
+        ;;
+
+    19)
+        log_info "Restarting mailx-admin service..."
+        systemctl restart "${ADMIN_SERVICE_NAME}" && \
+            log_info "Restarted successfully" || \
+            log_error "Restart failed — check journalctl -u ${ADMIN_SERVICE_NAME}"
+        ;;
+
+    20)
+        echo "Exiting."
+        exit 0
+        ;;
+
+    *)
+        log_error "Invalid choice. Exiting."
+        exit 1
+        ;;
+esac

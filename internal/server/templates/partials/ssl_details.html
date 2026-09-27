@@ -1,0 +1,73 @@
+{{define "ssl_details"}}
+<div x-data="{ open: true }" x-show="open" x-cloak @close-modal.window="open = false"
+     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+  <div @click.outside="open = false"
+       class="w-full max-w-2xl rounded-lg border border-slate-800 bg-slate-900 shadow-2xl">
+    <header class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+      <h3 class="font-medium">Certificate: {{.Cert.CertName}}</h3>
+      <button @click="open = false" class="text-slate-500 hover:text-slate-200">✕</button>
+    </header>
+
+    <div class="p-5 space-y-3 text-sm">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <div class="text-xs text-slate-500 uppercase">Subject</div>
+          <div class="font-mono text-xs mt-1 break-all">{{.Cert.Subject}}</div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-500 uppercase">Issuer</div>
+          <div class="font-mono text-xs mt-1 break-all">{{.Cert.Issuer}}</div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-4 gap-3">
+        <div>
+          <div class="text-xs text-slate-500 uppercase">Valid from</div>
+          <div class="mt-1">{{.Cert.NotBefore.Format "2006-01-02"}}</div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-500 uppercase">Valid until</div>
+          <div class="mt-1">{{.Cert.NotAfter.Format "2006-01-02"}}</div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-500 uppercase">Days left</div>
+          <div class="mt-1 {{if lt .Cert.DaysLeft 0}}text-red-400{{else if lt .Cert.DaysLeft 14}}text-amber-400{{else}}text-emerald-400{{end}}">{{.Cert.DaysLeft}}</div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-500 uppercase">Status</div>
+          <div class="mt-1">{{.Cert.Status}}</div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-3 gap-3">
+        <div>
+          <div class="text-xs text-slate-500 uppercase">Signature</div>
+          <div class="mt-1 text-xs">{{.Cert.SigAlg}}</div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-500 uppercase">Key</div>
+          <div class="mt-1 text-xs">{{.Cert.KeyBits}} bits</div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-500 uppercase">Chain</div>
+          <div class="mt-1 text-xs">{{.Cert.ChainCount}} cert(s)</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="text-xs text-slate-500 uppercase">SANs</div>
+        <div class="mt-1 flex flex-wrap gap-1">
+          {{range .Cert.SANs}}
+          <span class="rounded bg-slate-800 px-2 py-0.5 text-xs font-mono">{{.}}</span>
+          {{end}}
+        </div>
+      </div>
+
+      <div>
+        <div class="text-xs text-slate-500 uppercase">Serial</div>
+        <div class="mt-1 font-mono text-xs">{{.Cert.Serial}}</div>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}

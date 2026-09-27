@@ -1,0 +1,88 @@
+{{define "content"}}
+<div class="max-w-3xl space-y-6">
+  {{with .Data.User}}
+  <div class="flex items-center justify-between">
+    <div>
+      <div class="flex items-center gap-2">
+        <h2 class="text-lg font-medium">{{.Email}}</h2>
+        {{if .IsAdmin}}
+        <span class="rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-300">admin</span>
+        {{end}}
+        {{if .Active}}
+        <span class="rounded bg-emerald-950 border border-emerald-800 px-2 py-0.5 text-xs text-emerald-300">active</span>
+        {{else}}
+        <span class="rounded bg-amber-950 border border-amber-800 px-2 py-0.5 text-xs text-amber-300">disabled</span>
+        {{end}}
+      </div>
+      <a href="/users" class="text-xs text-slate-500 hover:text-slate-300">← Back to users</a>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <button hx-get="/users/{{.ID}}/edit" hx-target="#modal-host" hx-swap="innerHTML"
+              class="rounded border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800">
+        Edit
+      </button>
+      <button hx-post="/users/{{.ID}}/reset-password" hx-target="#modal-host" hx-swap="innerHTML"
+              hx-confirm="Generate a new password for {{.Email}}?"
+              class="rounded border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800">
+        Reset password
+      </button>
+      <a href="/users/{{.ID}}/sieve"
+         class="rounded border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800">
+        Rules
+      </a>
+      <button hx-delete="/users/{{.ID}}" hx-target="#form-error" hx-swap="innerHTML"
+              hx-confirm="Delete {{.Email}}? This cannot be undone."
+              class="rounded border border-red-900 px-3 py-1.5 text-sm text-red-300 hover:bg-red-950/40">
+        Delete
+      </button>
+    </div>
+  </div>
+
+  <div id="form-error"></div>
+
+  <div class="rounded-lg border border-slate-800 bg-slate-900 divide-y divide-slate-800">
+    <div class="grid grid-cols-2 gap-4 px-4 py-3 text-sm">
+      <div>
+        <div class="text-xs text-slate-500 uppercase">Username</div>
+        <div class="mt-1">{{.Username}}</div>
+      </div>
+      <div>
+        <div class="text-xs text-slate-500 uppercase">Domain</div>
+        <div class="mt-1">{{if .DomainName}}{{.DomainName}}{{else}}#{{.DomainID}}{{end}}</div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-3 gap-4 px-4 py-3 text-sm">
+      <div>
+        <div class="text-xs text-slate-500 uppercase">Quota</div>
+        <div class="mt-1">{{.QuotaMB}} MB</div>
+      </div>
+      <div>
+        <div class="text-xs text-slate-500 uppercase">Last login</div>
+        <div class="mt-1">{{if .LastLogin}}{{humanTime .LastLogin}}{{else}}never{{end}}</div>
+      </div>
+      <div>
+        <div class="text-xs text-slate-500 uppercase">Status</div>
+        <div class="mt-1">{{if .Active}}active{{else}}disabled{{end}}</div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4 px-4 py-3 text-sm">
+      <div>
+        <div class="text-xs text-slate-500 uppercase">Created</div>
+        <div class="mt-1">{{.CreatedAt.Format "2006-01-02 15:04"}}</div>
+      </div>
+      <div>
+        <div class="text-xs text-slate-500 uppercase">Updated</div>
+        <div class="mt-1">{{.UpdatedAt.Format "2006-01-02 15:04"}}</div>
+      </div>
+    </div>
+  </div>
+  {{else}}
+  <div class="rounded-lg border border-slate-800 bg-slate-900 p-6 text-sm text-slate-400">
+    User not found.
+  </div>
+  {{end}}
+</div>
+{{end}}

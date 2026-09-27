@@ -1,0 +1,102 @@
+{{define "content"}}
+<div class="max-w-4xl space-y-6">
+
+  <div class="rounded-lg border border-slate-800 bg-slate-900">
+    <header class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+      <h2 class="font-medium">Certificates</h2>
+      <button hx-post="/ssl/renew/all" hx-target="#modal-host" hx-swap="innerHTML"
+              hx-vals='{"dry_run":"on"}'
+              class="rounded border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800">
+        Renew all (dry-run)
+      </button>
+    </header>
+
+    {{if .Data.Certs}}
+    <table class="w-full text-sm">
+      <thead class="text-xs text-slate-500 uppercase tracking-wider">
+        <tr>
+          <th class="text-left px-4 py-2">Domain</th>
+          <th class="text-left px-4 py-2">Issuer</th>
+          <th class="text-left px-4 py-2">Expires</th>
+          <th class="text-left px-4 py-2">Status</th>
+          <th class="text-right px-4 py-2">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Data.Certs}}
+        <tr class="border-t border-slate-800">
+          <td class="px-4 py-2 font-mono text-xs">{{.CertName}}</td>
+          <td class="px-4 py-2 text-slate-400 text-xs truncate max-w-[250px]">{{.Issuer}}</td>
+          <td class="px-4 py-2 text-slate-400 text-xs">
+            {{.NotAfter.Format "2006-01-02"}} ({{.DaysLeft}}d)
+          </td>
+          <td class="px-4 py-2">
+            {{if eq .Status "ok"}}<span class="text-emerald-400 text-xs">✓ OK</span>
+            {{else if eq .Status "warning"}}<span class="text-amber-400 text-xs">⚠ warning</span>
+            {{else if eq .Status "critical"}}<span class="text-red-400 text-xs">⚠ critical</span>
+            {{else if eq .Status "expired"}}<span class="text-red-400 text-xs">✗ expired</span>
+            {{else}}<span class="text-slate-400 text-xs">{{.Status}}</span>{{end}}
+          </td>
+          <td class="px-4 py-2 text-right">
+            <div class="flex justify-end gap-1">
+              <button hx-get="/ssl/details/{{.CertName}}" hx-target="#modal-host" hx-swap="innerHTML"
+                      class="rounded border border-slate-700 px-2 py-1 text-xs hover:bg-slate-800">Details</button>
+              <button hx-post="/ssl/renew/{{.CertName}}" hx-target="#modal-host" hx-swap="innerHTML"
+                      hx-vals='{"dry_run":"on"}'
+                      class="rounded border border-slate-700 px-2 py-1 text-xs hover:bg-slate-800">Test</button>
+              <button hx-post="/ssl/renew/{{.CertName}}" hx-target="#modal-host" hx-swap="innerHTML"
+                      hx-vals='{"force":"on"}'
+                      class="rounded bg-emerald-600 hover:bg-emerald-500 px-2 py-1 text-xs">Renew</button>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <div class="p-8 text-center text-slate-500">No certificates found.</div>
+    {{end}}
+  </div>
+
+  <form hx-post="/ssl/settings" hx-target="#form-error" hx-swap="innerHTML"
+        class="rounded-lg border border-slate-800 bg-slate-900 p-5 space-y-4">
+    <h2 class="font-medium">Automatic renewal & notifications</h2>
+
+    <div id="form-error"></div>
+
+    <div class="grid grid-cols-2 gap-4">
+      <label class="block">
+        <span class="text-sm text-slate-400">Admin email for SSL notifications</span>
+        <input type="email" name="admin_email" value="{{.Data.AdminEmail}}"
+               placeholder="admin@example.com"
+               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+      </label>
+      <label class="block">
+        <span class="text-sm text-slate-400">Warn N days before expiry</span>
+        <input type="number" name="warn_days" value="{{.Data.WarnDays}}" min="1" max="89"
+               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+      </label>
+    </div>
+
+    <div class="text-xs text-slate-500 space-y-1">
+      <div>Renewal status:</div>
+      <div>certbot.timer: {{if .Data.TimerEnabled}}<span class="text-emerald-400">enabled</span>{{else}}<span class="text-amber-400">not enabled</span>{{end}}</div>
+      <div>cron entry: {{if .Data.CronPresent}}<span class="text-emerald-400">present</span>{{else}}<span class="text-amber-400">missing</span>{{end}}</div>
+      {{if .Data.LastFail}}<div>Last failure notified: {{.Data.LastFail}}</div>{{end}}
+      {{if .Data.LastWarn}}<div>Last warning notified: {{.Data.LastWarn}}</div>{{end}}
+    </div>
+
+    <div class="flex justify-between pt-2">
+      <button type="button" hx-post="/ssl/send-test" hx-target="#form-error" hx-swap="innerHTML"
+              class="rounded border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800">
+        Send test notification
+      </button>
+      <button type="submit"
+              class="rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-sm font-medium">
+        Save
+      </button>
+    </div>
+  </form>
+
+</div>
+{{end}}

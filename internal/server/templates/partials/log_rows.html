@@ -1,0 +1,24 @@
+{{define "log_rows"}}
+{{range .Events}}
+<tr class="border-t border-slate-800 hover:bg-slate-800/30">
+  <td class="px-3 py-1.5 text-slate-500 whitespace-nowrap">{{.Ts.Format "15:04:05"}}</td>
+  <td class="px-3 py-1.5 font-mono text-xs">
+    {{if .QueueID}}
+    <a href="#" hx-get="/logs/queue/{{.QueueID}}" hx-target="#modal-host" hx-swap="innerHTML"
+       class="hover:text-emerald-400">{{slice .QueueID 0 8}}</a>
+    {{end}}
+  </td>
+  <td class="px-3 py-1.5 text-xs
+    {{if eq .Status "sent"}}text-emerald-400
+    {{else if eq .Status "deferred"}}text-amber-400
+    {{else if eq .Status "bounced"}}text-red-400
+    {{else if eq .Status "rejected"}}text-red-400
+    {{else}}text-slate-400{{end}}">{{.Status}}</td>
+  <td class="px-3 py-1.5 text-slate-300 text-xs truncate max-w-[200px]">{{.FromAddr}}</td>
+  <td class="px-3 py-1.5 text-slate-300 text-xs truncate max-w-[200px]">{{.ToAddr}}</td>
+  <td class="px-3 py-1.5 text-slate-500 text-xs truncate max-w-[400px]">{{.Message}}</td>
+</tr>
+{{else}}
+<tr><td colspan="6" class="px-4 py-8 text-center text-slate-500">No log events match.</td></tr>
+{{end}}
+{{end}}

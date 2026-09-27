@@ -1,0 +1,151 @@
+# Release pipeline for the mailx-admin panel.
+#
+# Why this file exists: Mailx-Installer never compiles the panel. Stage 13e runs
+#
+#   wget -O /usr/local/bin/mailx-admin \
+#     https://github.com/gtmylab/mailx-admin/releases/latest/download/mailx-admin-linux-amd64
+#
+# so the Linux asset has to be published somewhere before a production install
+# can succeed. cgo (github.com/mattn/go-sqlite3) cannot be cross-compiled, which
+# is why the build runs on a Linux runner here instead of on a workstation.
+#
+# Releasing:
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+# The installer's wget is unauthenticated, so the repository (or at least the
+# release asset) must be publicly readable. On a private repo, install offline
+# instead: copy the binary to /tmp/mailx-admin before running the installer.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish (e.g. v1.0.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux-amd64:
+    name: Build and publish mailx-admin-linux-amd64
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve release tag
+        id: ver
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          fi
+          case "$tag" in
+            v*) ;;
+            *) echo "::error::release tag '$tag' must start with 'v' (e.g. v1.0.0)"; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the tagged commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ver.outputs.tag }}
+          fetch-depth: 0 # full history so 'git describe --tags' resolves
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify the cgo toolchain
+        run: |
+          set -euo pipefail
+          go version
+          gcc --version | head -n 1
+          go env CGO_ENABLED
+
+      - name: Check formatting and vet
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt found unformatted files - run 'make lint' locally"
+            echo "$unformatted"
+            exit 1
+          fi
+          go vet ./...
+
+      - name: Test
+        run: make test
+
+      - name: Build the Linux release artifact
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse --short HEAD)"
+          echo "building version $VERSION from commit $commit"
+          make release VERSION="$VERSION" COMMIT="$commit"
+
+      - name: Assert the binary reports the tagged version
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          out="$(./bin/mailx-admin-linux-amd64 --version)"
+          echo "$out"
+          case "$out" in
+            *"$VERSION"*) ;;
+            *) echo "::error::built binary does not report version $VERSION - version stamping is broken"; exit 1 ;;
+          esac
+          test -s bin/SHA256SUMS
+          cat bin/SHA256SUMS
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists - replacing its assets"
+            gh release upload "$TAG" bin/mailx-admin-linux-amd64 bin/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" bin/mailx-admin-linux-amd64 bin/SHA256SUMS \
+              --title "$TAG" \
+              --generate-notes
+          fi
+
+      - name: Job summary
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Released ${TAG}"
+            echo ""
+            echo "Assets: mailx-admin-linux-amd64 plus SHA256SUMS."
+            echo "Mailx-Installer downloads that exact file name from"
+            echo "releases/latest/download/, so no installer change is needed."
+            echo ""
+            echo "Install or upgrade on a server:"
+            echo ""
+            echo '    MAILX_ADMIN_FORCE_REINSTALL=1 ./Mailx-Installer'
+            echo '    /usr/local/bin/mailx-admin --version'
+            echo ""
+            echo "Checksums:"
+            echo ""
+            cat bin/SHA256SUMS
+          } >> "$GITHUB_STEP_SUMMARY"

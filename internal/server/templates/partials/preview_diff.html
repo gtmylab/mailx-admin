@@ -1,0 +1,60 @@
+{{define "preview_diff"}}
+<div x-data="{ open: true }" x-show="open" x-cloak @close-modal.window="open = false"
+     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+  <div @click.outside="open = false"
+       class="w-full max-w-3xl rounded-lg border {{if .Danger}}border-red-800{{else}}border-slate-800{{end}} bg-slate-900 shadow-2xl">
+    <header class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+      <h3 class="font-medium {{if .Danger}}text-red-300{{end}}">{{.Title}}</h3>
+      <button type="button" @click="open = false" class="text-slate-500 hover:text-slate-200">✕</button>
+    </header>
+
+    <div class="p-5 max-h-[60vh] overflow-y-auto space-y-4">
+      <div id="form-error"></div>
+
+      {{if .Danger}}
+      <div class="rounded border border-red-800 bg-red-950/40 px-3 py-2 text-sm text-red-200">
+        ⚠ This action cannot be undone.
+      </div>
+      {{end}}
+
+      <p class="text-sm text-slate-400">
+        The following files will change:
+      </p>
+
+      {{range .Diffs}}
+      <div class="rounded border border-slate-800 bg-slate-950">
+        <div class="px-3 py-1.5 border-b border-slate-800 flex items-center justify-between text-xs">
+          <span class="font-mono text-slate-300">{{.Path}}</span>
+          <span class="rounded px-1.5 py-0.5 text-xs
+            {{if eq .Action "create"}}bg-emerald-950 text-emerald-300
+            {{else if eq .Action "update"}}bg-amber-950 text-amber-300
+            {{else}}bg-red-950 text-red-300{{end}}">{{.Action}}</span>
+        </div>
+        <pre class="p-3 text-xs font-mono overflow-x-auto whitespace-pre"><code>{{range .Lines}}<span class="{{if eq .Kind "add"}}text-emerald-400{{else if eq .Kind "del"}}text-red-400{{else if eq .Kind "meta"}}text-slate-500 italic{{end}}">{{if eq .Kind "add"}}+ {{else if eq .Kind "del"}}- {{else}}  {{end}}{{.Text}}
+</span>{{end}}</code></pre>
+      </div>
+      {{else}}
+      <p class="text-sm text-slate-500">No file changes.</p>
+      {{end}}
+    </div>
+
+    <footer class="px-5 py-3 border-t border-slate-800 flex justify-end gap-2">
+      <button type="button" @click="open = false"
+              class="rounded border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
+        Cancel
+      </button>
+      <form hx-{{.Method | default "post"}}="{{.Action}}" hx-target="#form-error" hx-swap="innerHTML">
+        {{range $key, $values := .Fields}}
+          {{if ne $key "_csrf"}}
+            {{range $values}}<input type="hidden" name="{{$key}}" value="{{.}}">{{end}}
+          {{end}}
+        {{end}}
+        <button type="submit"
+                class="rounded {{if .Danger}}bg-red-600 hover:bg-red-500{{else}}bg-emerald-600 hover:bg-emerald-500{{end}} px-3 py-1.5 text-sm font-medium">
+          Confirm
+        </button>
+      </form>
+    </footer>
+  </div>
+</div>
+{{end}}
