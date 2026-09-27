@@ -1,0 +1,10 @@
+# The release target is Linux (ubuntu-latest runner + Debian/Ubuntu servers),
+# so the repository and every checkout use LF line endings.
+* text=auto eol=lf
+
+# Must stay LF: executed as shell scripts on Linux.
+*.sh text eol=lf
+Mailx-Installer text eol=lf
+
+# Never diff-normalise build output.
+/bin/ -text
