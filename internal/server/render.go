@@ -19,6 +19,11 @@ func (s *Server) render(w http.ResponseWriter, status int, name string, data any
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Every page embeds a CSRF token, so it must never be reused from a cache:
+	// a replayed form (back button, bfcache restore, shared URL) would post the
+	// token of an earlier render instead of the live cookie.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(status)
 	_, _ = buf.WriteTo(w)
 }
@@ -29,7 +34,9 @@ func (s *Server) renderPartial(w http.ResponseWriter, name string, data any) {
 }
 
 // renderError renders error.html inside the normal layout. It has no request,
-// so the layout's session block is skipped (see layout.html).
+// so the layout's session block is skipped and no CSRF token can be read from
+// the cookie for it (see layout.html): the layout's script fills the empty
+// "Sign out" field from the live cookie in the browser instead.
 func (s *Server) renderError(w http.ResponseWriter, status int, msg string) {
 	s.render(w, status, "error.html", pageData{
 		Title:   fmt.Sprintf("Error %d", status),
@@ -48,12 +55,26 @@ type pageData struct {
 	Session   *auth.Session
 	ActiveNav string
 	Flash     string
-	CSRFToken string // NEW
+	CSRFToken string // value of the mailx_csrf cookie, embedded for forms and hx-headers
 	Data      any
 }
 
+// newPageData builds the envelope for a full page render, including the CSRF
+// token. Every handler that renders a *.html page has to use it: a page whose
+// token is empty (because a handler built pageData by hand) leaves hx-headers
+// and the layout's "Sign out" form posting nothing, which the CSRF middleware
+// answers with 403 "csrf token missing" - the whole page becomes read-only.
+//
+// Ensure (not Issue) is deliberate: it keeps the token the browser already has,
+// so loading one page never invalidates the forms of the pages next to it.
 func (s *Server) newPageData(w http.ResponseWriter, r *http.Request, title, nav string, data any) pageData {
-	token, _ := s.csrf.Issue(w)
+	token, err := s.csrf.Ensure(w, r)
+	if err != nil {
+		// Rendering continues on purpose: a page without a token is still
+		// readable, and the request that needs the token will be rejected
+		// loudly by the middleware instead of the page failing to render.
+		s.logger.Error("ensure csrf token", "err", err)
+	}
 	return pageData{
 		Title:     title,
 		Version:   version.String(),

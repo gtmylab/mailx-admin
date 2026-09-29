@@ -3158,14 +3158,66 @@ open_firewall_port() {
     fi
 }
 
+# True when something (Apache) already listens on TCP $1.
+port_is_listening() {
+    ss -ltn 2>/dev/null | grep -qE "[:.]$1[[:space:]]"
+}
+
+# Wait for TCP $1 to appear, up to $2 tries (0.5s apart). Apache needs a moment
+# after a restart before the new socket accepts, and the probe used to run
+# immediately.
+wait_for_listen_port() {
+    local port=$1
+    local tries=${2:-20}
+    local i=0
+
+    while [ "$i" -lt "$tries" ]; do
+        if port_is_listening "${port}"; then
+            return 0
+        fi
+        sleep 0.5
+        i=$((i + 1))
+    done
+    return 1
+}
+
+# Apply the Apache configuration, restarting only when a reload cannot do the
+# job. $1 = port that has to end up open.
+#
+# A graceful reload (SIGUSR1) re-reads the configuration but keeps the listener
+# set of the running master process, so a Listen directive that was just added
+# is NOT opened by it: configtest reports Syntax OK, the reload succeeds, and
+# the port stays closed. Stage 14 used to reload unconditionally, which made a
+# fresh install fail with "Nothing is listening on TCP 9443 after reloading
+# Apache" even though conf mailx-admin-port was enabled. Restarting in that case
+# is what actually opens the socket; when the port is already open (a re-run, or
+# menu option 21) the reload is kept so nothing is interrupted.
+apache_reload_for_port() {
+    local port=$1
+
+    if port_is_listening "${port}"; then
+        systemctl reload apache2 2>/dev/null || systemctl restart apache2 2>/dev/null || true
+        return 0
+    fi
+
+    log_info "TCP ${port} is not open yet — restarting Apache to apply the Listen directive"
+    if systemctl restart apache2 2>/dev/null; then
+        log_info "Apache restarted"
+        return 0
+    fi
+
+    log_warning "systemctl restart apache2 failed — falling back to a graceful reload"
+    systemctl reload apache2 2>/dev/null || true
+}
+
 # Prove that Apache really serves the panel before the installer advertises the
 # URL. $1 = port, $2 = vhost ServerName (e.g. admin.example.com).
 verify_admin_panel_web() {
     local port=$1
     local server_name=$2
 
-    if ! ss -ltn 2>/dev/null | grep -qE "[:.]${port}[[:space:]]"; then
-        log_error "Nothing is listening on TCP ${port} after reloading Apache"
+    if ! wait_for_listen_port "${port}"; then
+        log_error "Nothing is listening on TCP ${port} after restarting Apache"
         return 1
     fi
     log_info "Apache is listening on TCP ${port}"
@@ -3303,7 +3355,10 @@ EOF
         return 1
     fi
 
-    systemctl reload apache2 2>/dev/null || systemctl restart apache2 2>/dev/null || true
+    # A reload cannot open a port that was just added to the Listen set (see
+    # apache_reload_for_port), which is exactly the state after
+    # ensure_apache_listen_port above.
+    apache_reload_for_port "${port}"
 
     open_firewall_port "${port}"
 

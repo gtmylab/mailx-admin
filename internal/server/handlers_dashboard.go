@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
-
-	"github.com/gtmylab/mailx-admin/internal/auth"
 )
 
 type serviceStatus struct {
@@ -23,18 +21,13 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	counts, _ := s.store.CountUsersByDomain(ctx)
 
-	s.render(w, 200, "dashboard.html", pageData{
-		Title:     "Dashboard",
-		Session:   auth.SessionFromContext(ctx),
-		ActiveNav: "dashboard",
-		Data: map[string]any{
-			"Domains":  snap.Domains,
-			"Users":    len(snap.Users),
-			"Aliases":  len(snap.Aliases),
-			"Counts":   counts,
-			"Services": checkServices(ctx),
-		},
-	})
+	s.render(w, 200, "dashboard.html", s.newPageData(w, r, "Dashboard", "dashboard", map[string]any{
+		"Domains":  snap.Domains,
+		"Users":    len(snap.Users),
+		"Aliases":  len(snap.Aliases),
+		"Counts":   counts,
+		"Services": checkServices(ctx),
+	}))
 }
 
 func (s *Server) handleServiceHealthPartial(w http.ResponseWriter, r *http.Request) {

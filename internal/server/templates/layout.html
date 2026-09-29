@@ -64,5 +64,40 @@
     }
   });
 </script>
+
+<script>
+  // CSRF: the mailx_csrf cookie is the single source of truth for the token.
+  //
+  // It is minted once per browser session (auth.CSRFManager.Ensure) and then
+  // reused, so reading it at request time is always right - even for a page
+  // that was rendered earlier, restored from the back/forward cache, or
+  // rendered without a token at all (error.html). A token baked into markup
+  // can be stale; the cookie cannot.
+  (function () {
+    const token = () => {
+      const m = document.cookie.match(/(?:^|;\s*)mailx_csrf=([^;]*)/);
+      return m ? decodeURIComponent(m[1]) : '';
+    };
+
+    // Plain <form method="post"> elements carry their token in the markup
+    // (login.html, the "Sign out" form above). Fill in the ones that rendered
+    // without one instead of letting those POSTs fail with
+    // "CSRF check failed: csrf token missing".
+    document.addEventListener('DOMContentLoaded', () => {
+      const t = token();
+      if (!t) return;
+      document.querySelectorAll('input[name="_csrf"]').forEach((input) => {
+        if (!input.value) input.value = t;
+      });
+    });
+
+    // HTMX uses hx-headers, which the server fills in from the same cookie.
+    // Override it per request so even a stale page mutates successfully.
+    document.body.addEventListener('htmx:configRequest', (evt) => {
+      const t = token();
+      if (t) evt.detail.headers['X-CSRF-Token'] = t;
+    });
+  })();
+</script>
 </body>
 </html>{{end}}

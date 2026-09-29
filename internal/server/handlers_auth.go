@@ -16,21 +16,29 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
-	s.renderLogin(w, http.StatusOK, "", false)
+	s.renderLogin(w, r, http.StatusOK, "", false)
 }
 
-// renderLogin renders login.html with a freshly issued CSRF token.
+// renderLogin renders login.html with the session's CSRF token.
 //
 // login.html is a plain (non-HTMX) form and POST /login sits behind the global
 // CSRF middleware (see buildRouter), so the token cannot come from the layout's
 // hx-headers: it has to travel in a hidden form field, with the matching
-// double-submit cookie set on the same response. Issuing a token on every
-// render - including the error re-renders below - is what keeps a login retry
-// after a typo from failing with "csrf token missing".
-func (s *Server) renderLogin(w http.ResponseWriter, status int, errMsg string, totpRequired bool) {
-	token, err := s.csrf.Issue(w)
+// double-submit cookie set on the same response.
+//
+// The token is taken from the cookie when the browser already has one (Ensure),
+// and only minted when there is none. Re-issuing it on every render - including
+// the error re-renders below - is what used to make a second tab, a reload or a
+// password manager re-fetching /login answer
+//
+//	CSRF check failed: csrf token invalid
+//
+// because the browser keeps just one mailx_csrf cookie and the newest render
+// overwrote the token still embedded in the form the user was looking at.
+func (s *Server) renderLogin(w http.ResponseWriter, r *http.Request, status int, errMsg string, totpRequired bool) {
+	token, err := s.csrf.Ensure(w, r)
 	if err != nil {
-		s.logger.Error("issue csrf token", "err", err)
+		s.logger.Error("ensure csrf token", "err", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -43,7 +51,7 @@ func (s *Server) renderLogin(w http.ResponseWriter, status int, errMsg string, t
 
 func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		s.renderLogin(w, http.StatusBadRequest, "Invalid form", false)
+		s.renderLogin(w, r, http.StatusBadRequest, "Invalid form", false)
 		return
 	}
 
@@ -52,7 +60,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	totp := strings.TrimSpace(r.FormValue("totp"))
 
 	if username == "" || password == "" {
-		s.renderLogin(w, http.StatusBadRequest, "Username and password required", false)
+		s.renderLogin(w, r, http.StatusBadRequest, "Username and password required", false)
 		return
 	}
 
@@ -73,31 +81,31 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 
 	if err == sql.ErrNoRows || active != 1 {
 		s.auditLogin(ctx, username, "error", "unknown user")
-		s.renderLogin(w, http.StatusUnauthorized, "Invalid credentials", false)
+		s.renderLogin(w, r, http.StatusUnauthorized, "Invalid credentials", false)
 		return
 	}
 	if err != nil {
 		s.logger.Error("login query", "err", err)
-		s.renderLogin(w, http.StatusInternalServerError, "Internal error", false)
+		s.renderLogin(w, r, http.StatusInternalServerError, "Internal error", false)
 		return
 	}
 
 	ok, err := auth.VerifyPassword(password, hash)
 	if err != nil || !ok {
 		s.auditLogin(ctx, username, "error", "bad password")
-		s.renderLogin(w, http.StatusUnauthorized, "Invalid credentials", false)
+		s.renderLogin(w, r, http.StatusUnauthorized, "Invalid credentials", false)
 		return
 	}
 
 	// TOTP check
 	if totpEnabled == 1 {
 		if totp == "" {
-			s.renderLogin(w, http.StatusOK, "", true)
+			s.renderLogin(w, r, http.StatusOK, "", true)
 			return
 		}
 		if !totpSecret.Valid || !auth.VerifyTOTP(totpSecret.String, totp) {
 			s.auditLogin(ctx, username, "error", "bad totp")
-			s.renderLogin(w, http.StatusUnauthorized, "Invalid 2FA code", true)
+			s.renderLogin(w, r, http.StatusUnauthorized, "Invalid 2FA code", true)
 			return
 		}
 	}
@@ -106,7 +114,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.sessions.Create(ctx, id, r.UserAgent(), clientIP(r))
 	if err != nil {
 		s.logger.Error("create session", "err", err)
-		s.renderLogin(w, http.StatusInternalServerError, "Internal error", false)
+		s.renderLogin(w, r, http.StatusInternalServerError, "Internal error", false)
 		return
 	}
 

@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gtmylab/mailx-admin/internal/auth"
 	"github.com/gtmylab/mailx-admin/internal/models"
 )
 
@@ -15,12 +14,7 @@ func (s *Server) handleDomainsList(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, 500, "Failed to load domains")
 		return
 	}
-	s.render(w, 200, "domains.html", pageData{
-		Title:     "Domains",
-		Session:   auth.SessionFromContext(ctx),
-		ActiveNav: "domains",
-		Data:      map[string]any{"Domains": snap.Domains},
-	})
+	s.render(w, 200, "domains.html", s.newPageData(w, r, "Domains", "domains", map[string]any{"Domains": snap.Domains}))
 }
 
 func (s *Server) handleDomainDetail(w http.ResponseWriter, r *http.Request) {
@@ -56,13 +50,8 @@ func (s *Server) handleDomainDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.render(w, 200, "domain_detail.html", pageData{
-		Title:     found.Name,
-		Session:   auth.SessionFromContext(ctx),
-		ActiveNav: "domains",
-		Data: map[string]any{
-			"Domain": found,
-			"Users":  users,
-		},
-	})
+	s.render(w, 200, "domain_detail.html", s.newPageData(w, r, found.Name, "domains", map[string]any{
+		"Domain": found,
+		"Users":  users,
+	}))
 }

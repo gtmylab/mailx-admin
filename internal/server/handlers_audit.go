@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/gtmylab/mailx-admin/internal/audit"
-	"github.com/gtmylab/mailx-admin/internal/auth"
 )
 
 func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
@@ -51,12 +50,7 @@ func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.render(w, 200, "audit.html", pageData{
-		Title:     "Audit Log",
-		Session:   auth.SessionFromContext(ctx),
-		ActiveNav: "audit",
-		Data:      data,
-	})
+	s.render(w, 200, "audit.html", s.newPageData(w, r, "Audit Log", "audit", data))
 }
 
 var _ = time.Now

@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gtmylab/mailx-admin/internal/auth"
 	"github.com/gtmylab/mailx-admin/internal/models"
 )
 
@@ -42,12 +41,7 @@ func (s *Server) handleUsersList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.render(w, 200, "users.html", pageData{
-		Title:     "Users",
-		Session:   auth.SessionFromContext(ctx),
-		ActiveNav: "users",
-		Data:      data,
-	})
+	s.render(w, 200, "users.html", s.newPageData(w, r, "Users", "users", data))
 }
 
 func (s *Server) handleUserDetail(w http.ResponseWriter, r *http.Request) {
@@ -78,10 +72,5 @@ func (s *Server) handleUserDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.render(w, 200, "user_detail.html", pageData{
-		Title:     found.Email,
-		Session:   auth.SessionFromContext(ctx),
-		ActiveNav: "users",
-		Data:      map[string]any{"User": found},
-	})
+	s.render(w, 200, "user_detail.html", s.newPageData(w, r, found.Email, "users", map[string]any{"User": found}))
 }
