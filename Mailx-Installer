@@ -520,6 +520,13 @@ verify_postfix_dovecot_connection() {
 }
 
 test_sasl_authentication() {
+    # "soft" is used right after the mail packages are installed (Stage 4),
+    # before the Postfix templates of Stage 10 exist: Ubuntu ships master.cf
+    # with the submission service commented out, so port 587 legitimately does
+    # not listen yet and the missing greeting was reported as a scary failure on
+    # every fresh install. The strict check runs after Postfix is configured.
+    local mode="${1:-strict}"
+
     log_info "Testing SASL authentication..."
 
     # Ask for the SMTP greeting and capability list. It has to be a real
@@ -539,8 +546,12 @@ test_sasl_authentication() {
     done
 
     if [ -z "$caps" ]; then
-        log_warning "No SMTP greeting on 127.0.0.1:587 — SASL could not be verified"
-        log_warning "Check: ss -ltnp | grep 587 ; journalctl -u postfix -n 40"
+        if [ "$mode" = "soft" ]; then
+            log_info "Submission port 587 is not listening yet — SASL is verified after the Postfix stage"
+        else
+            log_warning "No SMTP greeting on 127.0.0.1:587 — SASL could not be verified"
+            log_warning "Check: ss -ltnp | grep 587 ; journalctl -u postfix -n 40"
+        fi
         return 0
     fi
 
@@ -2211,6 +2222,7 @@ uninstall_all() {
     for site in roundcube adminportal mailx phpmyadmin mailx-admin 000-default default-ssl; do
         a2dissite "$site" 2>/dev/null || true
     done
+    a2disconf mailx-admin-port 2>/dev/null || true
 
     # ── Step 6: Purge packages ──
     log_info "Purging installed packages..."
@@ -2521,6 +2533,11 @@ repair_postfix_config() {
     fi
 
     restart_service postfix
+
+    # The submission service (587) only starts listening once this function has
+    # installed the templates, so SASL has to be verified here rather than in
+    # the mail-server stage.
+    test_sasl_authentication
 
     echo ""
     echo "=============================================="
@@ -3077,14 +3094,144 @@ EOF
     systemctl enable "${ADMIN_SERVICE_NAME}" 2>/dev/null || true
 }
 
+# ============================================================================
+# Admin panel web access helpers
+# ============================================================================
+
+# Make Apache bind a TCP port. A <VirtualHost *:9443> block alone does NOT make
+# Apache listen on 9443: without a matching Listen directive the port stays
+# closed while "apache2ctl configtest" still reports Syntax OK and the reload
+# succeeds, so the installer used to advertise https://admin.<domain>:9443 while
+# every browser got ERR_CONNECTION_REFUSED. ports.conf (installed in Stage 5)
+# declares 80/443/8080-8084/8443 only, so the panel port is registered here.
+ensure_apache_listen_port() {
+    local port=$1
+    local conf="/etc/apache2/conf-available/mailx-admin-port.conf"
+    local pattern="^[[:space:]]*Listen[[:space:]]+${port}([[:space:]]|$)"
+
+    if grep -qsE "$pattern" /etc/apache2/ports.conf 2>/dev/null; then
+        # ports.conf already covers the port, so drop our snippet to keep the
+        # port declared exactly once (e.g. after an installer update that adds
+        # the panel port to the shipped ports.conf).
+        if [ -e /etc/apache2/conf-enabled/mailx-admin-port.conf ] || \
+           [ -L /etc/apache2/conf-enabled/mailx-admin-port.conf ]; then
+            a2disconf mailx-admin-port > /dev/null 2>&1 || true
+            # -L above covers a dangling symlink: remove it explicitly so
+            # "IncludeOptional conf-enabled/*.conf" cannot hit a broken link.
+            rm -f /etc/apache2/conf-enabled/mailx-admin-port.conf
+            rm -f "$conf"
+            log_info "ports.conf already declares port ${port} — removed the panel snippet"
+        fi
+        log_info "Apache already listens on port ${port}"
+        return 0
+    fi
+
+    if grep -rsqE "$pattern" /etc/apache2/conf-enabled 2>/dev/null; then
+        log_info "Apache already listens on port ${port}"
+        return 0
+    fi
+
+    cat > "$conf" <<EOF
+# MailX Admin panel port — required by <VirtualHost *:${port}> in
+# sites-available/mailx-admin.conf. Added automatically because ports.conf
+# (80/443/8080-8084/8443) does not declare it.
+Listen ${port}
+EOF
+
+    a2enconf mailx-admin-port > /dev/null 2>&1 || true
+    log_info "Enabled Apache listen port ${port} via ${conf}"
+}
+
+# Open $1/tcp in whichever firewall is installed. No-op when there is none.
+open_firewall_port() {
+    local port=$1
+
+    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -qi '^Status: active'; then
+        ufw allow "${port}"/tcp 2>/dev/null || true
+        log_info "ufw: allowed TCP ${port}"
+    fi
+
+    if command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld 2>/dev/null; then
+        firewall-cmd --permanent --add-port="${port}"/tcp > /dev/null 2>&1 || true
+        firewall-cmd --reload > /dev/null 2>&1 || true
+        log_info "firewalld: allowed TCP ${port}"
+    fi
+}
+
+# Prove that Apache really serves the panel before the installer advertises the
+# URL. $1 = port, $2 = vhost ServerName (e.g. admin.example.com).
+verify_admin_panel_web() {
+    local port=$1
+    local server_name=$2
+
+    if ! ss -ltn 2>/dev/null | grep -qE "[:.]${port}[[:space:]]"; then
+        log_error "Nothing is listening on TCP ${port} after reloading Apache"
+        return 1
+    fi
+    log_info "Apache is listening on TCP ${port}"
+
+    if ! command -v curl &>/dev/null; then
+        log_warning "curl is not installed — skipping the local HTTPS probe"
+        return 0
+    fi
+
+    local code
+    code=$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 15 \
+        --resolve "${server_name}:${port}:127.0.0.1" \
+        "https://${server_name}:${port}/" 2>/dev/null || true)
+
+    if [ -z "$code" ] || [ "$code" = "000" ]; then
+        log_error "The admin vhost did not answer on https://${server_name}:${port}/"
+        return 1
+    fi
+
+    log_info "Panel answered through Apache (HTTP ${code})"
+    return 0
+}
+
+# Print the facts needed to debug a panel that is not reachable from outside.
+show_admin_panel_diagnostics() {
+    local port=$1
+    local listeners
+
+    listeners=$(ss -ltn 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | tr -s ' ' | tr '\n' ' ')
+
+    echo ""
+    echo "=============================================="
+    echo "   Admin panel diagnostics (TCP ${port})"
+    echo "=============================================="
+    echo "  listeners:  ${listeners:-nothing on TCP ${port}}"
+    echo "  apache2:    $(systemctl is-active apache2 2>/dev/null || echo unknown)"
+    echo "  site:       $(a2query -s mailx-admin 2>/dev/null || echo 'mailx-admin not enabled')"
+    echo "  conf:       $(a2query -c mailx-admin-port 2>/dev/null || echo 'mailx-admin-port not enabled')"
+    echo "  ports.conf: $(grep -h 'Listen' /etc/apache2/ports.conf 2>/dev/null | tr '\n' ' ')"
+    echo "  configtest: apache2ctl configtest"
+    echo "  error log:  tail -n 30 /var/log/apache2/mailx-admin_error.log"
+    echo "  apache log: journalctl -u apache2 -n 30 --no-pager"
+    echo "  panel svc:  systemctl status ${ADMIN_SERVICE_NAME} --no-pager"
+    echo "  firewall:   ufw status ; firewall-cmd --list-ports"
+    echo "  TCP ${port} must also be allowed by your provider firewall."
+    echo ""
+}
+
 # Write the Apache vhost for the panel (reverse proxy).
 install_admin_apache_vhost() {
     local hostname=$1
     local email_domain=$2
+    local server_name="admin.${email_domain}"
+    local port="${ADMIN_WEB_PORT}"
 
-    a2enmod proxy proxy_http ssl headers > /dev/null 2>&1
+    # proxy/proxy_http reverse-proxy the Go binary on ${ADMIN_LISTEN_ADDR},
+    # ssl terminates TLS, headers writes HSTS. Show what a2enmod does: silently
+    # swallowed module failures produced an installed-but-unusable vhost before.
+    a2enmod proxy proxy_http ssl headers 2>&1 | grep -E 'Enabling module|already enabled' || true
 
     local cert_path="/etc/letsencrypt/live/${hostname}"
+    if [ ! -f "${cert_path}/fullchain.pem" ] || [ ! -f "${cert_path}/privkey.pem" ]; then
+        log_error "TLS certificate for ${hostname} is missing (${cert_path})"
+        log_error "Obtain it with: certbot --apache -d ${hostname} -d ${server_name}"
+        return 1
+    fi
 
     cat > /etc/apache2/sites-available/mailx-admin.conf <<EOF
 # MailX Admin Panel — generated by installer
@@ -3127,8 +3274,30 @@ install_admin_apache_vhost() {
 </VirtualHost>
 EOF
 
-    a2ensite mailx-admin.conf > /dev/null 2>&1
-    apache2ctl configtest 2>/dev/null && systemctl reload apache2 || true
+    # Apache ignores a <VirtualHost *:N> whose port has no Listen directive, so
+    # register the panel port before enabling the site. Without this the vhost
+    # is inert: configtest says Syntax OK, the reload succeeds and the URL still
+    # refuses connections.
+    ensure_apache_listen_port "${port}"
+
+    a2ensite mailx-admin.conf > /dev/null 2>&1 || true
+
+    if ! apache2ctl configtest > /tmp/mailx_apache_configtest.log 2>&1; then
+        log_error "Apache rejected the admin vhost:"
+        sed 's/^/    /' /tmp/mailx_apache_configtest.log
+        return 1
+    fi
+
+    systemctl reload apache2 2>/dev/null || systemctl restart apache2 2>/dev/null || true
+
+    open_firewall_port "${port}"
+
+    verify_admin_panel_web "${port}" "${server_name}" || {
+        show_admin_panel_diagnostics "${port}"
+        return 1
+    }
+
+    return 0
 }
 
 # Stage 13 body — extracted so it can be called from the main stage runner.
@@ -3289,15 +3458,47 @@ install_mailx_admin_vhost() {
 
     log_info "=== Stage 14: Admin Panel Apache Vhost ==="
 
-    # Cert with admin SAN must exist (obtained in Stage 8)
-    local cert_path="/etc/letsencrypt/live/${HOSTNAME}"
-    if [ ! -f "${cert_path}/fullchain.pem" ]; then
-        log_warning "SSL cert for ${HOSTNAME} not found — vhost will be written but may fail"
+    if install_admin_apache_vhost "$HOSTNAME" "$EMAIL_DOMAIN"; then
+        log_info "Admin vhost installed at https://admin.${EMAIL_DOMAIN}:${ADMIN_WEB_PORT}"
+        log_info "If the URL does not open from your PC, allow TCP ${ADMIN_WEB_PORT} in the provider firewall"
+        return 0
     fi
 
-    install_admin_apache_vhost "$HOSTNAME" "$EMAIL_DOMAIN"
+    log_error "Stage 14 could not verify https://admin.${EMAIL_DOMAIN}:${ADMIN_WEB_PORT}"
+    log_error "Fix the cause printed above, then re-run menu option 21 (Repair Admin Panel Web Access)"
+    return 1
+}
 
-    log_info "Admin vhost installed at https://admin.${EMAIL_DOMAIN}:${ADMIN_WEB_PORT}"
+# Menu option 21 — re-apply the panel vhost on an installed server. Needed
+# because Stage 14 is skipped once its state marker exists, so servers installed
+# before the Listen fix would never pick it up otherwise.
+repair_admin_panel_web() {
+    local email_domain hostname
+
+    email_domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
+    hostname=$(cat /etc/mailname 2>/dev/null | tr -d '[:space:]')
+    hostname="${hostname:-$(hostname -f 2>/dev/null || hostname)}"
+
+    if [ -z "$email_domain" ] && [ -t 0 ]; then
+        read -p "Enter your email domain (e.g., example.com): " email_domain
+    fi
+    if [ -z "$email_domain" ]; then
+        log_error "No email domain available: create /usr/local/roundcube_mail_domain.txt first"
+        return 1
+    fi
+
+    echo ""
+    echo "Domain:   $email_domain"
+    echo "Hostname: $hostname"
+    echo ""
+
+    if install_admin_apache_vhost "$hostname" "$email_domain"; then
+        log_info "Admin panel reachable through Apache at https://admin.${email_domain}:${ADMIN_WEB_PORT}"
+        return 0
+    fi
+
+    log_error "Admin panel web access is still not working — see the diagnostics above"
+    return 1
 }
 
 # ============================================================================
@@ -3392,7 +3593,7 @@ EOF
         systemctl restart dovecot postfix 2>/dev/null || true
 
         verify_postfix_dovecot_connection
-        test_sasl_authentication
+        test_sasl_authentication soft
 
         mark_stage_complete "mail_server_installation"
     fi
@@ -3660,7 +3861,7 @@ EOF
 
 clear
 echo "=== MailX Server Installation Script ==="
-echo "Version: 2.0 (Production Ready with Resume Capability)"
+echo "Version: 2.1 (Production Ready with Resume Capability)"
 echo
 
 if [ "$(id -u)" != "0" ]; then
@@ -3689,8 +3890,9 @@ echo "17. Configure SSL Auto-Renewal & Notifications"
 echo "18. Show Admin Panel URL & Credentials"
 echo "19. Restart Admin Panel"
 echo "20. Exit"
+echo "21. Repair Admin Panel Web Access"
 
-read -p "Enter your choice (1-20): " choice
+read -p "Enter your choice (1-21): " choice
 
 case $choice in
     1)
@@ -3853,6 +4055,10 @@ case $choice in
     20)
         echo "Exiting."
         exit 0
+        ;;
+
+    21)
+        repair_admin_panel_web
         ;;
 
     *)
