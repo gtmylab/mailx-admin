@@ -29,6 +29,8 @@ func main() {
 		cmdReconcile(),
 		cmdStatus(),
 		cmdSeed(),
+		cmdAdopt(),
+		cmdDoctor(),
 		cmdServe(),
 		cmdUser(),
 	)

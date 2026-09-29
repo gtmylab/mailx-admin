@@ -1,0 +1,44 @@
+{{define "doctor_report"}}
+<div class="modal" role="dialog" aria-modal="true" aria-labelledby="doctor-title">
+  <div class="modal-panel max-w-3xl">
+    <header class="modal-header">
+      <h3 id="doctor-title">Diagnostics</h3>
+      <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+             aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+
+    <div class="modal-body scroll-y" style="max-height: 65vh;">
+      <div class="form-error-slot" data-modal-error></div>
+
+      <p class="text-sm mb-3">
+        Read-only checks: nothing here writes a file, reloads a service or changes the
+        database. The same checks are available on the command line with
+        <span class="mono">mailx-admin doctor</span>.
+      </p>
+
+      <div class="list">
+        {{range .Data.Checks}}
+        <div class="list-row">
+          <div>
+            <span class="badge {{if eq .Status "ok"}}ok{{else if eq .Status "warn"}}warn{{else if eq .Status "fail"}}err{{else}}info{{end}}">
+              {{if eq .Status "fail"}}problem{{else}}{{.Status}}{{end}}
+            </span>
+            <span class="strong">{{.Name}}</span>
+            <div class="text-sm">{{.Detail}}</div>
+            {{if .Hint}}<div class="dim text-xs">{{.Hint}}</div>{{end}}
+            {{if .Command}}<div class="mono text-xs mt-2">{{.Command}}</div>{{end}}
+          </div>
+        </div>
+        {{end}}
+      </div>
+    </div>
+
+    <footer class="modal-footer">
+      <span class="dim text-xs">overall: {{.Data.Health}}</span>
+      <button type="button" class="btn" data-close-modal>Close</button>
+    </footer>
+  </div>
+</div>
+{{end}}

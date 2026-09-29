@@ -1,0 +1,36 @@
+{{define "sync_banner"}}
+{{/* Shown on every page while the panel's files and this server's files are
+     known to disagree — a failed sync, or a sync that had to drop entries the
+     panel does not manage. Silence is what made v1.0.4's failures confusing:
+     the panel looked healthy while nothing had been written. */}}
+{{with .Sync}}
+{{if .Degraded}}
+<div class="alert {{if .Failed}}alert-err{{else}}alert-warn{{end}} mb-4" role="alert">
+  <div>
+    <strong>
+      {{if .Failed}}The last configuration sync failed.
+      {{else}}The panel removed entries from the mail configuration.{{end}}
+    </strong>
+    <p class="text-sm">
+      {{if .Failed}}
+      Changes made in the panel are saved in the database, but Postfix and Dovecot may
+      still be running the previous configuration. Retry from the dashboard.
+      {{else}}
+      The last sync rewrote a managed file and left out entries that exist on this server
+      but not in the panel (mailboxes created with <span class="mono">useradd</span>, or
+      hand-written aliases). A copy of the previous file was kept first; importing the
+      entries puts them under the panel's control.
+      {{end}}
+      {{with .Last}}{{if .Error}}<span class="dim">{{.Error}}</span>{{end}}{{end}}
+    </p>
+    <div class="btn-group mt-2">
+      <a class="btn btn-sm btn-primary" href="/">Open dashboard</a>
+      <button class="btn btn-sm" hx-get="/sync/adopt/preview" hx-target="#modal-host" hx-swap="innerHTML">
+        Import from server
+      </button>
+    </div>
+  </div>
+</div>
+{{end}}
+{{end}}
+{{end}}

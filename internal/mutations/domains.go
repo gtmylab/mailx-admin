@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -265,13 +264,4 @@ func (s *Service) RegenerateDKIM(ctx context.Context, actor Actor, domainID int6
 		return nil, err
 	}
 	return res, nil
-}
-
-// helper: run a command, return combined output on error
-func runCmd(ctx context.Context, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, out)
-	}
-	return nil
 }

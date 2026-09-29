@@ -1,0 +1,97 @@
+{{define "adopt_preview"}}
+{{$plan := .Data.Plan}}
+<div class="modal" role="dialog" aria-modal="true" aria-labelledby="adopt-title">
+  <div class="modal-panel max-w-2xl">
+    <header class="modal-header">
+      <h3 id="adopt-title">Import from server</h3>
+      <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+             aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+
+    <div class="modal-body scroll-y" style="max-height: 60vh;">
+      <div class="form-error-slot" data-modal-error></div>
+
+      <p class="text-sm mb-3">
+        This scans this server's own Postfix, Dovecot and OpenDKIM configuration and adds
+        every domain, mailbox and alias that the panel does not know about yet. Nothing is
+        deleted, and running it twice changes nothing — entries that are already known are
+        skipped.
+      </p>
+
+      {{if not $plan}}
+      <p class="dim text-sm">Nothing to compare.</p>
+      {{else if $plan.Empty}}
+      <div class="alert alert-ok mb-3" role="status">
+        The panel already knows every entry on this server.
+      </div>
+      {{end}}
+
+      {{with $plan}}
+      {{if .Domains}}
+      <div class="card mb-2">
+        <div class="card-header"><h3>Domains <span class="badge">{{len .Domains}}</span></h3></div>
+        <div class="list">
+          {{range .Domains}}
+          <div class="list-row">
+            <span class="mono text-sm">{{.Key}}</span>
+            <span class="dim text-xs">{{.Detail}}</span>
+          </div>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+
+      {{if .Users}}
+      <div class="card mb-2">
+        <div class="card-header"><h3>Mailboxes <span class="badge">{{len .Users}}</span></h3></div>
+        <div class="list">
+          {{range .Users}}
+          <div class="list-row">
+            <span class="mono text-sm">{{.Key}}</span>
+            <span class="dim text-xs">{{.Detail}}</span>
+          </div>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+
+      {{if .Aliases}}
+      <div class="card mb-2">
+        <div class="card-header"><h3>Aliases <span class="badge">{{len .Aliases}}</span></h3></div>
+        <div class="list">
+          {{range .Aliases}}
+          <div class="list-row">
+            <span class="mono text-sm">{{.Key}}</span>
+            <span class="dim text-xs">{{.Detail}}</span>
+          </div>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+
+      {{if .Skipped}}
+      <div class="alert alert-warn">
+        <div>
+          <strong>Skipped</strong>
+          <ul class="list-disc text-sm mt-2">
+            {{range .Skipped}}<li><span class="mono">{{.Key}}</span> — {{.Detail}}</li>{{end}}
+          </ul>
+        </div>
+      </div>
+      {{end}}
+      {{end}}
+    </div>
+
+    <footer class="modal-footer">
+      <button type="button" class="btn" data-close-modal>Cancel</button>
+      {{if and $plan (not $plan.Empty)}}
+      <button class="btn btn-primary" hx-post="/sync/adopt" hx-target="#form-error" hx-swap="innerHTML">
+        Import {{$plan.Total}} entr{{if eq $plan.Total 1}}y{{else}}ies{{end}}
+      </button>
+      {{end}}
+    </footer>
+  </div>
+</div>
+{{end}}

@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gtmylab/mailx-admin/internal/dns"
 	"github.com/gtmylab/mailx-admin/internal/models"
 	"github.com/gtmylab/mailx-admin/internal/queue"
 	"github.com/gtmylab/mailx-admin/internal/smtp"
@@ -361,8 +360,10 @@ func TestDomainDetailPageRendersHandlerData(t *testing.T) {
 }
 
 // TestDNSPageAndFragmentAgreeOnTheDataShape covers the third contract bug:
-// domain_dns.html passed the pageData envelope to dns_check_results, which
-// expects .Checks, so the second load of that page answered 500.
+// domain_dns.html passed the pageData envelope to the fragment, which expects the
+// page data directly, so the second load of that page answered 500. The page and
+// the check endpoint now render the *same* row list (plan + status), so a check
+// cannot change which records are listed.
 func TestDNSPageAndFragmentAgreeOnTheDataShape(t *testing.T) {
 	tmpl, err := parseTemplates()
 	if err != nil {
@@ -370,18 +371,25 @@ func TestDNSPageAndFragmentAgreeOnTheDataShape(t *testing.T) {
 	}
 	s := newTestServer(t, tmpl)
 
-	checks := []dns.CheckResult{{
-		Expected: dns.Expected{
-			Type: dns.TypeMX, Name: "example.com", Value: "mail.example.com",
-			Priority: 10, Purpose: "Inbound mail",
+	data := &dnsPage{
+		Domain:   &models.Domain{ID: 7, Name: "example.com"},
+		ServerIP: "203.0.113.10",
+		MailHost: "mail.example.com",
+		Rows: []dnsRow{
+			{
+				Purpose: "Inbound mail", Type: "MX", Name: "example.com",
+				Value: "mail.example.com", Priority: 10, Required: true,
+				Status: "mismatch", Message: "example.com does not list mail.example.com",
+				Observed: []string{"20 other.example.net"},
+			},
+			{
+				Purpose: "PTR / reverse DNS (203.0.113.10)", Type: "PTR",
+				Name: "10.113.0.203.in-addr.arpa", Value: "mail.example.com",
+				Required: true, Manual: true, Status: "manual",
+			},
 		},
-		Status:  "mismatch",
-		Message: "published value differs",
-	}}
-	data := map[string]any{
-		"Domain":   &models.Domain{ID: 7, Name: "example.com"},
-		"Checks":   checks,
-		"ServerIP": "203.0.113.10",
+		Verdict: "err",
+		Summary: "Inbound mail is missing or wrong.",
 	}
 
 	rec := httptest.NewRecorder()
@@ -392,16 +400,21 @@ func TestDNSPageAndFragmentAgreeOnTheDataShape(t *testing.T) {
 		t.Fatalf("domain_dns.html answered %d (want 200): %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"203.0.113.10", "Inbound mail", "mail.example.com"} {
+	for _, want := range []string{
+		"203.0.113.10",                 // the server address, so the A records can be filled in
+		"Inbound mail",                 // the record's purpose
+		"mail.example.com",             // its value
+		"not ready to send or receive", // the verdict
+		"10.113.0.203.in-addr.arpa",    // the PTR row
+	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("DNS page does not contain %q; the cached checks are missing", want)
+			t.Errorf("DNS page does not contain %q:\n%s", want, body)
 		}
 	}
 
-	// The cached-checks branch of the page must render the same fragment the
-	// check endpoint returns.
+	// The check endpoint's fragment must render the same rows from the same data.
 	rec = httptest.NewRecorder()
-	s.renderPartial(rec, "dns_check_results", map[string]any{"Checks": checks})
+	s.renderPartial(rec, "dns_check_results", data)
 	if frag := rec.Body.String(); !strings.Contains(frag, "Inbound mail") {
 		t.Errorf("dns_check_results rendered no rows:\n%s", frag)
 	}

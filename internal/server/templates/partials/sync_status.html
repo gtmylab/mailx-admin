@@ -1,0 +1,98 @@
+{{define "sync_status"}}
+{{$s := .Data.Status}}
+{{if .Data.Message}}<div class="alert alert-ok mb-3" role="status">{{.Data.Message}}</div>{{end}}
+{{if .Data.Error}}<div class="alert alert-err mb-3" role="alert">{{.Data.Error}}</div>{{end}}
+
+{{if not $s}}
+<div class="card-body dim text-sm">Sync history is not readable.</div>
+{{else}}
+<div class="card-body">
+  <div class="grid grid-cols-2 gap-4 mb-3">
+    <div class="kv">
+      <span class="kv-label">State</span>
+      <span class="kv-value">
+        {{if $s.Running}}<span class="badge info">syncing now</span>
+        {{else if $s.Pending}}<span class="badge warn">queued</span>
+        {{else if $s.Failed}}<span class="badge err">failed</span>
+        {{else if $s.Degraded}}<span class="badge warn">drift</span>
+        {{else}}<span class="badge ok">in sync</span>{{end}}
+      </span>
+    </div>
+    <div class="kv">
+      <span class="kv-label">Last run</span>
+      <span class="kv-value">
+        {{if $s.Last}}{{humanTime $s.Last.Started}}{{else}}never{{end}}
+        {{with $s.Last}}{{if .Duration}}<span class="dim text-xs">· {{.Duration}}</span>{{end}}{{end}}
+      </span>
+    </div>
+  </div>
+
+  {{with $s.Last}}
+  <div class="list mb-3">
+    <div class="list-row">
+      <span class="dim">Trigger</span>
+      <span class="mono text-xs">{{.Trigger}}</span>
+    </div>
+    <div class="list-row">
+      <span class="dim">Files changed</span>
+      <span>{{.Changed}}</span>
+    </div>
+    {{if .Error}}
+    <div class="list-row">
+      <span class="dim">Error</span>
+      <span class="err-text text-xs break-all">{{.Error}}</span>
+    </div>
+    {{end}}
+  </div>
+
+  {{if .Files}}
+  <details class="mb-3">
+    <summary class="text-sm">Files this run rewrote</summary>
+    <ul class="list-disc text-sm mt-2">
+      {{range .Files}}<li><span class="mono">{{.Name}}</span> <span class="dim">({{.Action}})</span></li>{{end}}
+    </ul>
+  </details>
+  {{end}}
+
+  {{if .Drift}}
+  <div class="alert alert-warn mb-3" role="alert">
+    <div>
+      <strong>Entries on this server are not in the panel.</strong>
+      <p class="text-sm">
+        The sync writes the whole file, so anything added outside the panel
+        (a mailbox created with <span class="mono">useradd</span>, a hand-written
+        alias) is removed by it. A copy of the previous file was kept before the
+        write — import these entries to keep the panel in charge of them.
+      </p>
+      {{range .Drift}}
+      <div class="mt-2">
+        <div class="text-sm"><span class="mono">{{.Name}}</span> · {{.Count}} removed entr{{if eq .Count 1}}y{{else}}ies{{end}}</div>
+        <pre class="code code-block text-xs">{{range .Lines}}{{.}}
+{{end}}{{if .More}}… and {{.More}} more
+{{end}}</pre>
+        {{if .Backup}}<div class="dim text-xs break-all">previous file kept at {{.Backup}}</div>{{end}}
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+  {{end}}
+
+  <div class="btn-group">
+    <button class="btn btn-sm btn-primary" hx-post="/sync/run" hx-target="#sync-card" hx-swap="innerHTML">
+      Sync now
+    </button>
+    <button class="btn btn-sm" hx-get="/sync/adopt/preview" hx-target="#modal-host" hx-swap="innerHTML">
+      Import from server
+    </button>
+    <button class="btn btn-sm btn-ghost" hx-get="/sync/history" hx-target="#sync-history" hx-swap="innerHTML">
+      History
+    </button>
+    <button class="btn btn-sm btn-ghost" hx-get="/sync/doctor" hx-target="#modal-host" hx-swap="innerHTML">
+      Diagnostics
+    </button>
+  </div>
+</div>
+<div id="sync-history"></div>
+{{end}}
+{{end}}

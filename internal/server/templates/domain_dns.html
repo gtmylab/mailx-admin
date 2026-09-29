@@ -4,57 +4,143 @@
   <div>
     <a href="/domains/{{$d.ID}}" class="dim text-xs">← {{$d.Name}}</a>
     <h1 class="mt-1">DNS records</h1>
-    <p class="page-sub">Add these records at your DNS provider, then run the check.</p>
+    <p class="page-sub">Create these records at your DNS provider, then verify them here.</p>
   </div>
   <div class="page-actions">
-    <a class="btn btn-sm" href="/domains/{{$d.ID}}/dns/export">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-           aria-hidden="true"><path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 19h14"/></svg>
-      Download .txt
-    </a>
+    <a class="btn btn-sm" href="/domains/{{$d.ID}}/dns/export">Download .txt</a>
     <button class="btn btn-sm btn-primary" hx-get="/domains/{{$d.ID}}/dns/check"
             hx-target="#dns-results" hx-swap="innerHTML" hx-indicator="#dns-spinner">
-      Verify DNS
+      Verify all records
       <span id="dns-spinner" class="htmx-indicator"><span class="spinner"></span></span>
     </button>
   </div>
 </div>
 
-<div class="card mb-4">
-  <div class="card-body form-row">
-    <span class="kv">
-      <span class="kv-label">Mail server</span>
-      <span class="kv-value mono">{{.Data.ServerIP}}</span>
-    </span>
-    <span class="kv">
-      <span class="kv-label">Domain</span>
-      <span class="kv-value mono">{{$d.Name}}</span>
-    </span>
-    {{if $d.DKIMPrivateKeyPath}}
-    <span class="kv">
-      <span class="kv-label">DKIM selector</span>
-      <span class="kv-value mono">{{$d.DKIMSelector}}</span>
-    </span>
-    {{end}}
-    <span class="ml-auto text-xs dim">
-      The check queries public DNS, so freshly added records may need to propagate.
-    </span>
+{{/* The verdict first: "is mail for this domain deliverable?" is the question
+     the operator arrived with. v1.0.4 had no verdict at all, only a list of
+     cached lookups that rendered empty for a domain that had never been
+     checked. */}}
+<div class="alert {{if eq .Data.Verdict "err"}}alert-err{{else if eq .Data.Verdict "warn"}}alert-warn{{else if eq .Data.Verdict "ok"}}alert-ok{{else}}alert-info{{end}} mb-4"
+     role="status">
+  <div>
+    <strong>
+      {{if eq .Data.Verdict "err"}}This domain is not ready to send or receive mail.
+      {{else if eq .Data.Verdict "warn"}}Almost there.
+      {{else if eq .Data.Verdict "ok"}}This domain is correctly configured.
+      {{else}}Not verified yet.{{end}}
+    </strong>
+    <div class="text-sm">{{.Data.Summary}}</div>
   </div>
 </div>
 
-{{/* Same data-shape rule as the queue page: the fragment reads .Checks, so the
-     envelope has to be unwrapped here. v1.0.3 passed pageData, which is why the
-     second load of this page answered 500. */}}
-<div id="dns-results">
-  {{if .Data.Checks}}
-    {{template "dns_check_results" .Data}}
-  {{else}}
-    <div class="card">
-      <div class="empty">
-        <span class="empty-title">No check run yet</span>
-        <span class="empty-hint">Add the records below, then press “Verify DNS”.</span>
-      </div>
-    </div>
-  {{end}}
+{{if .Data.Warnings}}
+<div class="alert alert-warn mb-4" role="alert">
+  <div>
+    <strong>Before you publish anything</strong>
+    <ul class="list-disc text-sm mt-2">
+      {{range .Data.Warnings}}<li>{{.}}</li>{{end}}
+    </ul>
+  </div>
 </div>
 {{end}}
+
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="form-row">
+      <span class="kv">
+        <span class="kv-label">Mail server</span>
+        <span class="kv-value mono">{{if .Data.ServerIP}}{{.Data.ServerIP}}{{else}}unknown{{end}}</span>
+      </span>
+      <span class="kv">
+        <span class="kv-label">Mail host</span>
+        <span class="kv-value mono">{{.Data.MailHost}}</span>
+      </span>
+      {{if $d.DKIMPrivateKeyPath}}
+      <span class="kv">
+        <span class="kv-label">DKIM selector</span>
+        <span class="kv-value mono">{{$d.DKIMSelector}}</span>
+      </span>
+      {{end}}
+    </div>
+
+    {{/* The auto-detection cannot always answer (NAT, no outbound HTTPS), so the
+         operator can. Without this the A records and the SPF ip4: mechanism were
+         published with an empty value. */}}
+    <form class="form-row mt-3" hx-post="/dns/server-ip" hx-target="#form-error" hx-swap="innerHTML">
+      <input type="hidden" name="domain_id" value="{{$d.ID}}">
+      <label class="field">
+        <span class="field-label">This server's public IP</span>
+        <input class="input input-sm mono" type="text" name="server_ip" value="{{.Data.ServerIP}}"
+               placeholder="203.0.113.10">
+      </label>
+      <button type="submit" class="btn btn-sm">Save</button>
+      <span class="dim text-xs">
+        Used for the A records, the SPF ip4: mechanism and the PTR row.
+      </span>
+    </form>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">
+    <h2>Records to create <span class="badge">{{len .Data.Rows}}</span></h2>
+    <span class="dim text-xs">
+      Checks query public DNS, so freshly added records may need time to propagate.
+    </span>
+  </div>
+  <div id="dns-results">
+    {{template "dns_records_table" .Data}}
+  </div>
+</div>
+
+{{if .Data.Later}}
+<div class="card">
+  <div class="card-header">
+    <h2>Add later <span class="badge">{{len .Data.Later}}</span></h2>
+    <span class="dim text-xs">Recommended hardening; mail flows without it.</span>
+  </div>
+  <div class="table-wrap">
+    <table class="table table-compact table-stack">
+      <thead>
+        <tr><th>What it is for</th><th>Type</th><th>Name / host</th><th>Value</th><th class="table-actions">Actions</th></tr>
+      </thead>
+      <tbody>
+        {{range .Data.Later}}
+        <tr>
+          <td data-label="Purpose">
+            <span class="strong">{{.Purpose}}</span>
+            {{if .Note}}<div class="dim text-xs">{{.Note}}</div>{{end}}
+          </td>
+          <td data-label="Type"><span class="badge">{{.Type}}</span></td>
+          <td data-label="Name"><span class="mono text-xs break-all">{{.Name}}</span></td>
+          <td data-label="Value"><span class="mono text-xs break-all">{{.Value}}</span></td>
+          <td class="table-actions">
+            <button type="button" class="btn btn-sm" data-copy-value="{{.Value}}">Copy</button>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<section class="card mt-4">
+  <div class="card-header"><h2>How to enter these records</h2></div>
+  <div class="card-body text-sm">
+    <ul class="list-disc">
+      <li>Most providers want the <span class="strong">Name</span> without the domain: for
+        <span class="mono">mail.{{$d.Name}}</span> enter <span class="mono">mail</span>, and for
+        the domain itself enter <span class="mono">@</span>.</li>
+      <li>Paste TXT values exactly, including the quotes a provider may add itself.</li>
+      <li>The <span class="mono">PTR</span> row cannot be set at your DNS provider: it lives in the
+        reverse zone, which belongs to whoever gave you the IP. Open a ticket with them and ask for
+        that name.</li>
+      <li>Two MX records with the same preference would be load-balanced; this plan uses one.</li>
+      <li>After propagating, press <span class="strong">Verify all records</span> — the status column
+        then says what public DNS actually returns, not what you entered.</li>
+    </ul>
+  </div>
+</section>
+{{end}}
+

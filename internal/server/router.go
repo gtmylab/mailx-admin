@@ -73,6 +73,17 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("GET /domains/{id}/dns", s.handleDomainDNS)
 	protected.HandleFunc("GET /domains/{id}/dns/check", s.handleDomainDNSCheck)
 	protected.HandleFunc("GET /domains/{id}/dns/export", s.handleDomainDNSCopy)
+	protected.HandleFunc("POST /dns/server-ip", s.handleServerIPSave)
+
+	// Config sync status: the dashboard card, a manual run, its history, and the
+	// "Import from server" flow that makes shell-created mailboxes visible.
+	// See internal/syncer for why the sync is no longer part of a request.
+	protected.HandleFunc("GET /sync/status", s.handleSyncStatus)
+	protected.HandleFunc("POST /sync/run", s.handleSyncRun)
+	protected.HandleFunc("GET /sync/history", s.handleSyncHistory)
+	protected.HandleFunc("GET /sync/adopt/preview", s.handleSyncAdoptPreview)
+	protected.HandleFunc("POST /sync/adopt", s.handleSyncAdopt)
+	protected.HandleFunc("GET /sync/doctor", s.handleDoctor)
 
 	protected.HandleFunc("GET /logs", s.handleLogsPage)
 	protected.HandleFunc("GET /logs/list", s.handleLogsList)
@@ -110,7 +121,9 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("DELETE /backup/{name}", s.handleBackupDelete)
 	protected.HandleFunc("POST /backup/restore/{name}", s.handleBackupRestore)
 
-	mux.Handle("/", auth.RequireAuth(protected))
+	// Every protected request gets a deadline (see timeout.go). The auth check
+	// runs first so an expired session is rejected without borrowing a budget.
+	mux.Handle("/", auth.RequireAuth(requestTimeout(protected)))
 
 	// CSRF middleware wraps everything except GET/HEAD/OPTIONS
 	return s.sessions.Middleware(s.csrf.Middleware(mux))

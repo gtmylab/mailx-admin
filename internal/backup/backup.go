@@ -148,16 +148,18 @@ func writeDatabase(ctx context.Context, tw *tar.Writer, db *sql.DB, driver strin
 
 	switch driver {
 	case "sqlite":
-		// For SQLite, just VACUUM INTO a temp file and add it.
-		// Simpler: copy the file directly. But we want consistent backups,
-		// so use the SQLite backup API via VACUUM INTO.
-		tmp, ferr := os.CreateTemp("", "mailx-backup-*.db")
-		if ferr != nil {
-			return ferr
+		// VACUUM INTO is SQLite's online backup: it produces a consistent
+		// snapshot without stopping the panel, and unlike a file copy it cannot
+		// capture a half-written WAL. It refuses to write to an existing file,
+		// so the target is a path inside a fresh temp directory rather than a
+		// file this code created first (which is why every SQLite backup used to
+		// fail with "output file already exists").
+		dir, derr := os.MkdirTemp("", "mailx-backup-")
+		if derr != nil {
+			return derr
 		}
-		tmpPath := tmp.Name()
-		tmp.Close()
-		defer os.Remove(tmpPath)
+		defer os.RemoveAll(dir)
+		tmpPath := filepath.Join(dir, "state.db")
 
 		if _, err := db.ExecContext(ctx, `VACUUM INTO ?`, tmpPath); err != nil {
 			return fmt.Errorf("vacuum: %w", err)

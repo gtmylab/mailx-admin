@@ -1,0 +1,39 @@
+{{define "sync_history"}}
+{{if .Data.History}}
+<div class="table-wrap">
+  <table class="table table-compact">
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>Trigger</th>
+        <th>Result</th>
+        <th>Files</th>
+        <th>Details</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Data.History}}
+      <tr>
+        <td class="dim text-xs">{{humanTime .Started}}</td>
+        <td class="mono text-xs">{{.Trigger}}</td>
+        <td>
+          {{if eq .Status "ok"}}<span class="badge ok">ok</span>
+          {{else if eq .Status "running"}}<span class="badge info">running</span>
+          {{else}}<span class="badge err">failed</span>{{end}}
+          {{if .Duration}}<span class="dim text-xs">{{.Duration}}</span>{{end}}
+        </td>
+        <td class="dim">{{.Changed}}</td>
+        <td class="text-xs">
+          {{if .Error}}<span class="err-text break-all">{{.Error}}</span>
+          {{else if .Drift}}<span class="warn-text">{{len .Drift}} file(s) lost entries</span>
+          {{else}}<span class="dim">—</span>{{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{else}}
+<div class="card-body dim text-sm">No sync has run yet.</div>
+{{end}}
+{{end}}

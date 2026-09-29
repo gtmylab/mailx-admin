@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"github.com/gtmylab/mailx-admin/internal/auth"
 	"github.com/gtmylab/mailx-admin/internal/version"
@@ -57,6 +58,12 @@ type pageData struct {
 	Flash     string
 	CSRFToken string // value of the mailx_csrf cookie, embedded for forms and hx-headers
 	Data      any
+
+	// Sync is the state of the last configuration sync, for the banner that
+	// every page shows while the panel and the server disagree. It is nil on
+	// pages rendered without a request (error.html) and when the history is
+	// unreadable, and the banner hides itself in that case.
+	Sync *syncView
 }
 
 // newPageData builds the envelope for a full page render, including the CSRF
@@ -82,5 +89,17 @@ func (s *Server) newPageData(w http.ResponseWriter, r *http.Request, title, nav 
 		ActiveNav: nav,
 		CSRFToken: token,
 		Data:      data,
+		// Read from the syncer's short-lived cache, so a page render costs at
+		// most one row every couple of seconds.
+		Sync: s.syncStatus(r.Context()),
 	}
+}
+
+// syncStatus is nil-safe: a page rendered by a Server without a syncer (tests,
+// and any future headless use) still has to render, just without the banner.
+func (s *Server) syncStatus(ctx context.Context) *syncView {
+	if s.syncer == nil {
+		return nil
+	}
+	return newSyncView(s.syncer.Status(ctx))
 }

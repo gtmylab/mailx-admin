@@ -2,9 +2,16 @@
 <div class="page-header">
   <div>
     <h1>Users</h1>
-    <p class="page-sub">{{.Data.Total}} user(s) on this server</p>
+    <p class="page-sub">
+      {{.Data.Total}} user(s) shown
+      {{if .Data.Disabled}}{{if not .Data.ShowInactive}}· {{.Data.Disabled}} disabled hidden{{end}}{{end}}
+    </p>
   </div>
   <div class="page-actions">
+    <button class="btn" hx-get="/sync/adopt/preview" hx-target="#modal-host" hx-swap="innerHTML"
+            title="Add the mailboxes, domains and aliases that exist on this server but not in the panel">
+      Import from server
+    </button>
     <button class="btn btn-primary" hx-get="/users/new" hx-target="#modal-host" hx-swap="innerHTML">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
            aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
@@ -16,10 +23,21 @@
 <div class="card">
   <div class="card-header">
     <h2>Mailboxes <span class="badge">{{.Data.Total}} user(s)</span></h2>
-    <input class="input input-sm max-w-[250px]" type="search" name="q" value="{{.Data.Query}}"
-           placeholder="Filter by address…" aria-label="Filter users"
-           hx-get="/users" hx-target="#user-table" hx-swap="innerHTML"
-           hx-trigger="keyup changed delay:250ms, search">
+    <div class="btn-group">
+      <input class="input input-sm max-w-[250px]" type="search" name="q" value="{{.Data.Query}}"
+             placeholder="Filter by address…" aria-label="Filter users"
+             hx-get="/users{{if .Data.ShowInactive}}?status=all{{end}}"
+             hx-target="#user-table" hx-swap="innerHTML"
+             hx-trigger="keyup changed delay:250ms, search">
+      {{if .Data.ShowInactive}}
+      <a class="btn btn-sm btn-ghost" href="/users">Hide disabled</a>
+      {{else}}
+      <a class="btn btn-sm btn-ghost" href="/users?status=all"
+         title="Disable a mailbox instead of deleting it, and it stays visible here">
+        Show disabled{{if .Data.Disabled}} ({{.Data.Disabled}}){{end}}
+      </a>
+      {{end}}
+    </div>
   </div>
 
   <div id="user-table">
@@ -85,12 +103,18 @@
   </span>
   <span class="empty-title">No users found</span>
   <span class="empty-hint">
-    {{if .Data.Query}}Nothing matches “{{.Data.Query}}”.{{else}}Create the first mailbox for one of your domains.{{end}}
+    {{if .Data.Query}}Nothing matches “{{.Data.Query}}”.{{else}}Create the first mailbox for one of your domains,
+    or import the mailboxes that already exist on this server.{{end}}
   </span>
   {{if not .Data.Query}}
-  <button class="btn btn-primary mt-2" hx-get="/users/new" hx-target="#modal-host" hx-swap="innerHTML">
-    Create the first user
-  </button>
+  <div class="btn-group mt-2">
+    <button class="btn btn-primary" hx-get="/users/new" hx-target="#modal-host" hx-swap="innerHTML">
+      Create the first user
+    </button>
+    <button class="btn" hx-get="/sync/adopt/preview" hx-target="#modal-host" hx-swap="innerHTML">
+      Import from server
+    </button>
+  </div>
   {{end}}
 </div>
 {{end}}

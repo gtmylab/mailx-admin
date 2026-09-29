@@ -16,6 +16,7 @@ import (
 	"github.com/gtmylab/mailx-admin/internal/mutations"
 	"github.com/gtmylab/mailx-admin/internal/reconciler"
 	"github.com/gtmylab/mailx-admin/internal/store"
+	"github.com/gtmylab/mailx-admin/internal/syncer"
 	"github.com/gtmylab/mailx-admin/internal/version"
 	"html/template"
 	"io"
@@ -38,6 +39,8 @@ type Server struct {
 	dbDriver  string
 	store     *store.Store
 	mutations *mutations.Service
+	rec       *reconciler.Reconciler
+	syncer    *syncer.Syncer
 	sessions  *auth.SessionStore
 	csrf      *auth.CSRFManager
 	auditor   *audit.Logger
@@ -66,7 +69,10 @@ func New(cfg *config.Config, database *sql.DB, st *store.Store, rec *reconciler.
 	}
 
 	aud := audit.New(database)
-	mut := mutations.New(database, st, rec, aud, cfg.Server.Hostname)
+	// The syncer owns the config sync. It never touches disk inside a request:
+	// mutations queue a run, and the run reports back through reconcile_runs.
+	sync := syncer.New(database, st, rec, logger)
+	mut := mutations.New(database, st, rec, aud, cfg.Server.Hostname, sync)
 
 	return &Server{
 		cfg:       cfg,
@@ -74,6 +80,8 @@ func New(cfg *config.Config, database *sql.DB, st *store.Store, rec *reconciler.
 		dbDriver:  cfg.DB.Driver,
 		store:     st,
 		mutations: mut,
+		rec:       rec,
+		syncer:    sync,
 		sessions:  auth.NewSessionStore(database),
 		csrf:      auth.NewCSRFManager(csrfKey),
 		auditor:   aud,
@@ -348,13 +356,28 @@ func parseTemplates() (*templateSet, error) {
 func (s *Server) Serve(ctx context.Context) error {
 	mux := s.buildRouter()
 
+	// The config sync runs in the background: every mutation only queues a run,
+	// so no request ever waits for postmap or a service reload again.
+	s.syncer.Start(ctx)
+	// Converge once at startup. After an upgrade or a hand-edited file the
+	// panel's files and the database can disagree, and a run at boot is what
+	// makes the dashboard's very first status honest.
+	s.syncer.Request("system:startup")
+
 	srv := &http.Server{
 		Addr:              s.cfg.Server.ListenAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second, // SSE needs longer
-		IdleTimeout:       120 * time.Second,
+		// No WriteTimeout on purpose. It used to be 60s "because SSE needs
+		// longer", which is backwards twice over: the SSE pings are 5s apart so
+		// they fit in any budget, while a 5 GB backup download from the Backups
+		// page was cut off mid-transfer after a minute. Long-lived routes are
+		// bounded by their own context instead (see timeout.go: streams and
+		// downloads are exempt from the request budget, and Apache still has a
+		// 60s upstream timeout for the requests that matter).
+		WriteTimeout: 0,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	errCh := make(chan error, 1)

@@ -186,6 +186,25 @@
     return el;
   }
 
+  /* Connection-level failures reach the page through several htmx events:
+   * htmx:sendError, htmx:timeout, and htmx:afterRequest with status 0. They
+   * overlap, so they share one message and a rate limit — three identical
+   * toasts stacked on top of each other is worse than none. */
+  var CANNOT_REACH = "Cannot reach the panel. Check that the service is running.";
+  var CONN_TOAST_MS = 2000;
+  var lastConnToastAt = 0;
+
+  /* Kept in step with the server's mutation budget
+   * (internal/server/timeout.go: mutationTimeout = 30s). */
+  var HTMX_TIMEOUT_MS = 30000;
+
+  function connErrorToast(message) {
+    var now = Date.now();
+    if (now - lastConnToastAt < CONN_TOAST_MS) return;
+    lastConnToastAt = now;
+    toast(message, "err");
+  }
+
   function initFlash() {
     // Inline .alert blocks rendered by a full page load fade out on their own.
     document.querySelectorAll("[data-autodismiss]").forEach(function (el) {
@@ -338,6 +357,11 @@
       return;
     }
 
+    // Abort a stalled request instead of spinning forever. 30s matches the
+    // server's mutation budget (internal/server/timeout.go); anything the
+    // server itself can detect is answered with an error well before that.
+    window.htmx.config.timeout = HTMX_TIMEOUT_MS;
+
     document.body.addEventListener("htmx:beforeRequest", function (evt) {
       setBusy(evt.detail.elt, true);
     });
@@ -352,13 +376,27 @@
         if (xhr && xhr.status) {
           toast(responseMessage(xhr), "err");
         } else {
-          toast("Cannot reach the panel. Check that the service is running.", "err");
+          // Status 0: the request never got an answer (offline, or aborted by
+          // the timeout below). connErrorToast de-duplicates the overlap with
+          // htmx:sendError / htmx:timeout.
+          connErrorToast(CANNOT_REACH);
         }
       }
     });
 
+    // htmx aborts a request that exceeds htmx.config.timeout. Unlike "the panel
+    // is down", the change may already have been applied before the server went
+    // quiet, so the message says so instead of inviting a blind retry.
+    document.body.addEventListener("htmx:timeout", function () {
+      connErrorToast(
+        "The panel did not answer within " +
+          HTMX_TIMEOUT_MS / 1000 +
+          "s. Reload the page to see whether the change was applied."
+      );
+    });
+
     document.body.addEventListener("htmx:sendError", function () {
-      toast("Cannot reach the panel. Check that the service is running.", "err");
+      connErrorToast(CANNOT_REACH);
     });
 
     document.body.addEventListener("htmx:afterSwap", function (evt) {

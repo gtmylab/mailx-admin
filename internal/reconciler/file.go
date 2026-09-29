@@ -106,7 +106,7 @@ func WriteFile(path string, content []byte, mode os.FileMode, dryRun bool) (File
 	return change, nil
 }
 
-// BackupFile copies a file to `<path>.bak-<timestamp>` before a change.
+// BackupFile copies a file to `<path>.bak-<timestamp>`.
 func BackupFile(path string) (string, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return "", nil
@@ -117,19 +117,8 @@ func BackupFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(backup, data, 0o644); err != nil {
+	if err := os.WriteFile(backup, data, 0o600); err != nil {
 		return "", err
 	}
 	return backup, nil
-}
-
-func BackupFileTo(src, dst string) (string, error) {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(dst, data, 0o644); err != nil {
-		return "", err
-	}
-	return dst, nil
 }

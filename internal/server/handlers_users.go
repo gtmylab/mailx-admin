@@ -11,28 +11,40 @@ import (
 func (s *Server) handleUsersList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	// The list used to show active rows of active domains only, so a mailbox
+	// that was disabled - or that exists only in the server's own passwd file -
+	// was simply absent. Reading the whole set and hiding the disabled ones
+	// afterwards lets the filter say how many there are, instead of a missing
+	// user looking like a bug.
+	showInactive := r.URL.Query().Get("status") == "all"
 
-	snap, err := s.store.Snapshot(ctx)
+	all, err := s.store.Users(ctx, true)
 	if err != nil {
 		s.renderError(w, 500, "Failed to load users")
 		return
 	}
 
-	users := snap.Users
-	if q != "" {
-		filtered := users[:0]
-		for _, u := range users {
-			if strings.Contains(strings.ToLower(u.Email), q) {
-				filtered = append(filtered, u)
+	users := make([]models.User, 0, len(all))
+	disabled := 0
+	for _, u := range all {
+		if !u.Active {
+			disabled++
+			if !showInactive {
+				continue
 			}
 		}
-		users = filtered
+		if q != "" && !strings.Contains(strings.ToLower(u.Email), q) {
+			continue
+		}
+		users = append(users, u)
 	}
 
 	data := map[string]any{
-		"Users": users,
-		"Total": len(users),
-		"Query": q,
+		"Users":        users,
+		"Total":        len(users),
+		"Disabled":     disabled,
+		"Query":        q,
+		"ShowInactive": showInactive,
 	}
 
 	// HTMX partial request
@@ -53,17 +65,18 @@ func (s *Server) handleUserDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For now, just find in snapshot. Phase 3 adds a proper GetUser.
-	snap, err := s.store.Snapshot(ctx)
+	// The whole set: a disabled mailbox still has a page, and finding it must not
+	// depend on a filter.
+	users, err := s.store.Users(ctx, true)
 	if err != nil {
 		s.renderError(w, 500, "Failed to load user")
 		return
 	}
 
 	var found *models.User
-	for i := range snap.Users {
-		if snap.Users[i].ID == id {
-			found = &snap.Users[i]
+	for i := range users {
+		if users[i].ID == id {
+			found = &users[i]
 			break
 		}
 	}

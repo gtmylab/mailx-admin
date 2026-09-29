@@ -4,14 +4,26 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/gtmylab/mailx-admin/internal/audit"
+	"github.com/gtmylab/mailx-admin/internal/execx"
 	"github.com/gtmylab/mailx-admin/internal/models"
 	"github.com/gtmylab/mailx-admin/internal/ports"
+)
+
+// Timeouts for the external helpers. They exist so a wedged helper cannot hold
+// the caller (and, before v1.0.5, the request that triggered it) forever.
+const (
+	// commandTimeout bounds the cheap validation helpers: postmap (3 hash maps),
+	// `postfix check` and `doveconf -n`.
+	commandTimeout = 45 * time.Second
+
+	// reloadTimeout is longer: `systemctl reload-or-restart` waits for the
+	// service's own ExecReload / ExecStop to finish, and Dovecot flushing its
+	// mailboxes is not instant.
+	reloadTimeout = 120 * time.Second
 )
 
 type Config struct {
@@ -21,6 +33,25 @@ type Config struct {
 	Hostname          string
 	DryRun            bool
 	SkipServiceReload bool // for tests
+
+	// SkipValidation disables the external validators (postmap, `postfix
+	// check`, `doveconf -n`). The panel never sets it: postmap also *builds* the
+	// hash maps Postfix reads, so skipping it in production would leave the
+	// server without usable lookup tables. It exists so the test suite can run
+	// on a machine with no mail stack installed.
+	SkipValidation bool
+
+	// BackupDir is where the previous version of a managed file is preserved
+	// before it is overwritten. Empty means /var/backups/mailx.
+	BackupDir string
+}
+
+// backupRoot is the directory the per-run backup folders are created in.
+func (c Config) backupRoot() string {
+	if c.BackupDir != "" {
+		return c.BackupDir
+	}
+	return defaultBackupDir
 }
 
 type Result struct {
@@ -28,6 +59,15 @@ type Result struct {
 	ReloadedSvcs []string
 	StartedAt    time.Time
 	FinishedAt   time.Time
+
+	// Warnings are non-fatal problems the operator has to see: an entry that
+	// was dropped because the panel does not manage it, a backup that could not
+	// be written.
+	Warnings []string `json:"warnings,omitempty"`
+
+	// Drift lists the entries this run removed because they are not in the
+	// panel (see Drift).
+	Drift []Drift `json:"drift,omitempty"`
 }
 
 type Reconciler struct {
@@ -38,6 +78,13 @@ type Reconciler struct {
 func New(cfg Config, auditor *audit.Logger) *Reconciler {
 	return &Reconciler{cfg: cfg, auditor: auditor}
 }
+
+// Config returns the configuration this reconciler was built with.
+//
+// It exists so the mutation service can build a second reconciler that shares
+// the paths but runs in DryRun mode: a preview must never write a file or reload
+// a service, which is what v1.0.4 did by borrowing the live reconciler.
+func (r *Reconciler) Config() Config { return r.cfg }
 
 // managedFile is a single file the reconciler owns.
 // Extracted as a named type so we can append dynamic entries
@@ -170,10 +217,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 	// Apply each file. Collect changes and which services need reloading.
 	// ------------------------------------------------------------------
 
+	// Everything above only rendered bytes. From here on the filesystem and
+	// the services are touched, so a caller that has already given up (request
+	// deadline, shutdown) must get an error instead of half-applied config.
+	if err := ctx.Err(); err != nil {
+		return res, err
+	}
+
 	servicesToReload := map[string]bool{}
-	backupDir := filepath.Join("/var/backups/mailx", time.Now().Format("20060102_150405"))
+	backupDir := filepath.Join(r.cfg.backupRoot(), time.Now().Format("20060102_150405"))
 
 	for _, f := range files {
+		// Read the current content first: it is what the drift check compares
+		// against, and what the pre-write copy has to hold. v1.0.4 copied the
+		// file *after* WriteFile had already replaced it, so its "backup" held
+		// the new content — no way back to a mailbox the sync had just dropped.
+		before, readErr := os.ReadFile(f.path)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return res, fmt.Errorf("read %s: %w", f.path, readErr)
+		}
+
 		change, err := WriteFile(f.path, f.content, f.mode, r.cfg.DryRun)
 		if err != nil {
 			return res, fmt.Errorf("write %s: %w", f.path, err)
@@ -184,15 +247,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 			continue
 		}
 
-		// Back up before overwriting (only in real runs)
-		if !r.cfg.DryRun && change.Action == "update" {
-			if err := os.MkdirAll(backupDir, 0o755); err == nil {
-				backupPath := filepath.Join(backupDir, filepath.Base(f.path))
-				if _, err := BackupFileTo(f.path, backupPath); err != nil {
-					// Non-fatal — continue
-					_ = err
-				}
+		// Entries the renderer no longer produces: hand-added mailboxes, aliases
+		// or keys. Report them, and preserve the file they came from.
+		if drift := detectDrift(f.path, before, f.content); drift != nil {
+			if !r.cfg.DryRun {
+				drift.Backup = backupCopy(backupDir, f.path, before)
 			}
+			res.Drift = append(res.Drift, *drift)
+			res.Warnings = append(res.Warnings, driftWarning(*drift))
+		} else if !r.cfg.DryRun && change.Action == "update" {
+			// Ordinary update: still keep the previous version around.
+			_ = backupCopy(backupDir, f.path, before)
 		}
 
 		if f.service != "" {
@@ -203,11 +268,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 	// ------------------------------------------------------------------
 	// Postfix hash maps: virtual, vmailbox, helo_access need `postmap`.
 	// ------------------------------------------------------------------
-	if !r.cfg.DryRun {
+	if !r.cfg.DryRun && !r.cfg.SkipValidation {
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
 		for _, name := range []string{"virtual", "vmailbox", "helo_access"} {
 			path := filepath.Join(r.cfg.PostfixConfDir, name)
 			if fileChanged(res.Changes, path) {
-				if err := runCmd(ctx, "postmap", path); err != nil {
+				if err := runCmd(ctx, commandTimeout, "postmap", path); err != nil {
 					return res, fmt.Errorf("postmap %s: %w", path, err)
 				}
 			}
@@ -217,14 +285,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 	// ------------------------------------------------------------------
 	// Validate configs before reloading services.
 	// ------------------------------------------------------------------
-	if !r.cfg.DryRun {
+	if !r.cfg.DryRun && !r.cfg.SkipValidation {
 		if servicesToReload["postfix"] {
-			if err := runCmd(ctx, "postfix", "check"); err != nil {
+			if err := runCmd(ctx, commandTimeout, "postfix", "check"); err != nil {
 				return res, fmt.Errorf("postfix check failed: %w", err)
 			}
 		}
 		if servicesToReload["dovecot"] {
-			if err := runCmd(ctx, "doveconf", "-n"); err != nil {
+			if err := runCmd(ctx, commandTimeout, "doveconf", "-n"); err != nil {
 				return res, fmt.Errorf("dovecot config check failed: %w", err)
 			}
 		}
@@ -238,12 +306,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 	// Postfix last.
 	// ------------------------------------------------------------------
 	if !r.cfg.SkipServiceReload && !r.cfg.DryRun {
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
 		order := []string{"opendkim", "dovecot", "postfix"}
 		for _, svc := range order {
 			if !servicesToReload[svc] {
 				continue
 			}
-			if err := runCmd(ctx, "systemctl", "reload-or-restart", svc); err != nil {
+			if err := runCmd(ctx, reloadTimeout, "systemctl", "reload-or-restart", svc); err != nil {
 				return res, fmt.Errorf("reload %s: %w", svc, err)
 			}
 			res.ReloadedSvcs = append(res.ReloadedSvcs, svc)
@@ -262,6 +333,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 				"dry_run":           r.cfg.DryRun,
 				"files_changed":     countChanged(res.Changes),
 				"services_reloaded": res.ReloadedSvcs,
+				"drift":             len(res.Drift),
+				"warnings":          res.Warnings,
 			},
 		})
 	}
@@ -288,11 +361,8 @@ func fileChanged(changes []FileChange, path string) bool {
 	return false
 }
 
-func runCmd(ctx context.Context, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, out)
-	}
-	return nil
+// runCmd executes one external helper under a hard deadline and with the whole
+// process group killed on expiry. See package execx for why.
+func runCmd(ctx context.Context, timeout time.Duration, name string, args ...string) error {
+	return execx.Run(ctx, timeout, name, args...)
 }

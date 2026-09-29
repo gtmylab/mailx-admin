@@ -73,10 +73,12 @@
         </div>
       </noscript>
 
-      {{/* The single error container of a page: renderFormError retargets to
+      {{/* One error container per page: renderFormError retargets to
            "#form-error". When a dialog is open, app.js moves the fragment into
            the dialog's own [data-modal-error] slot instead. */}}
       <div id="form-error" class="form-error-slot" role="alert" aria-live="polite"></div>
+
+      <div id="sync-banner">{{template "sync_banner" .}}</div>
 
       {{if .Flash}}
       <div class="alert alert-ok mb-4" role="status" data-autodismiss="6000">{{.Flash}}</div>

@@ -63,6 +63,20 @@
 
 <section class="card mt-4">
   <div class="card-header">
+    <h2>Configuration sync</h2>
+    <span class="dim text-xs">
+      Postfix, Dovecot and OpenDKIM are rendered from the database in the background.
+    </span>
+  </div>
+  {{/* Polled, so a sync that fails while the admin is watching shows up without
+       a reload. The card is also the target of the "Sync now" button. */}}
+  <div id="sync-card" hx-get="/sync/status" hx-trigger="every 15s" hx-swap="innerHTML">
+    {{template "sync_status" .}}
+  </div>
+</section>
+
+<section class="card mt-4">
+  <div class="card-header">
     <h2>Recent activity</h2>
     <a class="btn btn-sm" href="/audit">Full audit log</a>
   </div>

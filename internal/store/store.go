@@ -260,6 +260,115 @@ func boolInt(b bool) int {
 	return 0
 }
 
+// Users returns the mailboxes for the users list.
+//
+// includeInactive exists because the list used to hide them: a mailbox that was
+// disabled in the panel (or that lives only in the server's own passwd file)
+// simply was not there, which is indistinguishable from "my user disappeared
+// again". The filter is opt-in so the default view stays short.
+func (s *Store) Users(ctx context.Context, includeInactive bool) ([]models.User, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin users tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	query := `
+        SELECT u.id, u.domain_id, u.username, u.email, u.password_hash,
+               u.quota_mb, u.active, u.is_admin, u.last_login,
+               u.created_at, u.updated_at, d.name
+        FROM users u
+        JOIN domains d ON d.id = u.domain_id
+        WHERE d.active = 1`
+	if !includeInactive {
+		query += ` AND u.active = 1`
+	}
+	query += ` ORDER BY d.name, u.username`
+
+	rows, err := tx.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+
+	var out []models.User
+	for rows.Next() {
+		var u models.User
+		var active, isAdmin int
+		var lastLogin sql.NullTime
+		if err := rows.Scan(
+			&u.ID, &u.DomainID, &u.Username, &u.Email, &u.PasswordHash,
+			&u.QuotaMB, &active, &isAdmin, &lastLogin,
+			&u.CreatedAt, &u.UpdatedAt, &u.DomainName,
+		); err != nil {
+			return nil, fmt.Errorf("scan user: %w", err)
+		}
+		u.Active = active == 1
+		u.IsAdmin = isAdmin == 1
+		if lastLogin.Valid {
+			u.LastLogin = &lastLogin.Time
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// ExistingKeysTx returns the identifiers already in the database, for the
+// comparison the "Import from server" flow needs. It is read inside the caller's
+// transaction: adopt must decide on the same snapshot it writes to.
+//
+// Inactive rows count as existing. Importing a mailbox that was deliberately
+// disabled would trip the unique index, and the operator would see a constraint
+// error instead of "already imported".
+func (s *Store) ExistingKeysTx(ctx context.Context, tx *sql.Tx) (domains, emails, aliases map[string]bool, err error) {
+	domains, err = stringSet(ctx, tx, `SELECT name FROM domains`)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	emails, err = stringSet(ctx, tx, `SELECT LOWER(email) FROM users`)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	aliases = map[string]bool{}
+	rows, err := tx.QueryContext(ctx, `
+        SELECT LOWER(a.source), d.name FROM aliases a JOIN domains d ON d.id = a.domain_id
+    `)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("list aliases: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var source, domain string
+		if err := rows.Scan(&source, &domain); err != nil {
+			return nil, nil, nil, fmt.Errorf("scan alias: %w", err)
+		}
+		aliases[source+"@"+domain] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	return domains, emails, aliases, nil
+}
+
+func stringSet(ctx context.Context, tx *sql.Tx, query string) (map[string]bool, error) {
+	rows, err := tx.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query %q: %w", query, err)
+	}
+	defer rows.Close()
+
+	out := map[string]bool{}
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("scan %q: %w", query, err)
+		}
+		out[v] = true
+	}
+	return out, rows.Err()
+}
+
 // Snapshot loads the full state the reconciler needs, in one consistent read.
 func (s *Store) Snapshot(ctx context.Context) (*models.Snapshot, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})

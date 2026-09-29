@@ -1,51 +1,65 @@
-{{define "dns_check_results"}}
-{{if .Checks}}
-<div class="list">
-  {{range .Checks}}
-  <div class="card mb-2">
-    <div class="card-body">
-      <div class="form-row">
-        <span class="strong text-sm">{{.Expected.Purpose}}</span>
-        <span class="badge">{{.Expected.Type}}</span>
-        {{if eq .Status "ok"}}<span class="badge ok">✓ OK</span>
-        {{else if eq .Status "mismatch"}}<span class="badge warn">⚠ mismatch</span>
-        {{else if eq .Status "missing"}}<span class="badge err">✗ missing</span>
-        {{else}}<span class="badge">{{.Status}}</span>{{end}}
-      </div>
+{{define "dns_check_results"}}{{template "dns_records_table" .}}{{end}}
 
-      <div class="code mt-2">
-        <div>{{.Expected.Name}}</div>
-        {{if eq .Expected.Type "MX"}}
-        <div class="dim">priority {{.Expected.Priority}} → {{.Expected.Value}}</div>
-        {{else}}
-        <div class="dim">{{.Expected.Value}}</div>
-        {{end}}
-      </div>
-
-      {{if .Observed}}
-      <div class="dim text-xs mt-2">
-        Observed: <span class="mono">{{range .Observed.Values}}{{.}} {{end}}</span>
-      </div>
-      {{end}}
-      {{if .Message}}
-      <div class="text-xs mt-1 {{if eq .Status "ok"}}dim{{else if eq .Status "mismatch"}}warn-text{{else}}err-text{{end}}">
-        {{.Message}}
-      </div>
-      {{end}}
-
-      <div class="form-row mt-2">
-        <button type="button" class="btn btn-sm" data-copy-value="{{.Expected.Value}}">Copy value</button>
-      </div>
-    </div>
-  </div>
-  {{end}}
-</div>
+{{/* dns_records_table is rendered by the DNS page and by the check endpoint, so
+     the records and their statuses can never be out of step: the same rows are
+     shown before and after a check, only the status column changes. */}}
+{{define "dns_records_table"}}
+{{if not .Rows}}
+<div class="card"><div class="empty">
+  <span class="empty-title">No records to show</span>
+  <span class="empty-hint">The panel could not work out any record for this domain.</span>
+</div></div>
 {{else}}
-<div class="card">
-  <div class="empty">
-    <span class="empty-title">No records were checked</span>
-    <span class="empty-hint">The checker returned nothing; try again in a moment.</span>
-  </div>
+<div class="table-wrap">
+  <table class="table table-stack">
+    <thead>
+      <tr>
+        <th>What it is for</th>
+        <th>Type</th>
+        <th>Name / host</th>
+        <th>Value</th>
+        <th>Public DNS</th>
+        <th class="table-actions">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Rows}}
+      <tr>
+        <td data-label="Purpose">
+          <span class="strong">{{.Purpose}}</span>
+          {{if .Required}}<span class="badge warn">required</span>{{else}}<span class="badge">recommended</span>{{end}}
+          {{if .Manual}}<span class="badge info">provider</span>{{end}}
+          {{if .Note}}<div class="dim text-xs">{{.Note}}</div>{{end}}
+        </td>
+        <td data-label="Type"><span class="badge">{{.Type}}</span></td>
+        <td data-label="Name"><span class="mono text-xs break-all">{{.Name}}</span></td>
+        <td data-label="Value">
+          <span class="mono text-xs break-all">{{if eq .Type "MX"}}{{.Priority}} {{.Value}}{{else}}{{.Value}}{{end}}</span>
+        </td>
+        <td data-label="Public DNS">
+          {{if eq .Status "ok"}}<span class="badge ok">✓ matches</span>
+          {{else if eq .Status "mismatch"}}<span class="badge warn">⚠ differs</span>
+          {{else if eq .Status "missing"}}<span class="badge err">✗ missing</span>
+          {{else if eq .Status "error"}}<span class="badge err">? lookup failed</span>
+          {{else if eq .Status "manual"}}<span class="badge info">set at provider</span>
+          {{else}}<span class="badge">not checked</span>{{end}}
+          {{if .Message}}<div class="text-xs {{if eq .Status "ok"}}dim{{else if eq .Status "mismatch"}}warn-text{{else if eq .Status "unchecked"}}dim{{else}}err-text{{end}}">{{.Message}}</div>{{end}}
+          {{if .Observed}}<div class="dim text-xs">published: <span class="mono">{{range .Observed}}{{.}} {{end}}</span></div>{{end}}
+        </td>
+        <td class="table-actions" data-label="">
+          <div class="btn-group">
+            <button type="button" class="btn btn-sm" data-copy-value="{{.Value}}">Copy</button>
+            {{if ne .Status "manual"}}
+            <button class="btn btn-sm" hx-get="/domains/{{$.Domain.ID}}/dns/check?only={{.Purpose}}"
+                    hx-target="#dns-results" hx-swap="innerHTML">Check</button>
+            {{end}}
+          </div>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
 </div>
 {{end}}
 {{end}}
+

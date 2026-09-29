@@ -19,6 +19,7 @@ const (
 	TypeMX    RecordType = "MX"
 	TypeTXT   RecordType = "TXT"
 	TypeCNAME RecordType = "CNAME"
+	TypePTR   RecordType = "PTR"
 )
 
 // Expected is a record we want to exist for a domain.
@@ -106,6 +107,8 @@ func (c *Checker) checkOne(ctx context.Context, exp Expected) CheckResult {
 		obs, err = c.lookupMX(queryCtx, exp.Name)
 	case TypeTXT:
 		obs, err = c.lookupTXT(queryCtx, exp.Name)
+	case TypePTR:
+		obs, err = c.lookupPTR(queryCtx, exp.Name)
 	}
 
 	if err != nil {
@@ -128,15 +131,15 @@ func (c *Checker) checkOne(ctx context.Context, exp Expected) CheckResult {
 	}
 
 	// Compare values
-	if matchRecord(exp, obs) {
+	if ok, detail := matchRecord(exp, obs); ok {
 		res.Status = "ok"
 		res.Message = "matches"
 		return res
+	} else {
+		res.Status = "mismatch"
+		res.Message = detail
+		return res
 	}
-
-	res.Status = "mismatch"
-	res.Message = fmt.Sprintf("expected %q, found %q", exp.Value, obs.Values)
-	return res
 }
 
 func (c *Checker) lookupSingle(ctx context.Context, name string, t RecordType) (*Observed, error) {
@@ -231,51 +234,40 @@ func (c *Checker) lookupTXT(ctx context.Context, name string) (*Observed, error)
 	return &Observed{Type: TypeTXT, Name: name, Values: values, TTL: minTTL}, nil
 }
 
-func matchRecord(exp Expected, obs *Observed) bool {
-	switch exp.Type {
-	case TypeTXT:
-		// Normalize whitespace — DKIM records are often split across chunks
-		want := normalizeTXT(exp.Value)
-		for _, v := range obs.Values {
-			if normalizeTXT(v) == want {
-				return true
-			}
-		}
-		// For SPF/DMARC, allow prefix match (v=spf1 is enough to find it)
-		if strings.HasPrefix(exp.Value, "v=spf1") || strings.HasPrefix(exp.Value, "v=DMARC1") {
-			for _, v := range obs.Values {
-				if strings.HasPrefix(v, exp.Value[:7]) {
-					return true
-				}
-			}
-		}
-		return false
-
-	case TypeMX:
-		want := fmt.Sprintf("%d %s", exp.Priority, exp.Value)
-		for _, v := range obs.Values {
-			if v == want {
-				return true
-			}
-		}
-		// Allow match without priority (some DNS providers reorder)
-		for _, v := range obs.Values {
-			parts := strings.SplitN(v, " ", 2)
-			if len(parts) == 2 && parts[1] == exp.Value {
-				return true
-			}
-		}
-		return false
-
-	case TypeA, TypeAAAA, TypeCNAME:
-		for _, v := range obs.Values {
-			if v == exp.Value {
-				return true
-			}
-		}
-		return false
+// lookupPTR resolves a reverse zone. expected.Name is the reverse name
+// (10.113.0.203.in-addr.arpa); an IP is accepted too, so a caller cannot get the
+// spelling wrong.
+func (c *Checker) lookupPTR(ctx context.Context, name string) (*Observed, error) {
+	if ip := net.ParseIP(name); ip != nil {
+		name = reverseAddr(ip.String())
 	}
-	return false
+
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(name), dns.TypePTR)
+
+	client := &dns.Client{Timeout: c.timeout}
+	resp, _, err := client.ExchangeContext(ctx, m, c.resolver)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Rcode == dns.RcodeNameError {
+		return nil, nil
+	}
+	if resp.Rcode != dns.RcodeSuccess {
+		return nil, fmt.Errorf("DNS response code: %s", dns.RcodeToString[resp.Rcode])
+	}
+
+	var values []string
+	var minTTL uint32
+	for _, rr := range resp.Answer {
+		if ptr, ok := rr.(*dns.PTR); ok {
+			values = append(values, strings.TrimSuffix(ptr.Ptr, "."))
+			if minTTL == 0 || rr.Header().Ttl < minTTL {
+				minTTL = rr.Header().Ttl
+			}
+		}
+	}
+	return &Observed{Type: TypePTR, Name: strings.TrimSuffix(name, "."), Values: values, TTL: minTTL}, nil
 }
 
 func normalizeTXT(s string) string {
