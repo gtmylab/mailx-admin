@@ -3186,6 +3186,21 @@ verify_admin_panel_web() {
     fi
 
     log_info "Panel answered through Apache (HTTP ${code})"
+
+    # The probe above passes with -k, so it cannot tell a trusted certificate
+    # from a hostname mismatch. SSL setup tries to include admin.<domain> in the
+    # SANs but retries without it when that fails, and a certificate missing the
+    # panel name leaves the port answering while every browser shows a TLS
+    # warning. Report it (a warning, not a failure) so the log states the truth.
+    if curl -sS -o /dev/null --max-time 15 \
+            --resolve "${server_name}:${port}:127.0.0.1" \
+            "https://${server_name}:${port}/" > /dev/null 2>&1; then
+        log_info "TLS certificate is valid for ${server_name}"
+    else
+        log_warning "TLS certificate does not cover ${server_name} — browsers will show a warning"
+        log_warning "Fix: certbot --apache -d ${server_name} (then re-run menu option 21)"
+    fi
+
     return 0
 }
 
