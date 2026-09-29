@@ -92,10 +92,21 @@ func (c *DBConfig) ToDriverConfig() db.Config {
 	out := db.Config{
 		Driver: db.Driver(c.Driver),
 	}
-	switch c.Driver {
-	case "sqlite":
+
+	// Normalize first: the driver decides which section supplies the DSN, and
+	// "sqlite"/"sqlite3" (or "postgres"/"pgx") must reach the same section. An
+	// unrecognized name is passed through unchanged so db.Open reports it as an
+	// unknown driver.
+	driver, ok := db.NormalizeDriver(c.Driver)
+	if !ok {
+		return out
+	}
+	out.Driver = driver
+
+	switch driver {
+	case db.DriverSQLite:
 		out.SQLitePath = c.SQLite.Path
-	case "postgres":
+	case db.DriverPostgres:
 		out.PGHost = c.Postgres.Host
 		out.PGPort = c.Postgres.Port
 		out.PGUser = c.Postgres.User

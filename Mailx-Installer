@@ -521,13 +521,40 @@ verify_postfix_dovecot_connection() {
 
 test_sasl_authentication() {
     log_info "Testing SASL authentication..."
-    echo "auth plain" | nc -w 2 localhost 587 2>/dev/null | grep -q "VXNlcm5hbWU6" && \
-        log_info "SASL PLAIN authentication available" || \
-        log_warning "SASL PLAIN authentication NOT available"
 
-    echo "auth login" | nc -w 2 localhost 587 2>/dev/null | grep -q "VXNlcm5hbWU6" && \
-        log_info "SASL LOGIN authentication available" || \
+    # Ask for the SMTP greeting and capability list. It has to be a real
+    # dialogue: Postfix answers a bare "AUTH PLAIN" with "503 5.5.1 Error: send
+    # HELO/EHLO first", so the previous version reported both mechanisms as
+    # unavailable on every install even when SASL worked. /dev/tcp replaces nc,
+    # which a minimal Ubuntu does not install — the old check failed for that
+    # reason too.
+    local caps="" attempt
+    for attempt in 1 2 3; do
+        caps=$(timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/587 && printf "EHLO localhost\r\nQUIT\r\n" >&3 && cat <&3' 2>/dev/null || true)
+
+        if echo "$caps" | grep -qiE '^250[- ]AUTH.*PLAIN'; then
+            break
+        fi
+        sleep 2
+    done
+
+    if [ -z "$caps" ]; then
+        log_warning "No SMTP greeting on 127.0.0.1:587 — SASL could not be verified"
+        log_warning "Check: ss -ltnp | grep 587 ; journalctl -u postfix -n 40"
+        return 0
+    fi
+
+    if echo "$caps" | grep -qiE '^250[- ]AUTH.*PLAIN'; then
+        log_info "SASL PLAIN authentication available"
+    else
+        log_warning "SASL PLAIN authentication NOT available"
+    fi
+
+    if echo "$caps" | grep -qiE '^250[- ]AUTH.*LOGIN'; then
+        log_info "SASL LOGIN authentication available"
+    else
         log_warning "SASL LOGIN authentication NOT available"
+    fi
 }
 
 update_postfix_config() {
@@ -3199,6 +3226,11 @@ install_mailx_admin_panel() {
     log_info "Running database migrations..."
     if ! "$ADMIN_BINARY_PATH" migrate --config "$ADMIN_CONFIG_FILE"; then
         log_error "Database migration failed"
+        # Step 13e keeps an already-installed binary as-is, so a host that has a
+        # previous release keeps its bugs until it is replaced on purpose.
+        if [ -z "$MAILX_ADMIN_FORCE_REINSTALL" ]; then
+            log_warning "A previously installed release is kept as-is; re-run with MAILX_ADMIN_FORCE_REINSTALL=1 to fetch the newest build"
+        fi
         return 1
     fi
 
