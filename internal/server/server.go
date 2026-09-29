@@ -47,6 +47,18 @@ type Server struct {
 	templates *templateSet
 	logger    *slog.Logger
 	metrics   *metrics.Collector
+
+	// startedAt and timeouts feed /healthz and /healthz/stacks: how long this
+	// process has been serving, and the requests that ran out of budget (see
+	// timeout.go) — the two facts needed to tell "the service is down" apart
+	// from "every request is waiting for the same resource".
+	startedAt time.Time
+	timeouts  *timeoutLog
+
+	// budgetOverride replaces the per-route request budget. Only the timeout
+	// tests set it: they exercise the real middleware, and waiting 15s for a
+	// read timeout would make the suite unusable.
+	budgetOverride time.Duration
 }
 
 func New(cfg *config.Config, database *sql.DB, st *store.Store, rec *reconciler.Reconciler, logger *slog.Logger) (*Server, error) {
@@ -88,6 +100,8 @@ func New(cfg *config.Config, database *sql.DB, st *store.Store, rec *reconciler.
 		templates: tmpl,
 		logger:    logger,
 		metrics:   metrics.New(database, cfg.Server.Hostname, version.Get()),
+		startedAt: time.Now(),
+		timeouts:  newTimeoutLog(timeoutHistory),
 	}, nil
 }
 

@@ -1,12 +1,26 @@
 package dkim
 
 import (
-	"bytes"
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/gtmylab/mailx-admin/internal/execx"
+)
+
+// Budgets for the two helpers this package runs. opendkim-genkey had none at
+// all before this release, and it runs inside the request that adds (or
+// rotates) a domain: a key generation stuck on a starved entropy pool, or a
+// `chown` waiting on a hanging NSS lookup, blocked that request forever — no
+// error, no log line, a browser that never stops loading. The DKIM key is
+// generated outside the transaction on purpose (see mutations.CreateDomain),
+// but "outside the transaction" is not the same as "bounded".
+const (
+	genkeyTimeout = 60 * time.Second
+	chownTimeout  = 10 * time.Second
 )
 
 type Result struct {
@@ -16,13 +30,13 @@ type Result struct {
 }
 
 // Generate creates a new DKIM key pair for `domain` under `baseDir/keys/<domain>/`.
-func Generate(domain, baseDir string) (*Result, error) {
-	return GenerateWithSelector(domain, baseDir, "default", false)
+func Generate(ctx context.Context, domain, baseDir string) (*Result, error) {
+	return GenerateWithSelector(ctx, domain, baseDir, "default", false)
 }
 
 // GenerateWithSelector allows overriding the selector.
 // If `overwrite` is false and the key exists, it's reused (returns the existing record).
-func GenerateWithSelector(domain, baseDir, selector string, overwrite bool) (*Result, error) {
+func GenerateWithSelector(ctx context.Context, domain, baseDir, selector string, overwrite bool) (*Result, error) {
 	keyDir := filepath.Join(baseDir, "keys", domain)
 	privKeyPath := filepath.Join(keyDir, selector+".private")
 	txtPath := filepath.Join(keyDir, selector+".txt")
@@ -45,17 +59,15 @@ func GenerateWithSelector(domain, baseDir, selector string, overwrite bool) (*Re
 		return nil, fmt.Errorf("mkdir %s: %w", keyDir, err)
 	}
 
-	// opendkim-genkey runs in the current directory
-	cmd := exec.Command("opendkim-genkey",
+	// opendkim-genkey writes into -D; -s/-d name the selector and domain.
+	out, err := execx.Output(ctx, genkeyTimeout, "opendkim-genkey",
 		"-s", selector,
 		"-d", domain,
 		"-b", "2048",
 		"-D", keyDir,
 	)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("opendkim-genkey: %w: %s", err, stderr.String())
+	if err != nil {
+		return nil, fmt.Errorf("opendkim-genkey: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
 	// Fix permissions
@@ -63,7 +75,7 @@ func GenerateWithSelector(domain, baseDir, selector string, overwrite bool) (*Re
 		return nil, err
 	}
 	_ = os.Chmod(txtPath, 0o644)
-	_ = exec.Command("chown", "opendkim:opendkim", privKeyPath, txtPath).Run()
+	_ = execx.Run(ctx, chownTimeout, "chown", "opendkim:opendkim", privKeyPath, txtPath)
 
 	pub, err := readPublicRecord(txtPath)
 	if err != nil {

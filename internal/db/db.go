@@ -102,11 +102,7 @@ func Open(cfg Config) (*DB, error) {
 		if cfg.SQLitePath == "" {
 			return nil, fmt.Errorf("sqlite: no database path configured (set [database.sqlite] path in admin.toml)")
 		}
-		// WAL for concurrent reads, busy_timeout to avoid "database locked"
-		dsn = fmt.Sprintf(
-			"file:%s?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL",
-			cfg.SQLitePath,
-		)
+		dsn = sqliteDSN(cfg.SQLitePath)
 	case DriverPostgres:
 		if cfg.PGHost == "" || cfg.PGDatabase == "" {
 			return nil, fmt.Errorf("postgres: host and dbname must be set ([database.postgres] in admin.toml)")
@@ -124,14 +120,13 @@ func Open(cfg Config) (*DB, error) {
 		return nil, fmt.Errorf("open %s: %w", cfg.Driver, err)
 	}
 
-	// Connection pool tuning. SQLite wants 1 writer; Postgres is fine with more.
-	if cfg.Driver == DriverSQLite {
-		sqlDB.SetMaxOpenConns(1) // single writer, avoids SQLITE_BUSY entirely
-		sqlDB.SetMaxIdleConns(1)
-	} else {
-		sqlDB.SetMaxOpenConns(20)
-		sqlDB.SetMaxIdleConns(5)
-		sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	// Connection pool tuning. See poolSettings for why SQLite no longer gets a
+	// single connection.
+	maxOpen, maxIdle, maxLifetime := poolSettings(cfg.Driver)
+	sqlDB.SetMaxOpenConns(maxOpen)
+	sqlDB.SetMaxIdleConns(maxIdle)
+	if maxLifetime > 0 {
+		sqlDB.SetConnMaxLifetime(maxLifetime)
 	}
 
 	if err := sqlDB.Ping(); err != nil {
@@ -139,7 +134,7 @@ func Open(cfg Config) (*DB, error) {
 	}
 
 	// For SQLite, set an aggressive page cache and enable memory-mapped I/O.
-	// These are safe for our workload (single writer, mostly reads).
+	// These are safe for our workload (a single writer at a time, mostly reads).
 	if cfg.Driver == DriverSQLite {
 		pragmas := []string{
 			"PRAGMA cache_size = -64000",   // 64 MB page cache
@@ -167,3 +162,54 @@ func (d *DB) Migrate(ctx context.Context) error {
 }
 
 func (d *DB) Driver() Driver { return d.driver }
+
+// SQLite connection settings.
+//
+// v1.0.5 opened SQLite with SetMaxOpenConns(1) "to avoid SQLITE_BUSY entirely",
+// and that turned a local problem into a global outage. With a single connection
+// *any* holder becomes the panel's only connection: one abandoned statement, one
+// slow full scan, one transaction that never commits — and from then on every
+// other request waits for a connection that nobody releases. HTTP has no way to
+// signal that: the handlers block in database/sql with no deadline of their own
+// before the request budget applies (the session lookup runs first), so the
+// browser shows a spinner forever and the journal shows nothing at all. That is
+// exactly the v1.0.3/v1.0.4 freeze, and it is why the fix cannot be limited to
+// "don't audit inside the transaction".
+//
+// WAL already allows many readers next to the one writer, so the pool can be
+// widened safely as long as writers do not start in a deferred transaction and
+// fail halfway through (SQLITE_BUSY on upgrade). Two settings make that safe:
+//
+//   - _txlock=immediate makes every transaction take the write lock at BEGIN,
+//     so a second writer waits on _busy_timeout instead of dying mid-statement.
+//   - _busy_timeout=5000 gives that wait a bound: after 5s the writer gets
+//     "database is locked", an error the panel can show, instead of hanging.
+//
+// Everything in this schema that is not a request-scoped transaction is a short
+// statement (the log ingester's 2s batch, the sync recorder, the metrics
+// collector), so 8 connections is ample and leaves the panel a free connection
+// even while several of them are busy.
+const (
+	sqliteMaxOpenConns = 8
+	sqliteMaxIdleConns = 8
+)
+
+// sqliteDSN builds the connection string for the SQLite driver. Kept as a
+// function so the pragmas are visible and testable without cgo.
+func sqliteDSN(path string) string {
+	return fmt.Sprintf(
+		"file:%s?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_txlock=immediate",
+		path,
+	)
+}
+
+// poolSettings returns how many connections the driver gets. SQLite keeps idle
+// connections forever (opening one costs a WAL index read, and a server that
+// frequently touches the database should not pay that every time); Postgres
+// recycles them because the server may itself restart.
+func poolSettings(driver Driver) (maxOpen, maxIdle int, maxLifetime time.Duration) {
+	if driver == DriverSQLite {
+		return sqliteMaxOpenConns, sqliteMaxIdleConns, 0
+	}
+	return 20, 5, 30 * time.Minute
+}

@@ -12,10 +12,17 @@ import (
 
 	"github.com/gtmylab/mailx-admin/internal/audit"
 	"github.com/gtmylab/mailx-admin/internal/auth"
+	"github.com/gtmylab/mailx-admin/internal/execx"
 	"github.com/gtmylab/mailx-admin/internal/ssl"
 )
 
 const letsencryptDir = "/etc/letsencrypt"
+
+// sslHelperTimeout bounds the two status probes on the SSL page. Both answer in
+// milliseconds normally (systemd's unit state, the root crontab); a `crontab -l`
+// that waits on a hanging NSS lookup or a systemd that is busy reloading must
+// not hold the page.
+const sslHelperTimeout = 10 * time.Second
 
 func (s *Server) handleSSLPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -281,12 +288,12 @@ func (s *Server) sendMail(ctx context.Context, to, subject, body string) error {
 }
 
 func checkSystemdUnit(name string) bool {
-	out, _ := exec.Command("systemctl", "is-enabled", name).Output()
+	out, _ := execx.Output(context.Background(), sslHelperTimeout, "systemctl", "is-enabled", name)
 	return strings.TrimSpace(string(out)) == "enabled"
 }
 
 func checkCrontab(pattern string) bool {
-	out, _ := exec.Command("crontab", "-l").Output()
+	out, _ := execx.Output(context.Background(), sslHelperTimeout, "crontab", "-l")
 	return strings.Contains(string(out), pattern)
 }
 

@@ -26,7 +26,7 @@ func (s *Service) CreateDomain(ctx context.Context, actor Actor, in CreateDomain
 	// Generate DKIM key OUTSIDE the tx (it touches the filesystem and is slow).
 	var dkimPrivPath, dkimPubRecord string
 	if in.GenerateDKIM {
-		result, err := dkim.Generate(in.Name, "/etc/opendkim")
+		result, err := dkim.Generate(ctx, in.Name, "/etc/opendkim")
 		if err != nil {
 			return nil, fmt.Errorf("generate DKIM: %w", err)
 		}
@@ -244,7 +244,7 @@ func (s *Service) RegenerateDKIM(ctx context.Context, actor Actor, domainID int6
 	// Rotate: generate new key with a timestamped selector, so the old
 	// DNS record can coexist during propagation.
 	newSelector := "default" // Phase 4 will make this time-based for smooth rotation
-	result, err := dkim.GenerateWithSelector(name, "/etc/opendkim", newSelector, true)
+	result, err := dkim.GenerateWithSelector(ctx, name, "/etc/opendkim", newSelector, true)
 	if err != nil {
 		return nil, fmt.Errorf("generate DKIM: %w", err)
 	}

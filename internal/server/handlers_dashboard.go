@@ -3,9 +3,18 @@ package server
 import (
 	"context"
 	"net/http"
-	"os/exec"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/gtmylab/mailx-admin/internal/execx"
 )
+
+// serviceCheckTimeout bounds one `systemctl is-active`. The dashboard renders
+// this list on every load and the health fragment refreshes it on a timer, so
+// the checks run concurrently: five sequential calls that each wait for a slow
+// systemd is five times the page's latency for one line of text each.
+const serviceCheckTimeout = 4 * time.Second
 
 type serviceStatus struct {
 	Name   string
@@ -38,17 +47,37 @@ func (s *Server) handleServiceHealthPartial(w http.ResponseWriter, r *http.Reque
 	})
 }
 
+// checkServices reports systemd's view of the mail services, in parallel.
 func checkServices(ctx context.Context) []serviceStatus {
 	names := []string{"postfix", "dovecot", "opendkim", "mysql", "apache2"}
-	out := make([]serviceStatus, 0, len(names))
-	for _, n := range names {
-		cmd := exec.CommandContext(ctx, "systemctl", "is-active", n)
-		b, _ := cmd.Output()
-		status := strings.TrimSpace(string(b))
-		if status == "" {
-			status = "unknown"
-		}
-		out = append(out, serviceStatus{Name: n, Status: status})
+	out := make([]serviceStatus, len(names))
+
+	var wg sync.WaitGroup
+	for i, n := range names {
+		wg.Add(1)
+		go func(i int, n string) {
+			defer wg.Done()
+			out[i] = serviceStatus{Name: n, Status: serviceState(ctx, n)}
+		}(i, n)
 	}
+	wg.Wait()
 	return out
+}
+
+// serviceState asks systemd about one unit. `systemctl is-active` prints the
+// state on stdout even when it exits non-zero (that is how it reports
+// "inactive"), so the output is the answer; an empty output means the command
+// could not be run at all, which is not the same as "inactive".
+func serviceState(ctx context.Context, name string) string {
+	// A fresh budget per unit: the request context is shared, but one slow
+	// service must not eat the time the others need.
+	ctx, cancel := context.WithTimeout(ctx, serviceCheckTimeout)
+	defer cancel()
+
+	b, _ := execx.Output(ctx, serviceCheckTimeout, "systemctl", "is-active", name)
+	status := strings.TrimSpace(string(b))
+	if status == "" {
+		return "unknown"
+	}
+	return status
 }

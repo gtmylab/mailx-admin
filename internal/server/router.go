@@ -14,6 +14,12 @@ func (s *Server) buildRouter() http.Handler {
 
 	mux.Handle("GET /metrics", s.metrics.Handler())
 
+	// Liveness, deliberately unauthenticated and database-free enough to answer
+	// while everything else is stuck: this is what an operator (or a monitor)
+	// opens when the login page itself spins. The goroutine dump it points at
+	// needs a session.
+	mux.HandleFunc("GET /healthz", s.handleHealth)
+
 	// Auth (no session, no CSRF — login itself needs protection but the
 	// session cookie can't exist yet, so we use Origin/Referer checking
 	// in the login handler instead)
@@ -28,6 +34,10 @@ func (s *Server) buildRouter() http.Handler {
 
 	// Service health (HTMX partial refreshed by the dashboard)
 	protected.HandleFunc("GET /health/services", s.handleServiceHealthPartial)
+
+	// Goroutine dump: the answer to "what is the panel waiting for?" while it
+	// is waiting for it (see health.go).
+	protected.HandleFunc("GET /healthz/stacks", s.handleHealthStacks)
 
 	// Users
 	protected.HandleFunc("GET /users", s.handleUsersList)
@@ -121,9 +131,12 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("DELETE /backup/{name}", s.handleBackupDelete)
 	protected.HandleFunc("POST /backup/restore/{name}", s.handleBackupRestore)
 
-	// Every protected request gets a deadline (see timeout.go). The auth check
-	// runs first so an expired session is rejected without borrowing a budget.
-	mux.Handle("/", auth.RequireAuth(requestTimeout(protected)))
+	// Every protected request gets a deadline *and* a guaranteed answer (see
+	// timeout.go). The budget wraps the auth check on purpose: the session
+	// lookup is itself a database query, and with it outside the budget a
+	// wedged database produced a panel where every URL — including /login —
+	// spun forever without writing a single log line.
+	mux.Handle("/", auth.RequireAuth(s.requestTimeout(protected)))
 
 	// CSRF middleware wraps everything except GET/HEAD/OPTIONS
 	return s.sessions.Middleware(s.csrf.Middleware(mux))

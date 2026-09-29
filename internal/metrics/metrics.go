@@ -1,15 +1,28 @@
 package metrics
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gtmylab/mailx-admin/internal/execx"
 	"github.com/gtmylab/mailx-admin/internal/version"
+)
+
+// Budgets. Every helper here is polled on a timer or from a request, and
+// none of them is worth waiting for: `systemctl is-active` answers in
+// milliseconds, `postqueue -p` in tens of them. Without a deadline a single
+// wedged systemd (or a mail queue big enough that postqueue takes a minute)
+// blocked the whole refresh loop — and, on the /metrics endpoint, the request
+// that was reading it.
+const (
+	unitCheckTimeout = 5 * time.Second
+	queueTimeout     = 10 * time.Second
+	queryTimeout     = 5 * time.Second
 )
 
 type Collector struct {
@@ -59,18 +72,23 @@ func (c *Collector) refresh() {
 }
 
 func isActive(svc string) bool {
-	err := exec.Command("systemctl", "is-active", "--quiet", svc).Run()
+	err := execx.Run(context.Background(), unitCheckTimeout, "systemctl", "is-active", "--quiet", svc)
 	return err == nil
 }
 
 func (c *Collector) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		c.write(w)
+		// The scrape gets its own budget. These queries are short, and a
+		// collector holding a connection while the panel needs one is exactly
+		// what /metrics must never become.
+		ctx, cancel := context.WithTimeout(r.Context(), queryTimeout)
+		defer cancel()
+		c.write(ctx, w)
 	})
 }
 
-func (c *Collector) write(w http.ResponseWriter) {
+func (c *Collector) write(ctx context.Context, w http.ResponseWriter) {
 	// Process-level metrics. The build labels are injected by -ldflags, so on
 	// a Linux deployment a real version/commit plus stamped="yes" is the proof
 	// that a release binary is running here and not a bare "go build".
@@ -101,9 +119,9 @@ func (c *Collector) write(w http.ResponseWriter) {
 	// Domain / user counts
 	if c.db != nil {
 		var domainCount, userCount, aliasCount int
-		_ = c.db.QueryRow(`SELECT COUNT(*) FROM domains WHERE active = 1`).Scan(&domainCount)
-		_ = c.db.QueryRow(`SELECT COUNT(*) FROM users WHERE active = 1`).Scan(&userCount)
-		_ = c.db.QueryRow(`SELECT COUNT(*) FROM aliases`).Scan(&aliasCount)
+		_ = c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM domains WHERE active = 1`).Scan(&domainCount)
+		_ = c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE active = 1`).Scan(&userCount)
+		_ = c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM aliases`).Scan(&aliasCount)
 
 		fmt.Fprintf(w, "# HELP mailx_domains_total Active domains\n")
 		fmt.Fprintf(w, "# TYPE mailx_domains_total gauge\n")
@@ -119,19 +137,19 @@ func (c *Collector) write(w http.ResponseWriter) {
 
 		// Mail events in the last 5 minutes
 		var recentSent, recentDeferred, recentBounced, recentRejected int
-		_ = c.db.QueryRow(`
+		_ = c.db.QueryRowContext(ctx, `
             SELECT COUNT(*) FROM mail_events
             WHERE ts > datetime('now', '-5 minutes') AND status = 'sent'
         `).Scan(&recentSent)
-		_ = c.db.QueryRow(`
+		_ = c.db.QueryRowContext(ctx, `
             SELECT COUNT(*) FROM mail_events
             WHERE ts > datetime('now', '-5 minutes') AND status = 'deferred'
         `).Scan(&recentDeferred)
-		_ = c.db.QueryRow(`
+		_ = c.db.QueryRowContext(ctx, `
             SELECT COUNT(*) FROM mail_events
             WHERE ts > datetime('now', '-5 minutes') AND status = 'bounced'
         `).Scan(&recentBounced)
-		_ = c.db.QueryRow(`
+		_ = c.db.QueryRowContext(ctx, `
             SELECT COUNT(*) FROM mail_events
             WHERE ts > datetime('now', '-5 minutes') AND status = 'rejected'
         `).Scan(&recentRejected)
@@ -152,7 +170,7 @@ func (c *Collector) write(w http.ResponseWriter) {
 
 	// SSL cert expiry
 	if c.db != nil {
-		rows, err := c.db.Query(`
+		rows, err := c.db.QueryContext(ctx, `
             SELECT domain_id, days_left FROM ssl_certs
         `)
 		if err == nil {
@@ -180,7 +198,7 @@ func yesNo(ok bool) string {
 }
 
 func queueCount() (int, error) {
-	out, err := exec.Command("postqueue", "-p").Output()
+	out, err := execx.Output(context.Background(), queueTimeout, "postqueue", "-p")
 	if err != nil {
 		return 0, err
 	}
