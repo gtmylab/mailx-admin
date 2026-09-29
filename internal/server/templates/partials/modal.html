@@ -1,19 +1,18 @@
 {{define "modal"}}
-<div x-data="{ open: true }"
-     x-show="open"
-     x-cloak
-     @keydown.escape.window="open = false; $dispatch('close-modal')"
-     class="fixed inset-0 z-50 flex items-center justify-center p-4"
-     style="background: rgba(0,0,0,0.7)">
-  <div @click.outside="open = false; $dispatch('close-modal')"
-       class="w-full {{.Width | default "max-w-md"}} rounded-lg border border-slate-800 bg-slate-900 shadow-2xl">
-    <header class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
-      <h3 class="font-medium">{{.Title}}</h3>
-      <button type="button"
-              @click="open = false; $dispatch('close-modal')"
-              class="text-slate-500 hover:text-slate-200">✕</button>
+{{/* Dialog shell. Deliberately free of Alpine: the markup is only ever inserted
+     into #modal-host by HTMX, so it must be visible on arrival and closable
+     (button, backdrop click, Escape) even if a vendor script failed to load.
+     Closing clears #modal-host - see closeModal() in static/app.js. */}}
+<div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal-panel {{.Width | default "max-w-md"}}">
+    <header class="modal-header">
+      <h3 id="modal-title">{{.Title}}</h3>
+      <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
     </header>
-    <div class="p-5">
+    <div class="modal-body">
       {{template "modal_body" .}}
     </div>
   </div>

@@ -1,7 +1,39 @@
 {{define "nav-item"}}
-<a href="{{.Href}}"
-   class="block rounded px-3 py-1.5 transition
-          {{if .Active}}bg-slate-800 text-slate-100{{else}}text-slate-400 hover:bg-slate-900 hover:text-slate-100{{end}}">
-  {{.Label}}
+<a href="{{.Href}}" class="nav-link{{if .Active}} is-active{{end}}"{{if .Active}} aria-current="page"{{end}}>
+  {{template "nav-icon" .}}
+  <span class="nav-text">{{.Label}}</span>
 </a>
+{{end}}
+
+{{/* nav-icon draws the leading icon for a sidebar entry. The icon is chosen by
+     name so the sidebar stays declarative; {{with}} keeps a missing/empty Icon
+     from reaching eq, which would fail on a nil comparison. */}}
+{{define "nav-icon"}}
+<span class="nav-icon" aria-hidden="true">
+{{- with .Icon}}
+{{- if eq . "dashboard"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 10.8 12 3.5l8.5 7.3"/><path d="M5.5 9.7V20.5h13V9.7"/><path d="M10 20.5v-5h4v5"/></svg>
+{{- else if eq . "domains"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.4 2.6 2.4 14.4 0 17"/><path d="M12 3.5c-2.4 2.6-2.4 14.4 0 17"/></svg>
+{{- else if eq . "users"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.6 20c.6-3.2 2.7-4.9 5.4-4.9s4.8 1.7 5.4 4.9"/><path d="M16 5a3 3 0 0 1 0 6.5"/><path d="M17.4 15.2c1.9.6 2.9 2.2 3.2 4.8"/></svg>
+{{- else if eq . "queue"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2 3.4 7.6 12 12l8.6-4.4L12 3.2Z"/><path d="m3.4 12.4 8.6 4.4 8.6-4.4"/><path d="m3.4 16.9 8.6 4.4 8.6-4.4"/></svg>
+{{- else if eq . "logs"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8l4.5 4.5V20.5H6z"/><path d="M13.5 3.5V8H18"/><path d="M9 12h6M9 15.5h6"/></svg>
+{{- else if eq . "testsend"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 3.5 3.6 10.8l6.9 2.7 2.7 6.9 7.3-16.9Z"/><path d="m10.5 13.5 4-4"/></svg>
+{{- else if eq . "ssl"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2l7 2.6v5.6c0 4.3-2.7 7.6-7 9.4-4.3-1.8-7-5.1-7-9.4V5.8l7-2.6Z"/><path d="m9 12 2.2 2.2L15.5 10"/></svg>
+{{- else if eq . "ports"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="6.5" rx="2"/><rect x="3.5" y="13.5" width="17" height="6.5" rx="2"/><path d="M7 7.2h.01M7 16.7h.01"/></svg>
+{{- else if eq . "audit"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h12v17l-3-2-3 2-3-2-3 2z"/><path d="M9 8.5h6M9 12.5h6"/></svg>
+{{- else if eq . "backup"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><ellipse cx="12" cy="6" rx="7.5" ry="2.8"/><path d="M4.5 6v12c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8V6"/><path d="M4.5 12c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8"/></svg>
+{{- end}}
+{{- else}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="7.5"/></svg>
+{{- end}}
+</span>
 {{end}}

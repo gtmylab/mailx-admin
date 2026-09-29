@@ -1,18 +1,26 @@
 {{define "content"}}
-<div class="rounded-lg border border-slate-800 bg-slate-900">
-  <header class="px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-4">
-    <h2 class="font-medium">{{.Data.Total}} user(s)</h2>
-    <div class="flex items-center gap-2">
-      <input type="search" placeholder="Filter…" name="q"
-             hx-get="/users" hx-trigger="keyup changed delay:200ms"
-             hx-target="#user-table" hx-swap="innerHTML"
-             class="rounded bg-slate-950 border border-slate-800 px-3 py-1.5 text-sm focus:border-emerald-600 focus:outline-none">
-      <button hx-get="/users/new" hx-target="#modal-host" hx-swap="innerHTML"
-              class="rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-sm font-medium">
-        + New user
-      </button>
-    </div>
-  </header>
+<div class="page-header">
+  <div>
+    <h1>Users</h1>
+    <p class="page-sub">{{.Data.Total}} user(s) on this server</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-primary" hx-get="/users/new" hx-target="#modal-host" hx-swap="innerHTML">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+           aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      New user
+    </button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Mailboxes <span class="badge">{{.Data.Total}} user(s)</span></h2>
+    <input class="input input-sm max-w-[250px]" type="search" name="q" value="{{.Data.Query}}"
+           placeholder="Filter by address…" aria-label="Filter users"
+           hx-get="/users" hx-target="#user-table" hx-swap="innerHTML"
+           hx-trigger="keyup changed delay:250ms, search">
+  </div>
 
   <div id="user-table">
     {{template "user_table" .}}
@@ -21,69 +29,69 @@
 {{end}}
 
 {{define "user_table"}}
-<table class="w-full text-sm">
-  <thead class="text-xs text-slate-500 uppercase tracking-wider">
-    <tr>
-      <th class="text-left px-4 py-2">Email</th>
-      <th class="text-left px-4 py-2">Domain</th>
-      <th class="text-left px-4 py-2">Quota</th>
-      <th class="text-left px-4 py-2">Status</th>
-      <th class="text-left px-4 py-2">Last login</th>
-      <th class="text-right px-4 py-2">Actions</th>
-    </tr>
-  </thead>
-  <tbody>
-    {{range .Data.Users}}
-    <tr class="border-t border-slate-800 hover:bg-slate-800/50">
-      <td class="px-4 py-2">
-        <a href="/users/{{.ID}}" class="hover:text-emerald-400">{{.Email}}</a>
-      </td>
-      <td class="px-4 py-2 text-slate-400">{{.DomainName}}</td>
-      <td class="px-4 py-2 text-slate-400">{{.QuotaMB}} MB</td>
-      <td class="px-4 py-2">
-        {{if .Active}}<span class="text-emerald-400">active</span>
-        {{else}}<span class="text-slate-500">disabled</span>{{end}}
-      </td>
-      <td class="px-4 py-2 text-slate-400">
-        {{if .LastLogin}}{{humanTime .LastLogin}}{{else}}never{{end}}
-      </td>
-      <td class="px-4 py-2 text-right">
-        <div class="flex justify-end gap-1">
-          <button hx-get="/users/{{.ID}}/edit" hx-target="#modal-host" hx-swap="innerHTML"
-                  class="rounded border border-slate-700 px-2 py-1 text-xs hover:bg-slate-800">Edit</button>
-          <button hx-get="/users/{{.ID}}/reset-password-form" hx-target="#modal-host" hx-swap="innerHTML"
-                  class="rounded border border-slate-700 px-2 py-1 text-xs hover:bg-slate-800">Password</button>
-          <div x-data="{ confirming: false }" class="inline-block">
-            <button @click="confirming = true"
-                    class="rounded border border-red-900 px-2 py-1 text-xs text-red-300 hover:bg-red-950/50">Delete</button>
-            <div x-show="confirming" x-cloak
-                 class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
-              <div @click.outside="confirming = false"
-                   class="w-full max-w-sm rounded-lg border border-red-800 bg-slate-900 p-5">
-                <h3 class="font-medium text-red-300">Delete {{.Email}}?</h3>
-                <p class="mt-2 text-sm text-slate-400">
-                  This removes the user, their Maildir reference, and their policies.
-                  The Maildir on disk is not deleted.
-                </p>
-                <div class="mt-4 flex justify-end gap-2">
-                  <button @click="confirming = false"
-                          class="rounded border border-slate-700 px-3 py-1.5 text-sm">Cancel</button>
-                  <button hx-delete="/users/{{.ID}}"
-                          hx-target="#form-error"
-                          @click="confirming = false"
-                          class="rounded bg-red-600 hover:bg-red-500 px-3 py-1.5 text-sm font-medium">
-                    Delete
-                  </button>
-                </div>
-              </div>
-            </div>
+{{if .Data.Users}}
+<div class="table-wrap">
+  <table class="table table-stack">
+    <thead>
+      <tr>
+        <th>Address</th>
+        <th>Domain</th>
+        <th>Quota</th>
+        <th>Status</th>
+        <th>Last login</th>
+        <th class="table-actions">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Data.Users}}
+      <tr>
+        <td data-label="Address"><a href="/users/{{.ID}}" class="strong">{{.Email}}</a></td>
+        <td data-label="Domain" class="dim">{{.DomainName}}</td>
+        <td data-label="Quota" class="dim">{{.QuotaMB}} MB</td>
+        <td data-label="Status">
+          {{if .Active}}<span class="badge ok">active</span>{{else}}<span class="badge warn">disabled</span>{{end}}
+          {{if .IsAdmin}}<span class="badge brand">admin</span>{{end}}
+        </td>
+        <td data-label="Last login" class="dim text-xs">
+          {{if .LastLogin}}{{humanTime .LastLogin}}{{else}}never{{end}}
+        </td>
+        <td class="table-actions" data-label="">
+          <div class="btn-group">
+            <button class="btn btn-sm" hx-get="/users/{{.ID}}/edit" hx-target="#modal-host" hx-swap="innerHTML">
+              Edit
+            </button>
+            <button class="btn btn-sm" hx-get="/users/{{.ID}}/reset-password-form"
+                    hx-target="#modal-host" hx-swap="innerHTML">
+              Password
+            </button>
+            <a class="btn btn-sm" href="/users/{{.ID}}/sieve">Rules</a>
+            <button class="btn btn-sm btn-danger" hx-delete="/users/{{.ID}}"
+                    hx-target="#form-error" hx-swap="innerHTML"
+                    hx-confirm="Delete {{.Email}}? The mailbox record and its rules are removed; the Maildir on disk is kept.">
+              Delete
+            </button>
           </div>
-        </div>
-      </td>
-    </tr>
-    {{else}}
-    <tr><td colspan="6" class="px-4 py-8 text-center text-slate-500">No users yet.</td></tr>
-    {{end}}
-  </tbody>
-</table>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{else}}
+<div class="empty">
+  <span class="empty-icon" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+         aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.6 20c.6-3.2 2.7-4.9 5.4-4.9s4.8 1.7 5.4 4.9"/></svg>
+  </span>
+  <span class="empty-title">No users found</span>
+  <span class="empty-hint">
+    {{if .Data.Query}}Nothing matches “{{.Data.Query}}”.{{else}}Create the first mailbox for one of your domains.{{end}}
+  </span>
+  {{if not .Data.Query}}
+  <button class="btn btn-primary mt-2" hx-get="/users/new" hx-target="#modal-host" hx-swap="innerHTML">
+    Create the first user
+  </button>
+  {{end}}
+</div>
+{{end}}
 {{end}}

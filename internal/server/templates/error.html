@@ -1,7 +1,20 @@
 {{define "content"}}
-<div class="max-w-md mx-auto mt-20 text-center">
-  <div class="text-5xl font-semibold text-slate-600">{{.Data.Status}}</div>
-  <div class="mt-4 text-slate-400">{{.Data.Message}}</div>
-  <a href="/" class="inline-block mt-6 text-emerald-400 hover:text-emerald-300">← Back to dashboard</a>
+<div class="card mx-auto mt-20" style="max-width: 30rem;">
+  <div class="card-body empty">
+    <span class="empty-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+           aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v4.5M12 16h.01"/></svg>
+    </span>
+    <span class="stat-value {{if ge .Data.Status 500}}err-text{{else}}warn-text{{end}}">{{.Data.Status}}</span>
+    <span class="empty-title">{{.Data.Message}}</span>
+    <span class="empty-hint">
+      Nothing was changed. If this keeps happening, check the service log for the
+      matching entry.
+    </span>
+    <div class="form-row mt-2">
+      <a class="btn btn-primary" href="/">Back to dashboard</a>
+      <a class="btn" href="/logs">View logs</a>
+    </div>
+  </div>
 </div>
 {{end}}

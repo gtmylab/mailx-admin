@@ -1,15 +1,21 @@
 {{define "service_health"}}
-<ul class="divide-y divide-slate-800 text-sm">
+{{if .Data.Services}}
+<div class="list">
   {{range .Data.Services}}
-  <li class="px-4 py-2 flex items-center justify-between">
-    <span>{{.Name}}</span>
-    <span class="flex items-center gap-2">
-      <span class="w-2 h-2 rounded-full
-        {{if eq .Status "active"}}bg-emerald-500
-        {{else}}bg-red-500{{end}}"></span>
-      <span class="text-slate-400 text-xs">{{.Status}}</span>
+  <div class="list-row">
+    <span class="dot {{if eq .Status "active"}}ok-text{{else if eq .Status "unknown"}}dim{{else}}err-text{{end}}"
+          aria-hidden="true"></span>
+    <span class="strong text-sm">{{.Name}}</span>
+    <span class="badge ml-auto {{if eq .Status "active"}}ok{{else if eq .Status "unknown"}}{{else}}err{{end}}">
+      {{.Status}}
     </span>
-  </li>
+  </div>
   {{end}}
-</ul>
+</div>
+{{else}}
+<div class="empty">
+  <span class="empty-title">No service information</span>
+  <span class="empty-hint">The panel could not query systemd on this host.</span>
+</div>
+{{end}}
 {{end}}

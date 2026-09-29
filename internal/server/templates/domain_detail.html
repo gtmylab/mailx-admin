@@ -1,19 +1,145 @@
 {{define "content"}}
-<div class="grid grid-cols-2 gap-6">
-  {{range .Data.Domains}}
-  <a href="/domains/{{.ID}}" class="block rounded-lg border border-slate-800 bg-slate-900 p-5 hover:border-slate-700 transition">
-    <div class="flex items-start justify-between">
-      <div>
-        <div class="font-medium">{{.Name}}</div>
-        {{if .IsPrimary}}<div class="text-xs text-slate-500 mt-0.5">primary</div>{{end}}
-      </div>
-      {{if .DKIMPrivateKeyPath}}
-      <span class="rounded bg-emerald-950 border border-emerald-800 px-2 py-0.5 text-xs text-emerald-300">DKIM</span>
+{{$d := .Data.Domain}}
+<div class="page-header">
+  <div>
+    <a href="/domains" class="dim text-xs">← All domains</a>
+    <h1 class="mt-1">{{$d.Name}}</h1>
+    <p class="page-sub form-row">
+      {{if $d.IsPrimary}}<span class="badge brand">primary</span>{{end}}
+      {{if $d.DKIMPrivateKeyPath}}
+      <span class="badge ok">DKIM {{$d.DKIMSelector}}</span>
       {{else}}
-      <span class="rounded bg-amber-950 border border-amber-800 px-2 py-0.5 text-xs text-amber-300">no DKIM</span>
+      <span class="badge warn">no DKIM key</span>
       {{end}}
+      <span class="dim text-xs">created {{humanTime $d.CreatedAt}}</span>
+    </p>
+  </div>
+  <div class="page-actions">
+    <a class="btn btn-sm" href="/domains/{{$d.ID}}/dns">DNS records</a>
+    <button class="btn btn-sm" hx-get="/domains/{{$d.ID}}/edit" hx-target="#modal-host" hx-swap="innerHTML">
+      Rename
+    </button>
+    {{if not $d.IsPrimary}}
+    <button class="btn btn-sm" hx-post="/domains/{{$d.ID}}/set-primary" hx-target="#form-error" hx-swap="innerHTML"
+            hx-confirm="Make {{$d.Name}} the primary domain?">
+      Set primary
+    </button>
+    {{end}}
+    <button class="btn btn-sm" hx-post="/domains/{{$d.ID}}/regenerate-dkim" hx-target="#form-error" hx-swap="innerHTML"
+            hx-confirm="Generate a new DKIM key for {{$d.Name}}? Publish the new TXT record before removing the old one.">
+      Regenerate DKIM
+    </button>
+    <button class="btn btn-sm btn-danger" hx-post="/domains/{{$d.ID}}/preview-delete"
+            hx-target="#modal-host" hx-swap="innerHTML">
+      Delete
+    </button>
+  </div>
+</div>
+
+<div class="grid grid-cols-4 gap-4 mb-4">
+  <div class="stat">
+    <span class="stat-label">Mailboxes</span>
+    <span class="stat-value">{{len .Data.Users}}</span>
+  </div>
+  <div class="stat">
+    <span class="stat-label">Aliases</span>
+    <span class="stat-value">{{len .Data.Aliases}}</span>
+  </div>
+  <div class="stat {{if $d.DKIMPrivateKeyPath}}stat-ok{{else}}stat-warn{{end}}">
+    <span class="stat-label">DKIM</span>
+    <span class="stat-value">{{if $d.DKIMPrivateKeyPath}}ready{{else}}missing{{end}}</span>
+    <span class="stat-hint">{{if $d.DKIMCreatedAt}}created {{humanTime $d.DKIMCreatedAt}}{{else}}no key generated yet{{end}}</span>
+  </div>
+  <div class="stat">
+    <span class="stat-label">Domain ID</span>
+    <span class="stat-value mono">{{$d.ID}}</span>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">
+    <h2>Mailboxes <span class="badge">{{len .Data.Users}}</span></h2>
+    <div class="page-actions">
+      <a class="btn btn-sm" href="/users">Manage users</a>
+      <button class="btn btn-sm btn-primary" hx-get="/users/new" hx-target="#modal-host" hx-swap="innerHTML">
+        New user
+      </button>
     </div>
-  </a>
+  </div>
+
+  {{if .Data.Users}}
+  <div class="table-wrap">
+    <table class="table table-stack">
+      <thead>
+        <tr>
+          <th>Address</th>
+          <th>Quota</th>
+          <th>Status</th>
+          <th>Last login</th>
+          <th class="table-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Data.Users}}
+        <tr>
+          <td data-label="Address"><a href="/users/{{.ID}}" class="strong">{{.Email}}</a></td>
+          <td data-label="Quota" class="dim">{{.QuotaMB}} MB</td>
+          <td data-label="Status">
+            {{if .Active}}<span class="badge ok">active</span>{{else}}<span class="badge warn">disabled</span>{{end}}
+            {{if .IsAdmin}}<span class="badge brand">admin</span>{{end}}
+          </td>
+          <td data-label="Last login" class="dim text-xs">{{if .LastLogin}}{{humanTime .LastLogin}}{{else}}never{{end}}</td>
+          <td class="table-actions" data-label=""><a class="btn btn-sm" href="/users/{{.ID}}">Open</a></td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="empty">
+    <span class="empty-title">No mailboxes on this domain</span>
+    <span class="empty-hint">Create a user to start receiving mail for {{$d.Name}}.</span>
+  </div>
+  {{end}}
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Aliases <span class="badge">{{len .Data.Aliases}}</span></h2>
+    <span class="dim text-xs">Use <span class="mono">@</span> as the source for a catch-all</span>
+  </div>
+
+  <div class="card-body">
+    <form class="form-row" hx-post="/domains/{{$d.ID}}/aliases" hx-target="#form-error" hx-swap="innerHTML">
+      <input class="input grow" name="source" required placeholder="sales or @">
+      <input class="input grow" name="destination" required placeholder="alice@example.com, bob@example.org">
+      <button class="btn btn-primary" type="submit">Add alias</button>
+    </form>
+  </div>
+
+  {{if .Data.Aliases}}
+  <div class="list">
+    {{range .Data.Aliases}}
+    <div class="list-row">
+      <span class="mono text-xs" style="min-width: 12rem;">{{.Source}}</span>
+      <form class="form-row grow" hx-patch="/aliases/{{.ID}}?domain_id={{$d.ID}}"
+            hx-target="#form-error" hx-swap="innerHTML">
+        <input class="input grow" name="destination" value="{{.Destination}}">
+        <button class="btn btn-sm" type="submit">Save</button>
+      </form>
+      <button class="btn btn-sm btn-danger" hx-delete="/aliases/{{.ID}}?domain_id={{$d.ID}}"
+              hx-target="#form-error" hx-swap="innerHTML"
+              hx-confirm="Delete the alias {{.Source}}?">
+        Delete
+      </button>
+    </div>
+    {{end}}
+  </div>
+  {{else}}
+  <div class="empty">
+    <span class="empty-title">No aliases</span>
+    <span class="empty-hint">Aliases forward mail from this domain to other addresses.</span>
+  </div>
   {{end}}
 </div>
 {{end}}

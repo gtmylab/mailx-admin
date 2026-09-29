@@ -1,19 +1,83 @@
 {{define "content"}}
-<div class="grid grid-cols-2 gap-6">
-  {{range .Data.Domains}}
-  <a href="/domains/{{.ID}}" class="block rounded-lg border border-slate-800 bg-slate-900 p-5 hover:border-slate-700 transition">
-    <div class="flex items-start justify-between">
-      <div>
-        <div class="font-medium">{{.Name}}</div>
-        {{if .IsPrimary}}<div class="text-xs text-slate-500 mt-0.5">primary</div>{{end}}
-      </div>
-      {{if .DKIMPrivateKeyPath}}
-      <span class="rounded bg-emerald-950 border border-emerald-800 px-2 py-0.5 text-xs text-emerald-300">DKIM</span>
-      {{else}}
-      <span class="rounded bg-amber-950 border border-amber-800 px-2 py-0.5 text-xs text-amber-300">no DKIM</span>
-      {{end}}
-    </div>
-  </a>
-  {{end}}
+<div class="page-header">
+  <div>
+    <h1>Domains</h1>
+    <p class="page-sub">
+      {{len .Data.Domains}} configured mail domain(s)
+      {{if .Data.MissingDKIM}} · <span class="warn-text">{{.Data.MissingDKIM}} without DKIM keys</span>{{end}}
+    </p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-primary" hx-get="/domains/new" hx-target="#modal-host" hx-swap="innerHTML">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+           aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      New domain
+    </button>
+  </div>
 </div>
+
+{{if .Data.Domains}}
+<div class="table-wrap">
+  <table class="table table-stack">
+    <thead>
+      <tr>
+        <th>Domain</th>
+        <th>Status</th>
+        <th>Mailboxes</th>
+        <th>Aliases</th>
+        <th>DKIM</th>
+        <th>Created</th>
+        <th class="table-actions">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Data.Domains}}
+      <tr>
+        <td data-label="Domain"><a href="/domains/{{.ID}}" class="strong">{{.Name}}</a></td>
+        <td data-label="Status">
+          {{if .IsPrimary}}<span class="badge brand">primary</span>{{else}}<span class="badge">secondary</span>{{end}}
+        </td>
+        <td data-label="Mailboxes" class="dim">{{index $.Data.UserCount .ID}}</td>
+        <td data-label="Aliases" class="dim">{{index $.Data.AliasCount .ID}}</td>
+        <td data-label="DKIM">
+          {{if .DKIMPrivateKeyPath}}
+          <span class="badge ok">configured</span> <span class="dim mono text-xs">{{.DKIMSelector}}</span>
+          {{else}}
+          <span class="badge warn">no key</span>
+          {{end}}
+        </td>
+        <td data-label="Created" class="dim text-xs">{{humanTime .CreatedAt}}</td>
+        <td class="table-actions" data-label="">
+          <div class="btn-group">
+            <a class="btn btn-sm" href="/domains/{{.ID}}">Open</a>
+            <a class="btn btn-sm" href="/domains/{{.ID}}/dns">DNS</a>
+            <button class="btn btn-sm" hx-get="/domains/{{.ID}}/edit" hx-target="#modal-host" hx-swap="innerHTML">
+              Edit
+            </button>
+            <button class="btn btn-sm btn-danger" hx-post="/domains/{{.ID}}/preview-delete"
+                    hx-target="#modal-host" hx-swap="innerHTML">
+              Delete
+            </button>
+          </div>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{else}}
+<div class="card">
+  <div class="empty">
+    <span class="empty-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+        <circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/></svg>
+    </span>
+    <span class="empty-title">No domains yet</span>
+    <span class="empty-hint">Add the first mail domain this server should handle.</span>
+    <button class="btn btn-primary mt-2" hx-get="/domains/new" hx-target="#modal-host" hx-swap="innerHTML">
+      Create the first domain
+    </button>
+  </div>
+</div>
+{{end}}
 {{end}}

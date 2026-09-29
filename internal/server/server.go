@@ -29,7 +29,7 @@ import (
 	"time"
 )
 
-//go:embed templates/*.html templates/partials/*.html static/*
+//go:embed templates/*.html templates/partials/*.html static/* static/vendor/*
 var assets embed.FS
 
 type Server struct {

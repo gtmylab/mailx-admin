@@ -1,88 +1,76 @@
 {{define "content"}}
-<div class="max-w-3xl space-y-6">
-  {{with .Data.User}}
-  <div class="flex items-center justify-between">
-    <div>
-      <div class="flex items-center gap-2">
-        <h2 class="text-lg font-medium">{{.Email}}</h2>
-        {{if .IsAdmin}}
-        <span class="rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-300">admin</span>
-        {{end}}
-        {{if .Active}}
-        <span class="rounded bg-emerald-950 border border-emerald-800 px-2 py-0.5 text-xs text-emerald-300">active</span>
-        {{else}}
-        <span class="rounded bg-amber-950 border border-amber-800 px-2 py-0.5 text-xs text-amber-300">disabled</span>
-        {{end}}
-      </div>
-      <a href="/users" class="text-xs text-slate-500 hover:text-slate-300">← Back to users</a>
-    </div>
+{{$u := .Data.User}}
+<div class="page-header">
+  <div>
+    <a href="/users" class="dim text-xs">← All users</a>
+    <h1 class="mt-1">{{$u.Email}}</h1>
+    <p class="page-sub form-row">
+      {{if $u.Active}}<span class="badge ok">active</span>{{else}}<span class="badge warn">disabled</span>{{end}}
+      {{if $u.IsAdmin}}<span class="badge brand">administrator</span>{{end}}
+      <span class="dim text-xs">created {{humanTime $u.CreatedAt}}</span>
+    </p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-sm" hx-get="/users/{{$u.ID}}/edit" hx-target="#modal-host" hx-swap="innerHTML">
+      Edit
+    </button>
+    <button class="btn btn-sm" hx-get="/users/{{$u.ID}}/reset-password-form"
+            hx-target="#modal-host" hx-swap="innerHTML">
+      Reset password
+    </button>
+    <a class="btn btn-sm" href="/users/{{$u.ID}}/sieve">Mail rules</a>
+    <a class="btn btn-sm" href="/domains/{{$u.DomainID}}">Domain</a>
+    <button class="btn btn-sm btn-danger" hx-delete="/users/{{$u.ID}}" hx-target="#form-error" hx-swap="innerHTML"
+            hx-confirm="Delete {{$u.Email}}? The mailbox record and its rules are removed; the Maildir on disk is kept.">
+      Delete
+    </button>
+  </div>
+</div>
 
-    <div class="flex items-center gap-2">
-      <button hx-get="/users/{{.ID}}/edit" hx-target="#modal-host" hx-swap="innerHTML"
-              class="rounded border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800">
-        Edit
-      </button>
-      <button hx-post="/users/{{.ID}}/reset-password" hx-target="#modal-host" hx-swap="innerHTML"
-              hx-confirm="Generate a new password for {{.Email}}?"
-              class="rounded border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800">
-        Reset password
-      </button>
-      <a href="/users/{{.ID}}/sieve"
-         class="rounded border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800">
-        Rules
-      </a>
-      <button hx-delete="/users/{{.ID}}" hx-target="#form-error" hx-swap="innerHTML"
-              hx-confirm="Delete {{.Email}}? This cannot be undone."
-              class="rounded border border-red-900 px-3 py-1.5 text-sm text-red-300 hover:bg-red-950/40">
-        Delete
-      </button>
+<div class="grid grid-cols-4 gap-4 mb-4">
+  <div class="stat">
+    <span class="stat-label">Quota</span>
+    <span class="stat-value">{{$u.QuotaMB}} <small>MB</small></span>
+  </div>
+  <div class="stat">
+    <span class="stat-label">Last login</span>
+    <span class="stat-value text-lg">{{if $u.LastLogin}}{{humanTime $u.LastLogin}}{{else}}never{{end}}</span>
+  </div>
+  <div class="stat {{if $u.Active}}stat-ok{{else}}stat-warn{{end}}">
+    <span class="stat-label">Mailbox</span>
+    <span class="stat-value text-lg">{{if $u.Active}}enabled{{else}}disabled{{end}}</span>
+  </div>
+  <div class="stat">
+    <span class="stat-label">User ID</span>
+    <span class="stat-value mono">{{$u.ID}}</span>
+  </div>
+</div>
+
+<div class="grid grid-cols-2 gap-4">
+  <div class="card">
+    <div class="card-header"><h2>Mailbox</h2></div>
+    <div class="card-body kv">
+      <span class="kv-label">Address</span>
+      <span class="kv-value mono">{{$u.Email}}</span>
+      <span class="kv-label mt-3">Username</span>
+      <span class="kv-value mono">{{$u.Username}}</span>
+      <span class="kv-label mt-3">Domain</span>
+      <span class="kv-value">
+        {{if $u.DomainName}}<a href="/domains/{{$u.DomainID}}">{{$u.DomainName}}</a>{{else}}#{{$u.DomainID}}{{end}}
+      </span>
     </div>
   </div>
 
-  <div id="form-error"></div>
-
-  <div class="rounded-lg border border-slate-800 bg-slate-900 divide-y divide-slate-800">
-    <div class="grid grid-cols-2 gap-4 px-4 py-3 text-sm">
-      <div>
-        <div class="text-xs text-slate-500 uppercase">Username</div>
-        <div class="mt-1">{{.Username}}</div>
-      </div>
-      <div>
-        <div class="text-xs text-slate-500 uppercase">Domain</div>
-        <div class="mt-1">{{if .DomainName}}{{.DomainName}}{{else}}#{{.DomainID}}{{end}}</div>
-      </div>
-    </div>
-
-    <div class="grid grid-cols-3 gap-4 px-4 py-3 text-sm">
-      <div>
-        <div class="text-xs text-slate-500 uppercase">Quota</div>
-        <div class="mt-1">{{.QuotaMB}} MB</div>
-      </div>
-      <div>
-        <div class="text-xs text-slate-500 uppercase">Last login</div>
-        <div class="mt-1">{{if .LastLogin}}{{humanTime .LastLogin}}{{else}}never{{end}}</div>
-      </div>
-      <div>
-        <div class="text-xs text-slate-500 uppercase">Status</div>
-        <div class="mt-1">{{if .Active}}active{{else}}disabled{{end}}</div>
-      </div>
-    </div>
-
-    <div class="grid grid-cols-2 gap-4 px-4 py-3 text-sm">
-      <div>
-        <div class="text-xs text-slate-500 uppercase">Created</div>
-        <div class="mt-1">{{.CreatedAt.Format "2006-01-02 15:04"}}</div>
-      </div>
-      <div>
-        <div class="text-xs text-slate-500 uppercase">Updated</div>
-        <div class="mt-1">{{.UpdatedAt.Format "2006-01-02 15:04"}}</div>
-      </div>
+  <div class="card">
+    <div class="card-header"><h2>Timestamps</h2></div>
+    <div class="card-body kv">
+      <span class="kv-label">Created</span>
+      <span class="kv-value">{{$u.CreatedAt.Format "2006-01-02 15:04"}}</span>
+      <span class="kv-label mt-3">Updated</span>
+      <span class="kv-value">{{$u.UpdatedAt.Format "2006-01-02 15:04"}}</span>
+      <span class="kv-label mt-3">Last login</span>
+      <span class="kv-value">{{if $u.LastLogin}}{{$u.LastLogin.Format "2006-01-02 15:04"}}{{else}}never{{end}}</span>
     </div>
   </div>
-  {{else}}
-  <div class="rounded-lg border border-slate-800 bg-slate-900 p-6 text-sm text-slate-400">
-    User not found.
-  </div>
-  {{end}}
 </div>
 {{end}}

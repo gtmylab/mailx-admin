@@ -1,28 +1,35 @@
 {{define "backup_restore_result"}}
-<div x-data="{ open: true }" x-show="open" x-cloak @close-modal.window="open = false"
-     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
-  <div @click.outside="open = false"
-       class="w-full max-w-lg rounded-lg border border-slate-800 bg-slate-900 shadow-2xl">
-    <header class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
-      <h3 class="font-medium">Restore extracted</h3>
-      <button @click="open = false" class="text-slate-500 hover:text-slate-200">✕</button>
+<div class="modal" role="dialog" aria-modal="true" aria-labelledby="restore-title">
+  <div class="modal-panel max-w-lg">
+    <header class="modal-header">
+      <h3 id="restore-title">Restore extracted</h3>
+      <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+             aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
     </header>
-    <div class="p-5 space-y-3">
-      <p class="text-sm text-slate-300">
-        Backup <code class="font-mono">{{.Name}}</code> has been extracted to:
+
+    <div class="modal-body">
+      <p class="text-sm muted">
+        Backup <code class="mono">{{.Name}}</code> has been extracted to:
       </p>
-      <div class="rounded bg-slate-950 border border-slate-800 px-3 py-2 font-mono text-sm">
-        {{.StagingDir}}
+      <div class="input-group mt-2">
+        <input class="input mono text-xs" id="restore-dir" type="text" readonly value="{{.StagingDir}}">
+        <button type="button" class="btn" data-copy="#restore-dir">Copy path</button>
       </div>
-      <p class="text-sm text-slate-400">
-        <strong class="text-amber-300">Nothing has been applied yet.</strong>
-        Inspect the contents, then copy files manually or use a future
-        "apply restore" action.
-      </p>
+
+      <div class="alert alert-warn mt-3">
+        <span class="dot" aria-hidden="true"></span>
+        <span>
+          <strong>Nothing has been applied.</strong> Inspect the extracted files and
+          copy them into place manually — overwriting live configuration is
+          deliberately not automated.
+        </span>
+      </div>
     </div>
-    <footer class="px-5 py-3 border-t border-slate-800 flex justify-end">
-      <button @click="open = false"
-              class="rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-sm">Close</button>
+
+    <footer class="modal-footer">
+      <button type="button" class="btn btn-primary" data-close-modal="force">Close</button>
     </footer>
   </div>
 </div>

@@ -44,10 +44,13 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("GET /domains", s.handleDomainsList)
 	protected.HandleFunc("GET /domains/{id}", s.handleDomainDetail)
 	protected.HandleFunc("GET /domains/new", s.handleDomainNew)
+	protected.HandleFunc("GET /domains/{id}/edit", s.handleDomainEdit)
 	protected.HandleFunc("POST /domains", s.handleDomainCreate)
+	protected.HandleFunc("PATCH /domains/{id}", s.handleDomainUpdate)
 	protected.HandleFunc("DELETE /domains/{id}", s.handleDomainDelete)
 	protected.HandleFunc("POST /domains/{id}/set-primary", s.handleDomainSetPrimary)
 	protected.HandleFunc("POST /domains/{id}/regenerate-dkim", s.handleDomainRegenerateDKIM)
+	protected.HandleFunc("POST /domains/{id}/preview-delete", s.handlePreviewDomainDelete)
 
 	// Aliases
 	protected.HandleFunc("POST /domains/{id}/aliases", s.handleAliasCreate)
@@ -57,10 +60,11 @@ func (s *Server) buildRouter() http.Handler {
 	// Audit
 	protected.HandleFunc("GET /audit", s.handleAuditList)
 
-	// Preview endpoints return the diff HTMX swaps into the modal
+	// Preview endpoints return the diff HTMX swaps into the modal.
+	// The domain-delete preview used to be registered without its {id} while
+	// the handler read r.PathValue("id"), so every call answered 400.
 	protected.HandleFunc("POST /preview/user-create", s.handlePreviewUserCreate)
 	protected.HandleFunc("POST /preview/domain-create", s.handlePreviewDomainCreate)
-	protected.HandleFunc("POST /preview/domain-delete", s.handlePreviewDomainDelete)
 
 	protected.HandleFunc("GET /tools/test-send", s.handleTestSendPage)
 	protected.HandleFunc("POST /tools/test-send", s.handleTestSendRun)
@@ -73,6 +77,7 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("GET /logs", s.handleLogsPage)
 	protected.HandleFunc("GET /logs/list", s.handleLogsList)
 	protected.HandleFunc("GET /logs/live", s.handleLogsLive)
+	protected.HandleFunc("GET /logs/source", s.handleLogsSource)
 	protected.HandleFunc("GET /logs/queue/{qid}", s.handleLogQueueDetail)
 
 	protected.HandleFunc("GET /ssl", s.handleSSLPage)

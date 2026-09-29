@@ -1,58 +1,59 @@
 {{define "log_queue_detail"}}
-<div x-data="{ open: true }" x-show="open" x-cloak @close-modal.window="open = false"
-     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
-  <div @click.outside="open = false"
-       class="w-full max-w-4xl rounded-lg border border-slate-800 bg-slate-900 shadow-2xl">
-    <header class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
-      <h3 class="font-medium">Queue ID: <span class="font-mono text-sm">{{.QueueID}}</span></h3>
-      <button type="button" @click="open = false" class="text-slate-500 hover:text-slate-200">✕</button>
+<div class="modal" role="dialog" aria-modal="true" aria-labelledby="log-queue-title">
+  <div class="modal-panel max-w-4xl">
+    <header class="modal-header">
+      <h3 id="log-queue-title">Queue ID: <span class="mono text-sm">{{.QueueID}}</span></h3>
+      <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+             aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
     </header>
 
-    <div class="p-5 max-h-[60vh] overflow-y-auto">
+    <div class="modal-body scroll-y" style="max-height: 60vh;">
       {{if .Events}}
-      <table class="w-full text-sm">
-        <thead class="text-xs text-slate-500 uppercase tracking-wider">
-          <tr>
-            <th class="text-left px-3 py-2">Time</th>
-            <th class="text-left px-3 py-2">Service</th>
-            <th class="text-left px-3 py-2">Action</th>
-            <th class="text-left px-3 py-2">Status</th>
-            <th class="text-left px-3 py-2">From → To</th>
-            <th class="text-left px-3 py-2">Message</th>
-          </tr>
-        </thead>
-        <tbody>
-          {{range .Events}}
-          <tr class="border-t border-slate-800 hover:bg-slate-800/50 align-top">
-            <td class="px-3 py-2 whitespace-nowrap font-mono text-xs">{{.Ts.Format "2006-01-02 15:04:05"}}</td>
-            <td class="px-3 py-2">{{.Service}}</td>
-            <td class="px-3 py-2">{{.Action}}</td>
-            <td class="px-3 py-2">
-              <span class="rounded px-1.5 py-0.5 text-xs
-                {{if eq .Status "sent"}}bg-emerald-950 text-emerald-300
-                {{else if eq .Status "deferred"}}bg-amber-950 text-amber-300
-                {{else if eq .Status "bounced"}}bg-red-950 text-red-300
-                {{else}}bg-slate-800 text-slate-300{{end}}">{{.Status}}</span>
-            </td>
-            <td class="px-3 py-2 text-xs">
-              <div class="font-mono break-all">{{.From}}</div>
-              <div class="text-slate-500">→ <span class="font-mono break-all">{{.To}}</span></div>
-            </td>
-            <td class="px-3 py-2 text-xs text-slate-300">{{.Message}}</td>
-          </tr>
-          {{end}}
-        </tbody>
-      </table>
+      <div class="form-row mb-2">
+        <span class="badge">{{len .Events}} event(s)</span>
+        <button type="button" class="btn btn-sm ml-auto" data-copy-value="{{.QueueID}}">Copy queue ID</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table table-compact">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Service</th>
+              <th>Action</th>
+              <th>Status</th>
+              <th>From → To</th>
+              <th>Message</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Events}}
+            <tr>
+              <td class="mono text-xs nowrap">{{.Ts.Format "2006-01-02 15:04:05"}}</td>
+              <td class="text-xs">{{.Service}}</td>
+              <td class="text-xs">{{.Action}}</td>
+              <td><span class="badge {{statusClass .Status}}">{{.Status}}</span></td>
+              <td class="text-xs">
+                <div class="mono break-all">{{.From}}</div>
+                <div class="dim">→ <span class="mono break-all">{{.To}}</span></div>
+              </td>
+              <td class="text-xs">{{.Message}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
       {{else}}
-      <p class="text-sm text-slate-500">No events recorded for this queue ID.</p>
+      <div class="empty">
+        <span class="empty-title">No events recorded for this queue ID</span>
+        <span class="empty-hint">The message may have been logged by a service that does not report to this panel.</span>
+      </div>
       {{end}}
     </div>
 
-    <footer class="px-5 py-3 border-t border-slate-800 flex justify-end">
-      <button type="button" @click="open = false"
-              class="rounded border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
-        Close
-      </button>
+    <footer class="modal-footer">
+      <button type="button" class="btn" data-close-modal>Close</button>
     </footer>
   </div>
 </div>

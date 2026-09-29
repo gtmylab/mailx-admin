@@ -1,34 +1,72 @@
 {{define "testsend_result"}}
-<div class="rounded-lg border {{if .Result.Success}}border-emerald-800{{else}}border-red-800{{end}} bg-slate-900">
-  <header class="px-4 py-3 border-b {{if .Result.Success}}border-emerald-800 bg-emerald-950/30{{else}}border-red-800 bg-red-950/30{{end}}
-                 flex items-center justify-between">
-    <h3 class="font-medium">
-      {{if .Result.Success}}✓ Sent in {{.Result.Duration}}{{else}}✗ Failed in {{.Result.Duration}}{{end}}
-    </h3>
-    {{if .Result.Error}}
-    <span class="text-sm text-red-300">{{.Result.Error}}</span>
-    {{end}}
-  </header>
-
-  {{if .Result.TLS}}
-  <div class="px-4 py-2 border-b border-slate-800 bg-slate-950/50 text-xs">
-    <span class="text-slate-500">TLS:</span>
-    <span class="text-slate-300">{{.Result.TLS.Version}}</span>
-    <span class="text-slate-500 ml-3">Cipher:</span>
-    <span class="text-slate-300">{{.Result.TLS.CipherSuite}}</span>
-    <span class="text-slate-500 ml-3">Peer certs:</span>
-    <span class="text-slate-300">{{.Result.TLS.PeerCerts}}</span>
-    {{if .Result.TLS.NotAfter.Format "2006"}}
-    <span class="text-slate-500 ml-3">Expires:</span>
-    <span class="text-slate-300">{{.Result.TLS.NotAfter.Format "2006-01-02"}}</span>
-    {{end}}
+<div class="card {{if .Result.Success}}stat-ok{{end}}">
+  <div class="card-header">
+    <h2>
+      {{if .Result.Success}}
+      <span class="badge ok">✓ Sent</span>
+      {{else}}
+      <span class="badge err">✗ Failed</span>
+      {{end}}
+      <span class="dim text-xs">{{.Result.Duration}}</span>
+    </h2>
+    <span class="dim text-xs mono">{{.Opts.Host}}:{{.Opts.Port}} · {{.Opts.TLSMode}}</span>
   </div>
-  {{end}}
 
-  <div class="p-4 max-h-[70vh] overflow-y-auto">
-    <div class="text-xs text-slate-500 mb-2">SMTP transcript</div>
-    <pre class="font-mono text-xs leading-relaxed"><code>{{range .Result.Transcript}}<span class="{{if eq .Dir "C"}}text-emerald-400{{else if eq .Dir "S"}}text-sky-400{{else}}text-slate-500 italic{{end}}">{{if eq .Dir "C"}}→ {{else if eq .Dir "S"}}← {{else}}• {{end}}{{.Text}}
+  <div class="card-body">
+    {{if .Result.Success}}
+    <div class="alert alert-ok mb-3">
+      <span class="dot" aria-hidden="true"></span>
+      <span>The server accepted the message for delivery to <span class="mono">{{.Opts.To}}</span>.</span>
+    </div>
+    {{else if .Result.Error}}
+    <div class="alert alert-err mb-3">
+      <span class="dot" aria-hidden="true"></span>
+      <span>{{.Result.Error}}</span>
+    </div>
+    {{if .Friendly}}
+    <div class="alert alert-warn mb-3">
+      <span class="dot" aria-hidden="true"></span>
+      <span>{{.Friendly}}</span>
+    </div>
+    {{end}}
+    {{end}}
+
+    <div class="grid grid-cols-2 gap-4 mb-3">
+      <div class="kv">
+        <span class="kv-label">Envelope</span>
+        <span class="kv-value text-xs mono break-all">{{.Opts.From}} → {{.Opts.To}}</span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Authenticated</span>
+        <span class="kv-value text-xs">
+          {{if .Opts.Username}}as <span class="mono">{{.Opts.Username}}</span>{{else}}no AUTH (anonymous relay){{end}}
+        </span>
+      </div>
+      {{with .Result.TLS}}
+      <div class="kv">
+        <span class="kv-label">TLS</span>
+        <span class="kv-value text-xs">{{.Version}} · {{.CipherSuite}}</span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Peer certificate</span>
+        <span class="kv-value text-xs">
+          {{.PeerCerts}} cert(s), server name <span class="mono">{{.ServerName}}</span>
+          {{if not .NotAfter.IsZero}} · expires {{.NotAfter.Format "2006-01-02"}}{{end}}
+        </span>
+      </div>
+      {{end}}
+    </div>
+
+    <details open>
+      <summary class="dim text-xs">SMTP transcript ({{len .Result.Transcript}} lines)</summary>
+      <pre class="code code-block mt-2"><code>{{range .Result.Transcript}}<span class="{{if eq .Dir "C"}}text-emerald-400{{else if eq .Dir "S"}}text-sky-400{{else}}dim italic{{end}}">{{if eq .Dir "C"}}→ {{else if eq .Dir "S"}}← {{else}}• {{end}}{{.Text}}
 </span>{{end}}</code></pre>
+    </details>
+  </div>
+
+  <div class="card-footer">
+    The transcript is stored with this send, so “Recent sends” keeps the evidence
+    of what the server answered.
   </div>
 </div>
 {{end}}

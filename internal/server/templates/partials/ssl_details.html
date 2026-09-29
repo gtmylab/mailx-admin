@@ -1,73 +1,76 @@
 {{define "ssl_details"}}
-<div x-data="{ open: true }" x-show="open" x-cloak @close-modal.window="open = false"
-     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
-  <div @click.outside="open = false"
-       class="w-full max-w-2xl rounded-lg border border-slate-800 bg-slate-900 shadow-2xl">
-    <header class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
-      <h3 class="font-medium">Certificate: {{.Cert.CertName}}</h3>
-      <button @click="open = false" class="text-slate-500 hover:text-slate-200">✕</button>
+<div class="modal" role="dialog" aria-modal="true" aria-labelledby="ssl-details-title">
+  <div class="modal-panel max-w-2xl">
+    <header class="modal-header">
+      <h3 id="ssl-details-title">Certificate: <span class="mono text-sm">{{.Cert.CertName}}</span></h3>
+      <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+             aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
     </header>
 
-    <div class="p-5 space-y-3 text-sm">
-      <div class="grid grid-cols-2 gap-3">
-        <div>
-          <div class="text-xs text-slate-500 uppercase">Subject</div>
-          <div class="font-mono text-xs mt-1 break-all">{{.Cert.Subject}}</div>
+    <div class="modal-body">
+      <div class="grid grid-cols-4 gap-4 mb-3">
+        <div class="kv">
+          <span class="kv-label">Status</span>
+          <span class="kv-value">
+            <span class="badge {{if eq .Cert.Status "ok"}}ok{{else if eq .Cert.Status "warning"}}warn{{else if eq .Cert.Status "critical"}}err{{else if eq .Cert.Status "expired"}}err{{end}}">{{.Cert.Status}}</span>
+          </span>
         </div>
-        <div>
-          <div class="text-xs text-slate-500 uppercase">Issuer</div>
-          <div class="font-mono text-xs mt-1 break-all">{{.Cert.Issuer}}</div>
+        <div class="kv">
+          <span class="kv-label">Days left</span>
+          <span class="kv-value {{if lt .Cert.DaysLeft 0}}err-text{{else if lt .Cert.DaysLeft 14}}warn-text{{else}}ok-text{{end}}">{{.Cert.DaysLeft}}</span>
         </div>
-      </div>
-
-      <div class="grid grid-cols-4 gap-3">
-        <div>
-          <div class="text-xs text-slate-500 uppercase">Valid from</div>
-          <div class="mt-1">{{.Cert.NotBefore.Format "2006-01-02"}}</div>
+        <div class="kv">
+          <span class="kv-label">Valid from</span>
+          <span class="kv-value">{{.Cert.NotBefore.Format "2006-01-02"}}</span>
         </div>
-        <div>
-          <div class="text-xs text-slate-500 uppercase">Valid until</div>
-          <div class="mt-1">{{.Cert.NotAfter.Format "2006-01-02"}}</div>
-        </div>
-        <div>
-          <div class="text-xs text-slate-500 uppercase">Days left</div>
-          <div class="mt-1 {{if lt .Cert.DaysLeft 0}}text-red-400{{else if lt .Cert.DaysLeft 14}}text-amber-400{{else}}text-emerald-400{{end}}">{{.Cert.DaysLeft}}</div>
-        </div>
-        <div>
-          <div class="text-xs text-slate-500 uppercase">Status</div>
-          <div class="mt-1">{{.Cert.Status}}</div>
+        <div class="kv">
+          <span class="kv-label">Valid until</span>
+          <span class="kv-value">{{.Cert.NotAfter.Format "2006-01-02"}}</span>
         </div>
       </div>
 
-      <div class="grid grid-cols-3 gap-3">
-        <div>
-          <div class="text-xs text-slate-500 uppercase">Signature</div>
-          <div class="mt-1 text-xs">{{.Cert.SigAlg}}</div>
+      <div class="kv mb-3">
+        <span class="kv-label">Subject</span>
+        <span class="kv-value mono text-xs break-all">{{.Cert.Subject}}</span>
+        <span class="kv-label mt-3">Issuer</span>
+        <span class="kv-value mono text-xs break-all">{{.Cert.Issuer}}</span>
+      </div>
+
+      <div class="grid grid-cols-3 gap-4 mb-3">
+        <div class="kv">
+          <span class="kv-label">Signature</span>
+          <span class="kv-value text-xs">{{.Cert.SigAlg}}</span>
         </div>
-        <div>
-          <div class="text-xs text-slate-500 uppercase">Key</div>
-          <div class="mt-1 text-xs">{{.Cert.KeyBits}} bits</div>
+        <div class="kv">
+          <span class="kv-label">Key</span>
+          <span class="kv-value text-xs">{{.Cert.KeyBits}} bits</span>
         </div>
-        <div>
-          <div class="text-xs text-slate-500 uppercase">Chain</div>
-          <div class="mt-1 text-xs">{{.Cert.ChainCount}} cert(s)</div>
+        <div class="kv">
+          <span class="kv-label">Chain</span>
+          <span class="kv-value text-xs">{{.Cert.ChainCount}} cert(s)</span>
         </div>
       </div>
 
-      <div>
-        <div class="text-xs text-slate-500 uppercase">SANs</div>
-        <div class="mt-1 flex flex-wrap gap-1">
-          {{range .Cert.SANs}}
-          <span class="rounded bg-slate-800 px-2 py-0.5 text-xs font-mono">{{.}}</span>
-          {{end}}
+      {{if .Cert.SANs}}
+      <div class="kv mb-3">
+        <span class="kv-label">Subject alternative names</span>
+        <div class="form-row mt-1">
+          {{range .Cert.SANs}}<span class="badge mono">{{.}}</span>{{end}}
         </div>
       </div>
+      {{end}}
 
-      <div>
-        <div class="text-xs text-slate-500 uppercase">Serial</div>
-        <div class="mt-1 font-mono text-xs">{{.Cert.Serial}}</div>
+      <div class="kv">
+        <span class="kv-label">Serial</span>
+        <span class="kv-value mono text-xs break-all">{{.Cert.Serial}}</span>
       </div>
     </div>
+
+    <footer class="modal-footer">
+      <button type="button" class="btn" data-close-modal>Close</button>
+    </footer>
   </div>
 </div>
 {{end}}

@@ -531,8 +531,20 @@ func TestFullPageRenderCarriesTheCookieToken(t *testing.T) {
 	if strings.Contains(bodyTag, `X-CSRF-Token":""`) {
 		t.Errorf("hx-headers still ships an empty token: %s", bodyTag)
 	}
-	if !strings.Contains(body, "htmx:configRequest") {
-		t.Error("layout.html does not sync X-CSRF-Token from the live cookie")
+	// The live-cookie sync lives in static/app.js now (inline scripts were
+	// removed from layout.html): the page must load it, and the file itself
+	// must still carry both the htmx header override and the cookie read.
+	if !strings.Contains(body, "/static/app.js") {
+		t.Error("layout.html does not load /static/app.js, which syncs X-CSRF-Token from the live cookie")
+	}
+	appJS, err := fs.ReadFile(assets, "static/app.js")
+	if err != nil {
+		t.Fatalf("read static/app.js: %v", err)
+	}
+	for _, want := range []string{"htmx:configRequest", "mailx_csrf", "X-CSRF-Token"} {
+		if !strings.Contains(string(appJS), want) {
+			t.Errorf("static/app.js does not mention %q; the CSRF sync is gone", want)
+		}
 	}
 }
 

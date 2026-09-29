@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gtmylab/mailx-admin/internal/dkim"
 )
@@ -55,10 +56,16 @@ func (s *Service) CreateDomain(ctx context.Context, actor Actor, in CreateDomain
 // validateCreateDomain normalizes and checks the domain name in place.
 func validateCreateDomain(in *CreateDomainInput) error {
 	in.Name = strings.TrimSpace(strings.ToLower(in.Name))
-	if in.Name == "" || !strings.Contains(in.Name, ".") {
+	return validateDomainName(in.Name)
+}
+
+// validateDomainName is the single place that decides what a domain name may
+// look like; both create and rename go through it.
+func validateDomainName(name string) error {
+	if name == "" || !strings.Contains(name, ".") {
 		return fmt.Errorf("%w: invalid domain name", ErrInvalidInput)
 	}
-	if strings.ContainsAny(in.Name, "@/ ") {
+	if strings.ContainsAny(name, "@/ ") {
 		return fmt.Errorf("%w: domain may not contain @, /, or space", ErrInvalidInput)
 	}
 	return nil
@@ -131,6 +138,70 @@ func (s *Service) DeleteDomain(ctx context.Context, actor Actor, domainID int64)
 		// continuity is preserved. Files under /etc/opendkim/keys/<domain>/
 		// can be cleaned up manually.
 		_, err := tx.ExecContext(ctx, `DELETE FROM domains WHERE id = ?`, domainID)
+		return err
+	})
+	return res, err
+}
+
+// UpdateDomainInput renames a domain.
+type UpdateDomainInput struct {
+	DomainID int64
+	Name     string
+}
+
+// UpdateDomain renames a domain and every mailbox address on it.
+//
+// A rename is not just a row update: users.email is stored (it is what the
+// reconciler writes into the mail server config), so the addresses are rewritten
+// in the same transaction. Doing it separately would leave the panel briefly
+// disagreeing with the mail server about who exists.
+//
+// The DKIM key on disk keeps its current path and selector: the private key is
+// not bound to the domain name, and moving it would break DKIM for messages
+// that are already in flight.
+func (s *Service) UpdateDomain(ctx context.Context, actor Actor, in UpdateDomainInput) (*Result, error) {
+	in.Name = strings.TrimSpace(strings.ToLower(in.Name))
+	if err := validateDomainName(in.Name); err != nil {
+		return nil, err
+	}
+
+	var current string
+	err := s.db.QueryRowContext(ctx, `SELECT name FROM domains WHERE id = ?`, in.DomainID).Scan(&current)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("%w: domain not found", ErrNotFound)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if current == in.Name {
+		return nil, fmt.Errorf("%w: the domain is already named %s", ErrInvalidInput, in.Name)
+	}
+
+	res, err := s.Apply(ctx, actor, "domain.update", map[string]any{
+		"domain_id": in.DomainID,
+		"old_name":  current,
+		"new_name":  in.Name,
+	}, func(tx *sql.Tx) error {
+		var exists int
+		err := tx.QueryRowContext(ctx, `SELECT 1 FROM domains WHERE name = ?`, in.Name).Scan(&exists)
+		if err == nil {
+			return fmt.Errorf("%w: domain %s already exists", ErrConflict, in.Name)
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+
+		now := time.Now()
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE users SET email = LOWER(username) || '@' || ?, updated_at = ? WHERE domain_id = ?`,
+			in.Name, now, in.DomainID,
+		); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx,
+			`UPDATE domains SET name = ?, updated_at = ? WHERE id = ?`,
+			in.Name, now, in.DomainID,
+		)
 		return err
 	})
 	return res, err

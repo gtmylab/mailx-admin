@@ -1,82 +1,99 @@
 {{define "user_form"}}
-<div x-data="{ open: true }" x-show="open" x-cloak @close-modal.window="open = false"
-     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
-  <div @click.outside="open = false" class="w-full max-w-md rounded-lg border border-slate-800 bg-slate-900 shadow-2xl">
-    <header class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
-      <h3 class="font-medium">
-        {{if .User}}Edit user{{else}}Create user{{end}}
-      </h3>
-      <button type="button" @click="open = false" class="text-slate-500 hover:text-slate-200">✕</button>
+{{/* Dialog shell, Alpine-free (see modal.html/domain_form.html). The create and
+     edit variants are separate <form> elements so each carries a static
+     hx-post / hx-patch URL the route test can verify. */}}
+<div class="modal" role="dialog" aria-modal="true" aria-labelledby="user-form-title">
+  <div class="modal-panel max-w-md">
+    <header class="modal-header">
+      <h3 id="user-form-title">{{if .User}}Edit {{.User.Email}}{{else}}New user{{end}}</h3>
+      <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+             aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
     </header>
 
-    <form hx-{{if .User}}patch{{else}}post{{end}}="{{.Action}}"
-          hx-target="#form-error"
-          hx-swap="innerHTML"
-          class="p-5 space-y-4">
+    {{if .User}}
+    <form class="modal-body form" hx-patch="/users/{{.User.ID}}" hx-target="#form-error" hx-swap="innerHTML">
+      <div class="form-error-slot" data-modal-error></div>
 
-      <div id="form-error"></div>
+      <div class="field">
+        <span class="field-label">Address</span>
+        <span class="kv-value mono">{{.User.Email}}</span>
+        <span class="field-hint">The address follows the domain name; rename the domain to change it.</span>
+      </div>
 
-      {{if not .User}}
-      <label class="block">
-        <span class="text-sm text-slate-400">Domain</span>
-        <select name="domain_id" required
-                class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+      <label class="field">
+        <span class="field-label">Quota (MB)</span>
+        <input class="input" type="number" name="quota_mb" min="1" value="{{.User.QuotaMB}}">
+      </label>
+
+      <label class="check-row">
+        <input class="checkbox" type="checkbox" name="active" {{if .User.Active}}checked{{end}}>
+        <span>Active (can receive mail)</span>
+      </label>
+
+      <label class="check-row">
+        <input class="checkbox" type="checkbox" name="is_admin" {{if .User.IsAdmin}}checked{{end}}>
+        <span>Administrator (can sign in to this panel)</span>
+      </label>
+
+      <div class="form-actions">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn btn-primary">Save changes</button>
+      </div>
+    </form>
+    {{else}}
+    <form class="modal-body form" hx-post="/users" hx-target="#form-error" hx-swap="innerHTML">
+      <div class="form-error-slot" data-modal-error></div>
+
+      <label class="field">
+        <span class="field-label">Domain</span>
+        <select class="select" name="domain_id" required>
           {{range .Domains}}
           <option value="{{.ID}}">{{.Name}}</option>
           {{end}}
         </select>
+        {{if not .Domains}}<span class="field-error">No domains yet — create a domain first.</span>{{end}}
       </label>
 
-      <label class="block">
-        <span class="text-sm text-slate-400">Username</span>
-        <input type="text" name="username" required
-               pattern="[a-zA-Z0-9._-]+"
-               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
-        <span class="text-xs text-slate-500 mt-1 block">Local part only (e.g. "alice"). Letters, digits, . _ -</span>
+      <label class="field">
+        <span class="field-label">Username</span>
+        <input class="input" type="text" name="username" required spellcheck="false"
+               pattern="[a-zA-Z0-9._-]+" placeholder="alice">
+        <span class="field-hint">Local part only. Letters, digits, <span class="mono">. _ -</span></span>
       </label>
 
-      <label class="block" x-data="{ show: false }">
-        <span class="text-sm text-slate-400">Initial password</span>
-        <div class="relative">
-          <input :type="show ? 'text' : 'password'" name="password" required minlength="8"
-                 class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2 pr-16">
-          <button type="button" @click="show = !show"
-                  class="absolute right-2 top-2 text-xs text-slate-500 hover:text-slate-200"
-                  x-text="show ? 'hide' : 'show'">show</button>
+      <div class="field">
+        <label class="field-label" for="new-user-password">Initial password</label>
+        <div class="input-group">
+          <input class="input" id="new-user-password" type="password" name="password" required minlength="8"
+                 autocomplete="new-password">
+          <button type="button" class="btn btn-sm" data-toggle-password="#new-user-password" aria-pressed="false">
+            show
+          </button>
         </div>
-        <span class="text-xs text-slate-500 mt-1 block">Minimum 8 characters. Shown once; save it now or send to an alternate email.</span>
-      </label>
-      {{end}}
+        <span class="field-hint">
+          At least 8 characters. Show it once and save it now, or reset it later
+          from the user page.
+        </span>
+      </div>
 
-      <label class="block">
-        <span class="text-sm text-slate-400">Quota (MB)</span>
-        <input type="number" name="quota_mb" min="1" value="{{if .User}}{{.User.QuotaMB}}{{else}}1024{{end}}"
-               class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
-      </label>
-
-      {{if .User}}
-      <label class="flex items-center gap-2">
-        <input type="checkbox" name="active" {{if .User.Active}}checked{{end}}>
-        <span class="text-sm text-slate-300">Active</span>
-      </label>
-      {{end}}
-
-      <label class="flex items-center gap-2">
-        <input type="checkbox" name="is_admin" {{if .User}}{{if .User.IsAdmin}}checked{{end}}{{end}}>
-        <span class="text-sm text-slate-300">Admin (can also sign in to this panel)</span>
+      <label class="field">
+        <span class="field-label">Quota (MB)</span>
+        <input class="input" type="number" name="quota_mb" min="1" value="1024">
       </label>
 
-      <div class="flex justify-end gap-2 pt-2">
-        <button type="button" @click="open = false"
-                class="rounded border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
-          Cancel
-        </button>
-        <button type="submit"
-                class="rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-sm font-medium">
-          {{if .User}}Save{{else}}Preview{{end}}
-        </button>
+      <label class="check-row">
+        <input class="checkbox" type="checkbox" name="is_admin">
+        <span>Administrator (can sign in to this panel)</span>
+      </label>
+
+      <div class="form-actions">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn btn-primary">Create user</button>
       </div>
     </form>
+    {{end}}
   </div>
 </div>
 {{end}}

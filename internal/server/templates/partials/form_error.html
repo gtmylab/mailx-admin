@@ -1,5 +1,6 @@
 {{define "form_error"}}
-<div class="rounded border border-red-800 bg-red-950/40 px-3 py-2 text-sm text-red-200">
-  {{.Error}}
+<div class="alert alert-err" role="alert">
+  <span class="dot" aria-hidden="true"></span>
+  <span>{{.Error}}</span>
 </div>
 {{end}}

@@ -1,27 +1,35 @@
 {{define "ssl_renew_result"}}
-<div x-data="{ open: true }" x-show="open" x-cloak @close-modal.window="open = false"
-     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
-  <div @click.outside="open = false"
-       class="w-full max-w-2xl rounded-lg border {{if .Result.Success}}border-emerald-800{{else}}border-red-800{{end}} bg-slate-900 shadow-2xl">
-    <header class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
-      <h3 class="font-medium">
-        {{if .Result.Success}}✓ Renewal successful{{else}}✗ Renewal failed{{end}}
-        {{if .CertName}}({{.CertName}}){{end}}
+<div class="modal" role="dialog" aria-modal="true" aria-labelledby="ssl-renew-title">
+  <div class="modal-panel max-w-2xl">
+    <header class="modal-header">
+      <h3 id="ssl-renew-title">
+        {{if .Result.Success}}<span class="badge ok">✓ renewed</span>
+        {{else}}<span class="badge err">✗ failed</span>{{end}}
+        {{if .CertName}}<span class="mono text-sm">{{.CertName}}</span>{{end}}
+        <span class="dim text-xs">{{.Result.Duration}}</span>
       </h3>
-      <button @click="open = false" class="text-slate-500 hover:text-slate-200">✕</button>
+      <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+             aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
     </header>
-    <div class="p-5">
-      <div class="text-xs text-slate-500 mb-2">Duration: {{.Result.Duration}}</div>
+
+    <div class="modal-body">
       {{if .Result.Error}}
-      <div class="rounded border border-red-800 bg-red-950/30 px-3 py-2 text-sm text-red-200 mb-3">
-        {{.Result.Error}}
+      <div class="alert alert-err mb-3">
+        <span class="dot" aria-hidden="true"></span>
+        <span>{{.Result.Error}}</span>
       </div>
       {{end}}
-      <pre class="max-h-[60vh] overflow-auto rounded bg-slate-950 p-3 text-xs font-mono text-slate-300">{{.Result.Output}}</pre>
+      <details open>
+        <summary class="dim text-xs">certbot output</summary>
+        <pre class="code code-block">{{.Result.Output}}</pre>
+      </details>
     </div>
-    <footer class="px-5 py-3 border-t border-slate-800 flex justify-end">
-      <button @click="open = false; location.reload()"
-              class="rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-sm font-medium">Close</button>
+
+    <footer class="modal-footer">
+      <button type="button" class="btn" data-close-modal>Close</button>
+      <button type="button" class="btn btn-primary" data-reload>Reload page</button>
     </footer>
   </div>
 </div>

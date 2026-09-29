@@ -1,87 +1,79 @@
 {{define "content"}}
-<div class="max-w-4xl space-y-6">
+<div class="page-header">
+  <div>
+    <h1>Backups</h1>
+    <p class="page-sub">Archives are written to <span class="mono text-xs">{{.Data.Dir}}</span></p>
+  </div>
+</div>
 
-  <div class="rounded-lg border border-slate-800 bg-slate-900">
-    <header class="px-4 py-3 border-b border-slate-800">
-      <h2 class="font-medium">Create backup</h2>
-      <p class="text-xs text-slate-500 mt-1">Backups are written to <code class="font-mono">{{.Data.Dir}}</code></p>
-    </header>
-
-    <form hx-post="/backup" hx-target="#form-error" hx-swap="innerHTML" class="p-5 space-y-3">
-      <div id="form-error"></div>
-
-      <label class="flex items-center gap-2">
-        <input type="checkbox" name="include_database" checked>
-        <span class="text-sm text-slate-300">Admin database</span>
-        <span class="text-xs text-slate-500">— domains, users, aliases, settings, audit log</span>
-      </label>
-
-      <label class="flex items-center gap-2">
-        <input type="checkbox" name="include_configs" checked>
-        <span class="text-sm text-slate-300">Postfix, Dovecot, OpenDKIM configs</span>
-      </label>
-
-      <label class="flex items-center gap-2">
-        <input type="checkbox" name="include_dkim" checked>
-        <span class="text-sm text-slate-300">DKIM keys</span>
-      </label>
-
-      <label class="flex items-center gap-2">
-        <input type="checkbox" name="include_letsencrypt" checked>
-        <span class="text-sm text-slate-300">Let's Encrypt certificates</span>
-      </label>
-
-      <label class="flex items-center gap-2">
-        <input type="checkbox" name="include_maildirs">
-        <span class="text-sm text-slate-300">Mail data (Maildirs)</span>
-        <span class="text-xs text-amber-400 ml-2">— can be very large</span>
-      </label>
-
-      <div class="pt-2">
-        <button type="submit"
-                class="rounded bg-emerald-600 hover:bg-emerald-500 px-4 py-2 font-medium">
-          Start backup
-        </button>
-      </div>
-    </form>
+<div class="card mb-4">
+  <div class="card-header">
+    <h2>Create a backup</h2>
+    <span class="dim text-xs">A single .tar.gz per run</span>
   </div>
 
-  <div class="rounded-lg border border-slate-800 bg-slate-900">
-    <header class="px-4 py-3 border-b border-slate-800">
-      <h2 class="font-medium">Existing backups</h2>
-    </header>
+  <form hx-post="/backup" hx-target="#form-error" hx-swap="innerHTML" hx-indicator="#backup-busy">
+    <div class="card-body form">
+      <label class="check-row">
+        <input class="checkbox" type="checkbox" name="include_database" checked>
+        <span>Admin database <span class="dim text-xs">— domains, users, aliases, settings, audit log</span></span>
+      </label>
+      <label class="check-row">
+        <input class="checkbox" type="checkbox" name="include_configs" checked>
+        <span>Postfix, Dovecot and OpenDKIM configuration</span>
+      </label>
+      <label class="check-row">
+        <input class="checkbox" type="checkbox" name="include_dkim" checked>
+        <span>DKIM keys</span>
+      </label>
+      <label class="check-row">
+        <input class="checkbox" type="checkbox" name="include_letsencrypt" checked>
+        <span>Let's Encrypt certificates</span>
+      </label>
+      <label class="check-row">
+        <input class="checkbox" type="checkbox" name="include_maildirs">
+        <span>Mail data (Maildirs) <span class="warn-text text-xs">— can be very large</span></span>
+      </label>
+    </div>
+    <div class="card-footer form-row">
+      <span id="backup-busy" class="htmx-indicator dim text-xs"><span class="spinner"></span> archiving…</span>
+      <button type="submit" class="btn btn-primary btn-sm ml-auto">Start backup</button>
+    </div>
+  </form>
+</div>
 
-    {{if .Data.Backups}}
-    <table class="w-full text-sm">
-      <thead class="text-xs text-slate-500 uppercase tracking-wider">
+<div class="card">
+  <div class="card-header">
+    <h2>Existing backups <span class="badge">{{len .Data.Backups}}</span></h2>
+    <button class="btn btn-sm" data-reload>Refresh</button>
+  </div>
+
+  {{if .Data.Backups}}
+  <div class="table-wrap">
+    <table class="table table-stack">
+      <thead>
         <tr>
-          <th class="text-left px-4 py-2">Name</th>
-          <th class="text-left px-4 py-2">Size</th>
-          <th class="text-left px-4 py-2">Created</th>
-          <th class="text-right px-4 py-2">Actions</th>
+          <th>Name</th>
+          <th>Size</th>
+          <th>Created</th>
+          <th class="table-actions">Actions</th>
         </tr>
       </thead>
       <tbody>
         {{range .Data.Backups}}
-        <tr class="border-t border-slate-800">
-          <td class="px-4 py-2 font-mono text-xs">{{.Name}}</td>
-          <td class="px-4 py-2 text-slate-400 text-xs">{{humanBytes .SizeBytes}}</td>
-          <td class="px-4 py-2 text-slate-400 text-xs">{{humanTime .ModifiedAt}}</td>
-          <td class="px-4 py-2 text-right">
-            <div class="flex justify-end gap-1">
-              <a href="/backup/download/{{.Name}}"
-                 class="rounded border border-slate-700 px-2 py-1 text-xs hover:bg-slate-800">Download</a>
-              <button hx-post="/backup/restore/{{.Name}}"
-                      hx-target="#modal-host"
-                      hx-swap="innerHTML"
-                      hx-confirm="Extract this backup to a staging directory? Files are NOT auto-applied."
-                      class="rounded border border-amber-800 px-2 py-1 text-xs text-amber-300 hover:bg-amber-950/50">
+        <tr>
+          <td data-label="Name" class="mono text-xs break-all">{{.Name}}</td>
+          <td data-label="Size" class="dim text-xs">{{humanBytes .SizeBytes}}</td>
+          <td data-label="Created" class="dim text-xs">{{humanTime .ModifiedAt}}</td>
+          <td class="table-actions" data-label="">
+            <div class="btn-group">
+              <a class="btn btn-sm" href="/backup/download/{{.Name}}">Download</a>
+              <button class="btn btn-sm" hx-post="/backup/restore/{{.Name}}" hx-target="#modal-host" hx-swap="innerHTML"
+                      hx-confirm="Extract this backup to a staging directory? Files are NOT applied automatically.">
                 Restore
               </button>
-              <button hx-delete="/backup/{{.Name}}"
-                      hx-target="#form-error"
-                      hx-confirm="Permanently delete this backup?"
-                      class="rounded border border-red-900 px-2 py-1 text-xs text-red-300 hover:bg-red-950/50">
+              <button class="btn btn-sm btn-danger" hx-delete="/backup/{{.Name}}" hx-target="#form-error"
+                      hx-swap="innerHTML" hx-confirm="Permanently delete {{.Name}}?">
                 Delete
               </button>
             </div>
@@ -90,10 +82,12 @@
         {{end}}
       </tbody>
     </table>
-    {{else}}
-    <div class="p-8 text-center text-slate-500">No backups yet.</div>
-    {{end}}
   </div>
-
+  {{else}}
+  <div class="empty">
+    <span class="empty-title">No backups yet</span>
+    <span class="empty-hint">Run the first backup above; it takes a few seconds.</span>
+  </div>
+  {{end}}
 </div>
 {{end}}

@@ -1,0 +1,61 @@
+{{define "log_source"}}
+<div class="card">
+  <div class="card-header">
+    <h2>
+      Log source
+      {{if .Stale}}<span class="badge warn">ingester may be stuck</span>
+      {{else if .HasEvents}}<span class="badge ok">events arriving</span>
+      {{else}}<span class="badge err">no events yet</span>{{end}}
+    </h2>
+    <span class="dim text-xs">Where the events on this page come from</span>
+  </div>
+
+  <div class="card-body">
+    <div class="grid grid-cols-4 gap-4">
+      <div class="kv">
+        <span class="kv-label">Log file</span>
+        <span class="kv-value mono text-xs break-all">{{.Path}}</span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">File state</span>
+        <span class="kv-value">
+          {{if .Exists}}
+            {{if .Readable}}<span class="badge ok">readable</span>{{else}}<span class="badge err">not readable</span>{{end}}
+            <span class="dim text-xs">{{humanBytes .SizeBytes}}</span>
+          {{else}}
+            <span class="badge err">missing</span>
+          {{end}}
+        </span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">File last written</span>
+        <span class="kv-value">{{if .Exists}}{{humanTime .Modified}}{{else}}—{{end}}</span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Last stored event</span>
+        <span class="kv-value">
+          {{if .HasEvents}}{{humanTime .LastEvent}} <span class="dim text-xs">({{.EventsHour}} in the last hour)</span>
+          {{else}}never{{end}}
+        </span>
+      </div>
+    </div>
+
+    {{if .Hints}}
+    <div class="mt-3">
+      {{range .Hints}}
+      <div class="alert alert-warn mb-2">
+        <span class="dot" aria-hidden="true"></span>
+        <span>{{.}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+
+  <div class="card-footer">
+    Events are parsed from this file by the background ingester; the panel only reads
+    the database. If the file is unreadable or the ingester is stopped, this page stays
+    empty even though mail is flowing.
+  </div>
+</div>
+{{end}}

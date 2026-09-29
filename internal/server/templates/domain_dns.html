@@ -1,41 +1,60 @@
 {{define "content"}}
-<div class="max-w-4xl">
-  <div class="flex items-center justify-between mb-6">
-    <div>
-      <h2 class="text-lg font-medium">DNS records for {{.Data.Domain.Name}}</h2>
-      <p class="text-sm text-slate-400 mt-1">
-        Add these records to your DNS provider, then click "Verify".
-      </p>
-    </div>
-    <div class="flex gap-2">
-      <a href="/domains/{{.Data.Domain.ID}}/dns/export"
-         class="rounded border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800">
-        Download .txt
-      </a>
-      <button hx-get="/domains/{{.Data.Domain.ID}}/dns/check"
-              hx-target="#dns-results"
-              hx-swap="innerHTML"
-              hx-indicator="#dns-spinner"
-              class="rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-sm font-medium flex items-center gap-2">
-        <span>Verify DNS</span>
-        <span id="dns-spinner" class="htmx-indicator">⟳</span>
-      </button>
-    </div>
+{{$d := .Data.Domain}}
+<div class="page-header">
+  <div>
+    <a href="/domains/{{$d.ID}}" class="dim text-xs">← {{$d.Name}}</a>
+    <h1 class="mt-1">DNS records</h1>
+    <p class="page-sub">Add these records at your DNS provider, then run the check.</p>
   </div>
-
-  <div class="mb-4 rounded border border-slate-800 bg-slate-900 px-4 py-3 text-sm">
-    <span class="text-slate-400">Server IP:</span>
-    <code class="ml-2 font-mono">{{.Data.ServerIP}}</code>
+  <div class="page-actions">
+    <a class="btn btn-sm" href="/domains/{{$d.ID}}/dns/export">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+           aria-hidden="true"><path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 19h14"/></svg>
+      Download .txt
+    </a>
+    <button class="btn btn-sm btn-primary" hx-get="/domains/{{$d.ID}}/dns/check"
+            hx-target="#dns-results" hx-swap="innerHTML" hx-indicator="#dns-spinner">
+      Verify DNS
+      <span id="dns-spinner" class="htmx-indicator"><span class="spinner"></span></span>
+    </button>
   </div>
+</div>
 
-  <div id="dns-results">
-    {{if .Data.Checks}}
-      {{template "dns_check_results" .}}
-    {{else}}
-      <div class="rounded border border-slate-800 bg-slate-900 p-8 text-center text-slate-500">
-        No DNS check run yet. Click "Verify DNS" to check.
-      </div>
+<div class="card mb-4">
+  <div class="card-body form-row">
+    <span class="kv">
+      <span class="kv-label">Mail server</span>
+      <span class="kv-value mono">{{.Data.ServerIP}}</span>
+    </span>
+    <span class="kv">
+      <span class="kv-label">Domain</span>
+      <span class="kv-value mono">{{$d.Name}}</span>
+    </span>
+    {{if $d.DKIMPrivateKeyPath}}
+    <span class="kv">
+      <span class="kv-label">DKIM selector</span>
+      <span class="kv-value mono">{{$d.DKIMSelector}}</span>
+    </span>
     {{end}}
+    <span class="ml-auto text-xs dim">
+      The check queries public DNS, so freshly added records may need to propagate.
+    </span>
   </div>
+</div>
+
+{{/* Same data-shape rule as the queue page: the fragment reads .Checks, so the
+     envelope has to be unwrapped here. v1.0.3 passed pageData, which is why the
+     second load of this page answered 500. */}}
+<div id="dns-results">
+  {{if .Data.Checks}}
+    {{template "dns_check_results" .Data}}
+  {{else}}
+    <div class="card">
+      <div class="empty">
+        <span class="empty-title">No check run yet</span>
+        <span class="empty-hint">Add the records below, then press “Verify DNS”.</span>
+      </div>
+    </div>
+  {{end}}
 </div>
 {{end}}

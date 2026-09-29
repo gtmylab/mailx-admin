@@ -1,68 +1,80 @@
 {{define "content"}}
-<div class="grid grid-cols-4 gap-4 mb-6">
-  {{template "stat" (dict "Label" "Domains"  "Value" (len .Data.Domains))}}
-  {{template "stat" (dict "Label" "Users"    "Value" .Data.Users)}}
-  {{template "stat" (dict "Label" "Aliases"  "Value" .Data.Aliases)}}
-  {{template "stat" (dict "Label" "Services" "Value" "5")}}
+<div class="grid grid-cols-4 gap-4 mb-4">
+  {{template "stat" (dict "Label" "Domains" "Value" (len .Data.Domains) "Href" "/domains")}}
+  {{template "stat" (dict "Label" "Mailboxes" "Value" .Data.Users "Href" "/users")}}
+  {{template "stat" (dict "Label" "Aliases" "Value" .Data.Aliases "Href" "/domains")}}
+  {{template "stat" (dict "Label" "Services" "Value" (len .Data.Services) "Href" "/ports")}}
 </div>
 
-<div class="grid grid-cols-2 gap-6">
-  <section class="rounded-lg border border-slate-800 bg-slate-900">
-    <header class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-      <h2 class="font-medium">Service Health</h2>
-      <button hx-get="/health/services" hx-target="#service-health" hx-swap="innerHTML"
-              class="text-xs text-slate-400 hover:text-slate-200">Refresh</button>
-    </header>
-    <div id="service-health"
-         hx-get="/health/services" hx-trigger="every 15s" hx-swap="innerHTML">
+<div class="grid grid-cols-2 gap-4">
+  <section class="card">
+    <div class="card-header">
+      <h2>Service health</h2>
+      <button class="btn btn-sm" hx-get="/health/services" hx-target="#service-health" hx-swap="innerHTML">
+        Refresh
+      </button>
+    </div>
+    <div id="service-health" hx-get="/health/services" hx-trigger="every 15s" hx-swap="innerHTML">
       {{template "service_health" .}}
     </div>
   </section>
 
-  <section class="rounded-lg border border-slate-800 bg-slate-900">
-    <header class="px-4 py-3 border-b border-slate-800">
-      <h2 class="font-medium">Domains</h2>
-    </header>
-    <table class="w-full text-sm">
-      <thead class="text-xs text-slate-500 uppercase tracking-wider">
-        <tr>
-          <th class="text-left px-4 py-2">Domain</th>
-          <th class="text-left px-4 py-2">Users</th>
-          <th class="text-left px-4 py-2">DKIM</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Data.Domains}}
-        <tr class="border-t border-slate-800">
-          <td class="px-4 py-2">
-            <a href="/domains/{{.ID}}" class="hover:text-emerald-400">{{.Name}}</a>
-            {{if .IsPrimary}}<span class="ml-2 text-xs text-slate-500">primary</span>{{end}}
-          </td>
-          <td class="px-4 py-2 text-slate-400">{{index $.Data.Counts .Name}}</td>
-          <td class="px-4 py-2">
-            {{if .DKIMPrivateKeyPath}}<span class="text-emerald-400">✓</span>
-            {{else}}<span class="text-amber-400">✗</span>{{end}}
-          </td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
+  <section class="card">
+    <div class="card-header">
+      <h2>Domains</h2>
+      <a class="btn btn-sm" href="/domains">Manage</a>
+    </div>
+    {{if .Data.Domains}}
+    <div class="table-wrap">
+      <table class="table table-compact table-stack">
+        <thead>
+          <tr>
+            <th>Domain</th>
+            <th>Mailboxes</th>
+            <th>DKIM</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Data.Domains}}
+          <tr>
+            <td data-label="Domain">
+              <a href="/domains/{{.ID}}" class="strong">{{.Name}}</a>
+              {{if .IsPrimary}}<span class="badge brand">primary</span>{{end}}
+            </td>
+            <td data-label="Mailboxes" class="dim">{{index $.Data.Counts .Name}}</td>
+            <td data-label="DKIM">
+              {{if .DKIMPrivateKeyPath}}<span class="badge ok">signed</span>
+              {{else}}<span class="badge warn">no key</span>{{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty">
+      <span class="empty-title">No domains yet</span>
+      <span class="empty-hint">Add the first domain to start receiving mail.</span>
+      <a class="btn btn-primary mt-2" href="/domains">Add a domain</a>
+    </div>
+    {{end}}
   </section>
 </div>
 
-<section class="mt-6 rounded-lg border border-slate-800 bg-slate-900">
-  <header class="px-4 py-3 border-b border-slate-800">
-    <h2 class="font-medium">Recent Activity</h2>
-  </header>
+<section class="card mt-4">
+  <div class="card-header">
+    <h2>Recent activity</h2>
+    <a class="btn btn-sm" href="/audit">Full audit log</a>
+  </div>
   <div hx-get="/audit?limit=10&partial=1" hx-trigger="load" hx-swap="innerHTML">
-    <div class="p-4 text-sm text-slate-500">Loading…</div>
+    <div class="card-body dim text-sm">Loading…</div>
   </div>
 </section>
 {{end}}
 
 {{define "stat"}}
-<div class="rounded-lg border border-slate-800 bg-slate-900 p-4">
-  <div class="text-xs uppercase tracking-wider text-slate-500">{{.Label}}</div>
-  <div class="mt-2 text-3xl font-semibold">{{.Value}}</div>
-</div>
+<a class="stat card-hover" href="{{.Href}}">
+  <span class="stat-label">{{.Label}}</span>
+  <span class="stat-value">{{.Value}}</span>
+</a>
 {{end}}

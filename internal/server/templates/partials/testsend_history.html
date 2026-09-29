@@ -1,18 +1,38 @@
 {{define "testsend_history"}}
-<table class="w-full text-xs">
-  <tbody>
-    {{range .Rows}}
-    <tr class="border-t border-slate-800">
-      <td class="px-4 py-2">
-        {{if .Success}}<span class="text-emerald-400">✓</span>{{else}}<span class="text-red-400">✗</span>{{end}}
-      </td>
-      <td class="px-2 py-2 text-slate-300 truncate max-w-[200px]">{{.To}}</td>
-      <td class="px-2 py-2 text-slate-500">{{humanTime .Created}}</td>
-      <td class="px-2 py-2 text-slate-500 text-right">{{.Duration}}ms</td>
-    </tr>
-    {{else}}
-    <tr><td class="px-4 py-4 text-center text-slate-500">No sends yet.</td></tr>
-    {{end}}
-  </tbody>
-</table>
+{{if .Rows}}
+<div class="table-wrap">
+  <table class="table table-compact table-stack">
+    <thead>
+      <tr>
+        <th>Result</th>
+        <th>To</th>
+        <th>Server</th>
+        <th>When</th>
+        <th class="table-actions">Duration</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Rows}}
+      <tr>
+        <td data-label="Result">
+          {{if .Success}}<span class="badge ok">sent</span>{{else}}<span class="badge err">failed</span>{{end}}
+        </td>
+        <td data-label="To" class="text-xs">
+          <div class="truncate max-w-[200px]" title="{{.To}}">{{.To}}</div>
+          {{if .Error}}<div class="err-text text-xs truncate max-w-[200px]" title="{{.Error}}">{{.Error}}</div>{{end}}
+        </td>
+        <td data-label="Server" class="dim text-xs mono">{{.Host}}:{{.Port}} {{.TLSMode}}</td>
+        <td data-label="When" class="dim text-xs">{{humanTime .Created}}</td>
+        <td data-label="Duration" class="table-actions dim text-xs">{{.Duration}} ms</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{else}}
+<div class="empty">
+  <span class="empty-title">No test sends yet</span>
+  <span class="empty-hint">Every send is recorded here with its outcome and timing.</span>
+</div>
+{{end}}
 {{end}}

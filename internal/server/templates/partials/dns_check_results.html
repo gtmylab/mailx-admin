@@ -1,50 +1,51 @@
 {{define "dns_check_results"}}
-<div class="space-y-2">
+{{if .Checks}}
+<div class="list">
   {{range .Checks}}
-  <div class="rounded border
-    {{if eq .Status "ok"}}border-emerald-800 bg-emerald-950/20
-    {{else if eq .Status "mismatch"}}border-amber-800 bg-amber-950/20
-    {{else if eq .Status "missing"}}border-red-800 bg-red-950/20
-    {{else}}border-slate-800 bg-slate-900{{end}} px-4 py-3">
-    <div class="flex items-start justify-between gap-4">
-      <div class="flex-1 min-w-0">
-        <div class="flex items-center gap-2">
-          <span class="font-medium text-sm">{{.Expected.Purpose}}</span>
-          <span class="text-xs px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">{{.Expected.Type}}</span>
-          {{if eq .Status "ok"}}<span class="text-emerald-400 text-xs">✓ OK</span>
-          {{else if eq .Status "mismatch"}}<span class="text-amber-400 text-xs">⚠ MISMATCH</span>
-          {{else if eq .Status "missing"}}<span class="text-red-400 text-xs">✗ MISSING</span>
-          {{else}}<span class="text-slate-400 text-xs">? {{.Status}}</span>{{end}}
-        </div>
-        <div class="mt-2 font-mono text-xs text-slate-300 break-all">
-          <div>{{.Expected.Name}}</div>
-          {{if eq .Expected.Type "MX"}}
-          <div class="text-slate-500">Priority {{.Expected.Priority}} → {{.Expected.Value}}</div>
-          {{else}}
-          <div class="text-slate-500">{{.Expected.Value}}</div>
-          {{end}}
-        </div>
-        {{if .Observed}}
-        <div class="mt-2 text-xs text-slate-500">
-          Observed: <span class="font-mono">{{range .Observed.Values}}{{.}} {{end}}</span>
-        </div>
-        {{end}}
-        {{if .Message}}
-        <div class="mt-1 text-xs
-          {{if eq .Status "ok"}}text-slate-500
-          {{else if eq .Status "mismatch"}}text-amber-400
-          {{else}}text-red-400{{end}}">{{.Message}}</div>
+  <div class="card mb-2">
+    <div class="card-body">
+      <div class="form-row">
+        <span class="strong text-sm">{{.Expected.Purpose}}</span>
+        <span class="badge">{{.Expected.Type}}</span>
+        {{if eq .Status "ok"}}<span class="badge ok">✓ OK</span>
+        {{else if eq .Status "mismatch"}}<span class="badge warn">⚠ mismatch</span>
+        {{else if eq .Status "missing"}}<span class="badge err">✗ missing</span>
+        {{else}}<span class="badge">{{.Status}}</span>{{end}}
+      </div>
+
+      <div class="code mt-2">
+        <div>{{.Expected.Name}}</div>
+        {{if eq .Expected.Type "MX"}}
+        <div class="dim">priority {{.Expected.Priority}} → {{.Expected.Value}}</div>
+        {{else}}
+        <div class="dim">{{.Expected.Value}}</div>
         {{end}}
       </div>
-      <div class="flex flex-col gap-1 shrink-0">
-        <button type="button"
-                onclick="navigator.clipboard.writeText('{{.Expected.Value}}'); this.textContent='✓'; setTimeout(() => this.textContent='Copy', 1500)"
-                class="rounded border border-slate-700 px-2 py-1 text-xs hover:bg-slate-800">
-          Copy
-        </button>
+
+      {{if .Observed}}
+      <div class="dim text-xs mt-2">
+        Observed: <span class="mono">{{range .Observed.Values}}{{.}} {{end}}</span>
+      </div>
+      {{end}}
+      {{if .Message}}
+      <div class="text-xs mt-1 {{if eq .Status "ok"}}dim{{else if eq .Status "mismatch"}}warn-text{{else}}err-text{{end}}">
+        {{.Message}}
+      </div>
+      {{end}}
+
+      <div class="form-row mt-2">
+        <button type="button" class="btn btn-sm" data-copy-value="{{.Expected.Value}}">Copy value</button>
       </div>
     </div>
   </div>
   {{end}}
 </div>
+{{else}}
+<div class="card">
+  <div class="empty">
+    <span class="empty-title">No records were checked</span>
+    <span class="empty-hint">The checker returned nothing; try again in a moment.</span>
+  </div>
+</div>
+{{end}}
 {{end}}

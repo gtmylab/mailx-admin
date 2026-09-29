@@ -1,104 +1,104 @@
 {{define "content"}}
-<div class="rounded-lg border border-slate-800 bg-slate-900">
-  <header class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-    <div>
-      <h2 class="font-medium">{{len .Data.Messages}} message(s) in queue</h2>
-      <span class="text-xs text-slate-500">
-        Total size: {{.Data.TotalSize}} bytes
-      </span>
-    </div>
-    <div class="flex gap-2">
-      <button hx-get="/queue/refresh" hx-target="#queue-table" hx-swap="innerHTML"
-              class="rounded border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800">
-        Refresh
-      </button>
-      <button hx-post="/queue/flush-all" hx-target="#form-error" hx-swap="innerHTML"
-              class="rounded border border-amber-800 px-3 py-1.5 text-sm text-amber-300 hover:bg-amber-950/50">
-        Flush all
-      </button>
-    </div>
-  </header>
+<div class="page-header">
+  <div>
+    <h1>Mail queue</h1>
+    <p class="page-sub">Messages waiting in the Postfix queue. Refreshes every 30 seconds.</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-sm" hx-get="/queue/refresh" hx-target="#queue-table" hx-swap="innerHTML"
+            hx-indicator="#queue-busy">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+           aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5"/><path d="M20 4v5h-5"/>
+        <path d="M20 12a8 8 0 0 1-13.7 5.6L4 15.5"/><path d="M4 20v-5h5"/></svg>
+      Refresh
+      <span id="queue-busy" class="htmx-indicator"><span class="spinner"></span></span>
+    </button>
+    <button class="btn btn-sm btn-danger" hx-post="/queue/flush-all" hx-target="#form-error" hx-swap="innerHTML"
+            hx-confirm="Retry every message in the queue?">
+      Flush all (retry)
+    </button>
+  </div>
+</div>
 
-  <div id="form-error" class="px-4"></div>
+<div class="card">
+  <div class="card-header">
+    <h2>Queue depth <span class="badge">{{len .Data.Messages}} message(s)</span></h2>
+    <span class="dim text-xs">Total size: {{humanBytes .Data.TotalSize}}</span>
+  </div>
 
-  <div id="queue-table" hx-get="/queue/refresh" hx-trigger="every 15s" hx-swap="innerHTML">
-    {{template "queue_table" .}}
+  {{/* The page body and /queue/refresh must hand the fragment the *same* data
+       shape: handleQueuePage passes its own map, handleQueueRefresh passes a
+       flat one, so queue_table reads .Messages directly. Passing the pageData
+       envelope (as v1.0.3 did) left .Messages unresolved, which answered 500. */}}
+  <div id="queue-table" hx-get="/queue/refresh" hx-trigger="every 30s" hx-swap="innerHTML">
+    {{template "queue_table" .Data}}
   </div>
 </div>
 {{end}}
 
 {{define "queue_table"}}
 {{if .Messages}}
-<table class="w-full text-sm">
-  <thead class="text-xs text-slate-500 uppercase tracking-wider">
-    <tr>
-      <th class="text-left px-4 py-2">Queue ID</th>
-      <th class="text-left px-4 py-2">Size</th>
-      <th class="text-left px-4 py-2">Arrival</th>
-      <th class="text-left px-4 py-2">From</th>
-      <th class="text-left px-4 py-2">To</th>
-      <th class="text-left px-4 py-2">Status</th>
-      <th class="text-right px-4 py-2">Actions</th>
-    </tr>
-  </thead>
-  <tbody>
-    {{range .Messages}}
-    <tr class="border-t border-slate-800">
-      <td class="px-4 py-2 font-mono text-xs">
-        {{if .Active}}<span class="text-amber-400">*</span> {{end}}{{.QueueID}}
-      </td>
-      <td class="px-4 py-2 text-slate-400 text-xs">{{.Size}}</td>
-      <td class="px-4 py-2 text-slate-400 text-xs">{{.Arrival.Format "Jan 2 15:04"}}</td>
-      <td class="px-4 py-2 text-slate-300 text-xs truncate max-w-[200px]">{{.Sender}}</td>
-      <td class="px-4 py-2 text-slate-300 text-xs">
-        {{range .Recipients}}
-        <div class="truncate max-w-[220px]">{{.Address}}</div>
-        {{if .Reason}}<div class="text-slate-500 truncate max-w-[220px]">{{.Reason}}</div>{{end}}
-        {{end}}
-      </td>
-      <td class="px-4 py-2">
-        {{range .Recipients}}
-        <div class="text-xs
-          {{if eq .Status "sent"}}text-emerald-400
-          {{else if eq .Status "deferred"}}text-amber-400
-          {{else}}text-slate-400{{end}}">{{.Status}}</div>
-        {{end}}
-      </td>
-      <td class="px-4 py-2 text-right">
-        <div class="flex justify-end gap-1">
-          <button hx-post="/queue/flush/{{.QueueID}}" hx-target="#form-error" hx-swap="innerHTML"
-                  class="rounded border border-slate-700 px-2 py-1 text-xs hover:bg-slate-800">Retry</button>
-          <div x-data="{ confirming: false }" class="inline-block">
-            <button @click="confirming = true"
-                    class="rounded border border-red-900 px-2 py-1 text-xs text-red-300 hover:bg-red-950/50">Delete</button>
-            <div x-show="confirming" x-cloak
-                 class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
-              <div @click.outside="confirming = false"
-                   class="w-full max-w-sm rounded-lg border border-red-800 bg-slate-900 p-5">
-                <h3 class="font-medium text-red-300">Delete message?</h3>
-                <p class="mt-2 text-sm text-slate-400">
-                  Queue ID: <code class="font-mono">{{.QueueID}}</code>
-                </p>
-                <p class="mt-2 text-sm text-slate-400">
-                  The message will be permanently removed and senders will not be notified.
-                </p>
-                <div class="mt-4 flex justify-end gap-2">
-                  <button @click="confirming = false"
-                          class="rounded border border-slate-700 px-3 py-1.5 text-sm">Cancel</button>
-                  <button hx-post="/queue/delete/{{.QueueID}}" hx-target="#form-error"
-                          @click="confirming = false"
-                          class="rounded bg-red-600 hover:bg-red-500 px-3 py-1.5 text-sm">Delete</button>
-                </div>
-              </div>
-            </div>
+<div class="table-wrap">
+  <table class="table table-stack">
+    <thead>
+      <tr>
+        <th>Queue ID</th>
+        <th>Size</th>
+        <th>Arrival</th>
+        <th>From</th>
+        <th>To</th>
+        <th>Status</th>
+        <th class="table-actions">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Messages}}
+      <tr>
+        <td data-label="Queue ID">
+          <span class="mono text-xs">{{.QueueID}}</span>
+          {{if .Active}}<span class="badge warn" title="Currently being delivered">active</span>{{end}}
+        </td>
+        <td data-label="Size" class="dim text-xs">{{humanBytes .Size}}</td>
+        <td data-label="Arrival" class="dim text-xs">{{.Arrival.Format "Jan 2 15:04"}}</td>
+        <td data-label="From" class="text-xs">
+          <span class="truncate max-w-[220px]" title="{{.Sender}}">{{.Sender}}</span>
+        </td>
+        <td data-label="To" class="text-xs">
+          {{range .Recipients}}
+          <div class="truncate max-w-[250px]" title="{{.Address}}">{{.Address}}</div>
+          {{if .Reason}}<div class="dim truncate max-w-[250px]">{{.Reason}}</div>{{end}}
+          {{end}}
+        </td>
+        <td data-label="Status">
+          {{range .Recipients}}
+          <div><span class="badge {{if eq .Status "sent"}}ok{{else if eq .Status "deferred"}}warn{{else}}err{{end}}">{{.Status}}</span></div>
+          {{end}}
+        </td>
+        <td class="table-actions" data-label="">
+          <div class="btn-group">
+            <button class="btn btn-sm" hx-post="/queue/flush/{{.QueueID}}" hx-target="#form-error" hx-swap="innerHTML">
+              Retry
+            </button>
+            <button class="btn btn-sm btn-danger" hx-post="/queue/delete/{{.QueueID}}"
+                    hx-target="#form-error" hx-swap="innerHTML"
+                    hx-confirm="Delete {{.QueueID}}? The message is removed permanently and the sender is not notified.">
+              Delete
+            </button>
           </div>
-        </div>
-      </td>
-    </tr>
-    {{end}}
-  </tbody>
-</table>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
 {{else}}
-<div class="p-8 text-center text-slate-500">Queue is empty.</div>
+<div class="empty">
+  <span class="empty-icon" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+         aria-hidden="true"><path d="M5 12.5 10 17.5 19.5 7"/></svg>
+  </span>
+  <span class="empty-title">The queue is empty</span>
+  <span class="empty-hint">Nothing is waiting for delivery.</span>
+</div>
 {{end}}
 {{end}}

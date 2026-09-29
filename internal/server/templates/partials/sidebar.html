@@ -1,31 +1,50 @@
 {{define "sidebar"}}
-<aside class="w-60 shrink-0 border-r border-slate-800 bg-slate-950">
-  <div class="h-14 flex items-center justify-between px-6 border-b border-slate-800">
-    <span class="font-semibold tracking-tight">⚙ MailX Admin</span>
-    <span class="text-xs text-slate-500" title="Build version">{{.Version}}</span>
+<aside class="sidebar" id="app-sidebar" aria-label="Main navigation">
+  <div class="sidebar-brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+           stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3.8 7 7.3 5.4a1.5 1.5 0 0 0 1.8 0L20.2 7"/></svg>
+    </span>
+    <span class="brand-text">
+      <span class="brand-name">MailX Admin</span>
+      <span class="brand-version">v{{.Version}}</span>
+    </span>
   </div>
 
-  <nav class="p-3 text-sm space-y-1 overflow-y-auto" style="max-height: calc(100vh - 3.5rem);">
+  <nav class="sidebar-nav" aria-label="Sections">
+    <div class="nav-group">
+      {{template "nav-item" (dict "Href" "/" "Label" "Dashboard" "Icon" "dashboard" "Active" (eq .ActiveNav "dashboard"))}}
+    </div>
 
-    {{template "nav-item" (dict "Href" "/" "Label" "Dashboard" "Active" (eq .ActiveNav "dashboard"))}}
+    <div class="nav-group">
+      <div class="nav-label">Mail</div>
+      {{template "nav-item" (dict "Href" "/domains" "Label" "Domains" "Icon" "domains" "Active" (eq .ActiveNav "domains"))}}
+      {{template "nav-item" (dict "Href" "/users" "Label" "Users" "Icon" "users" "Active" (eq .ActiveNav "users"))}}
+    </div>
 
-    <div class="px-3 pt-4 pb-1 text-xs uppercase tracking-wider text-slate-500">Mail</div>
-    {{template "nav-item" (dict "Href" "/domains" "Label" "Domains" "Active" (eq .ActiveNav "domains"))}}
-    {{template "nav-item" (dict "Href" "/users"   "Label" "Users"   "Active" (eq .ActiveNav "users"))}}
+    <div class="nav-group">
+      <div class="nav-label">Delivery</div>
+      {{template "nav-item" (dict "Href" "/queue" "Label" "Queue" "Icon" "queue" "Active" (eq .ActiveNav "queue"))}}
+      {{template "nav-item" (dict "Href" "/logs" "Label" "Logs" "Icon" "logs" "Active" (eq .ActiveNav "logs"))}}
+      {{template "nav-item" (dict "Href" "/tools/test-send" "Label" "Test send" "Icon" "testsend" "Active" (eq .ActiveNav "testsend"))}}
+    </div>
 
-    <div class="px-3 pt-4 pb-1 text-xs uppercase tracking-wider text-slate-500">Delivery</div>
-    {{template "nav-item" (dict "Href" "/queue" "Label" "Queue" "Active" (eq .ActiveNav "queue"))}}
-    {{template "nav-item" (dict "Href" "/logs"  "Label" "Logs"  "Active" (eq .ActiveNav "logs"))}}
-    {{template "nav-item" (dict "Href" "/tools/test-send" "Label" "Test send" "Active" (eq .ActiveNav "testsend"))}}
+    <div class="nav-group">
+      <div class="nav-label">Security</div>
+      {{template "nav-item" (dict "Href" "/ssl" "Label" "Certificates" "Icon" "ssl" "Active" (eq .ActiveNav "ssl"))}}
+      {{template "nav-item" (dict "Href" "/ports" "Label" "Ports" "Icon" "ports" "Active" (eq .ActiveNav "ports"))}}
+      {{template "nav-item" (dict "Href" "/audit" "Label" "Audit log" "Icon" "audit" "Active" (eq .ActiveNav "audit"))}}
+    </div>
 
-    <div class="px-3 pt-4 pb-1 text-xs uppercase tracking-wider text-slate-500">Security</div>
-    {{template "nav-item" (dict "Href" "/ssl"   "Label" "SSL"       "Active" (eq .ActiveNav "ssl"))}}
-    {{template "nav-item" (dict "Href" "/ports" "Label" "Ports"     "Active" (eq .ActiveNav "ports"))}}
-    {{template "nav-item" (dict "Href" "/audit" "Label" "Audit log" "Active" (eq .ActiveNav "audit"))}}
-
-    <div class="px-3 pt-4 pb-1 text-xs uppercase tracking-wider text-slate-500">System</div>
-    {{template "nav-item" (dict "Href" "/backup" "Label" "Backups" "Active" (eq .ActiveNav "backup"))}}
-
+    <div class="nav-group">
+      <div class="nav-label">System</div>
+      {{template "nav-item" (dict "Href" "/backup" "Label" "Backups" "Icon" "backup" "Active" (eq .ActiveNav "backup"))}}
+    </div>
   </nav>
+
+  <div class="sidebar-footer">
+    <span class="mono">mailx-admin</span> · <span class="mono">v{{.Version}}</span>
+  </div>
 </aside>
 {{end}}

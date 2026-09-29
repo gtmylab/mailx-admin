@@ -1,20 +1,22 @@
 {{define "port_preview"}}
-<div x-data="{ open: true }" x-show="open" x-cloak @close-modal.window="open = false"
-     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
-  <div @click.outside="open = false"
-       class="w-full max-w-4xl rounded-lg border border-slate-800 bg-slate-900 shadow-2xl">
-    <header class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
-      <h3 class="font-medium">master.cf preview</h3>
-      <button @click="open = false" class="text-slate-500 hover:text-slate-200">✕</button>
+<div class="modal" role="dialog" aria-modal="true" aria-labelledby="port-preview-title">
+  <div class="modal-panel max-w-4xl">
+    <header class="modal-header">
+      <h3 id="port-preview-title">master.cf preview</h3>
+      <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+             aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
     </header>
-    <div class="p-5">
-      <div class="rounded border border-slate-800 bg-slate-950 p-3 max-h-[60vh] overflow-auto">
-        <pre class="font-mono text-xs text-slate-300 whitespace-pre">{{.MasterCF}}</pre>
-      </div>
+
+    <div class="modal-body">
+      <div class="form-error-slot" data-modal-error></div>
+      <p class="muted text-sm mb-2">This is what Postfix will read after the change:</p>
+      <pre class="code code-block">{{.MasterCF}}</pre>
     </div>
-    <footer class="px-5 py-3 border-t border-slate-800 flex justify-end">
-      <button @click="open = false"
-              class="rounded border border-slate-700 px-3 py-1.5 text-sm">Close</button>
+
+    <footer class="modal-footer">
+      <button type="button" class="btn" data-close-modal>Close</button>
     </footer>
   </div>
 </div>

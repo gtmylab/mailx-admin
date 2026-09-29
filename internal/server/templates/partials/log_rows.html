@@ -1,24 +1,77 @@
 {{define "log_rows"}}
-{{range .Events}}
-<tr class="border-t border-slate-800 hover:bg-slate-800/30">
-  <td class="px-3 py-1.5 text-slate-500 whitespace-nowrap">{{.Ts.Format "15:04:05"}}</td>
-  <td class="px-3 py-1.5 font-mono text-xs">
-    {{if .QueueID}}
-    <a href="#" hx-get="/logs/queue/{{.QueueID}}" hx-target="#modal-host" hx-swap="innerHTML"
-       class="hover:text-emerald-400">{{slice .QueueID 0 8}}</a>
+{{if .Events}}
+<div class="table-wrap">
+  <table class="table table-stack">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Queue</th>
+        <th>Status</th>
+        <th>From</th>
+        <th>To</th>
+        <th>Message</th>
+      </tr>
+    </thead>
+    {{/* #log-body is also the target of the live tail stream, which prepends
+         the very same row markup (see renderLogRowHTML in handlers_logs.go). */}}
+    <tbody id="log-body">
+      {{range .Events}}
+      <tr data-id="{{.ID}}">
+        <td data-label="Time" class="dim text-xs nowrap">{{.Ts.Format "15:04:05"}}</td>
+        <td data-label="Queue" class="mono text-xs">
+          {{if .QueueID}}
+          <a href="#" hx-get="/logs/queue/{{.QueueID}}" hx-target="#modal-host" hx-swap="innerHTML"
+             title="{{.QueueID}}">{{slice .QueueID 0 8}}</a>
+          {{end}}
+        </td>
+        <td data-label="Status"><span class="badge {{statusClass .Status}}">{{.Status}}</span></td>
+        <td data-label="From" class="text-xs">
+          <span class="truncate max-w-[220px]" title="{{.FromAddr}}">{{.FromAddr}}</span>
+        </td>
+        <td data-label="To" class="text-xs">
+          <span class="truncate max-w-[220px]" title="{{.ToAddr}}">{{.ToAddr}}</span>
+        </td>
+        <td data-label="Message" class="dim text-xs">
+          <span class="truncate max-w-[400px]" title="{{.Message}}">{{.Message}}</span>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+<div class="card-footer form-row">
+  <span class="dim text-xs">
+    Showing {{.First}}–{{.Last}} of {{.Total}} event(s)
+    {{if .Filter.Since}}· since {{.Filter.Since}} ago{{end}}
+  </span>
+  <div class="btn-group ml-auto">
+    {{if .Filter.Offset}}
+    <button class="btn btn-sm" hx-get="/logs/list?offset={{.PrevOffset}}" hx-include="#log-filters"
+            hx-target="#log-results" hx-swap="innerHTML">← Newer</button>
     {{end}}
-  </td>
-  <td class="px-3 py-1.5 text-xs
-    {{if eq .Status "sent"}}text-emerald-400
-    {{else if eq .Status "deferred"}}text-amber-400
-    {{else if eq .Status "bounced"}}text-red-400
-    {{else if eq .Status "rejected"}}text-red-400
-    {{else}}text-slate-400{{end}}">{{.Status}}</td>
-  <td class="px-3 py-1.5 text-slate-300 text-xs truncate max-w-[200px]">{{.FromAddr}}</td>
-  <td class="px-3 py-1.5 text-slate-300 text-xs truncate max-w-[200px]">{{.ToAddr}}</td>
-  <td class="px-3 py-1.5 text-slate-500 text-xs truncate max-w-[400px]">{{.Message}}</td>
-</tr>
+    {{if .HasMore}}
+    <button class="btn btn-sm" hx-get="/logs/list?offset={{.NextOffset}}" hx-include="#log-filters"
+            hx-target="#log-results" hx-swap="innerHTML">Older →</button>
+    {{else}}
+    <span class="badge">end of results</span>
+    {{end}}
+  </div>
+</div>
 {{else}}
-<tr><td colspan="6" class="px-4 py-8 text-center text-slate-500">No log events match.</td></tr>
+<div class="card">
+  <div class="empty">
+    <span class="empty-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+           aria-hidden="true"><path d="M6 3.5h8l4.5 4.5V20.5H6z"/><path d="M9 12h6M9 15.5h6"/></svg>
+    </span>
+    <span class="empty-title">No events match these filters</span>
+    <span class="empty-hint">
+      Widen the time range or clear the filters. The “Log source” panel above shows
+      whether the ingester is receiving lines at all.
+    </span>
+    <a class="btn btn-sm mt-2" href="/logs">Clear filters</a>
+  </div>
+</div>
 {{end}}
 {{end}}

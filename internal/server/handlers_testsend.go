@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,7 +16,78 @@ import (
 
 func (s *Server) handleTestSendPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, 200, "testsend.html", s.newPageData(w, r,
-		"Test Send", "testsend", nil))
+		"Test Send", "testsend", s.testSendDefaults(r.Context())))
+}
+
+// testSendForm is what testsend.html renders with. The page used to hardcode
+// 127.0.0.1, an empty From and an empty To, so every first attempt failed on
+// input rather than on the mail server.
+type testSendForm struct {
+	Host    string
+	Port    int
+	Ports   []int
+	TLSMode string
+	From    string
+	To      string
+	Subject string
+	Body    string
+}
+
+func (s *Server) testSendDefaults(ctx context.Context) testSendForm {
+	form := testSendForm{
+		Host:    s.cfg.Server.Hostname,
+		Port:    587,
+		Ports:   []int{587, 465, 25},
+		TLSMode: "starttls",
+		Subject: "MailX test message",
+	}
+	if strings.TrimSpace(form.Host) == "" {
+		form.Host = "127.0.0.1"
+	}
+	form.Body = fmt.Sprintf(
+		"This is a test message from MailX Admin.\n\nSent %s by %s.",
+		time.Now().Format(time.RFC3339), s.cfg.Server.Hostname)
+
+	// Prefill the sender with a real address on this server (postmaster@ on the
+	// primary domain) so the relay accepts it instead of refusing an empty one.
+	if snap, err := s.store.Snapshot(ctx); err == nil {
+		if d := snap.PrimaryDomain(); d != nil {
+			form.From = "postmaster@" + d.Name
+		}
+	}
+	if form.From == "" {
+		form.From = "postmaster@" + form.Host
+	}
+	return form
+}
+
+// friendlySMTPError turns a raw client error into something an operator can act
+// on. The full transcript stays available underneath for the exact bytes.
+func friendlySMTPError(errMsg string, opts smtp.SendOptions) string {
+	if errMsg == "" {
+		return ""
+	}
+	m := strings.ToLower(errMsg)
+	switch {
+	case strings.Contains(m, "connection refused"):
+		return fmt.Sprintf("Nothing is answering on %s:%d. Check that the mail server is running and that this port is enabled on the Ports page.",
+			opts.Host, opts.Port)
+	case strings.Contains(m, "no such host"), strings.Contains(m, "no route to host"),
+		strings.Contains(m, "network is unreachable"):
+		return fmt.Sprintf("%q could not be resolved or reached from this server.", opts.Host)
+	case strings.Contains(m, "timeout"), strings.Contains(m, "timed out"), strings.Contains(m, "deadline exceeded"):
+		return fmt.Sprintf("Timed out talking to %s:%d. A firewall may be dropping the connection; ports 25, 465 and 587 are commonly filtered.",
+			opts.Host, opts.Port)
+	case strings.Contains(m, "x509"), strings.Contains(m, "certificate"), strings.Contains(m, "tls:"):
+		return "The TLS handshake failed: the certificate is not trusted for this host name. Fix the certificate, or tick “Skip certificate verification” to confirm the problem is only validation."
+	case strings.Contains(m, "535"), strings.Contains(m, "auth"):
+		return "The server rejected the credentials. Check that the username is the full address and that the password is current."
+	case strings.Contains(m, "550"), strings.Contains(m, "554"), strings.Contains(m, "relay"):
+		return "The server refused to relay the message. The From or To address may be outside the domains this server accepts mail for."
+	case strings.Contains(m, "eof"), strings.Contains(m, "connection reset"):
+		return "The server closed the connection during the conversation. If this port speaks implicit TLS, switch the TLS mode to “Implicit (SMTPS)”."
+	}
+	return ""
 }
 
 func (s *Server) handleTestSendRun(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +115,11 @@ func (s *Server) handleTestSendRun(w http.ResponseWriter, r *http.Request) {
 		Timeout:    30 * time.Second,
 	}
 
+	if opts.Host == "" {
+		// The form always posts a host, but a request without one should still
+		// try this server before falling back to the loopback address.
+		opts.Host = s.cfg.Server.Hostname
+	}
 	if opts.Host == "" {
 		opts.Host = "127.0.0.1"
 	}
@@ -85,8 +163,9 @@ func (s *Server) handleTestSendRun(w http.ResponseWriter, r *http.Request) {
 	})
 
 	s.renderPartial(w, "testsend_result", map[string]any{
-		"Result": res,
-		"Opts":   opts,
+		"Result":   res,
+		"Opts":     opts,
+		"Friendly": friendlySMTPError(res.Error, opts),
 	})
 }
 
