@@ -2,7 +2,10 @@ package auth
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
+	"time"
 )
 
 type ctxKey int
@@ -11,6 +14,16 @@ const sessionCtxKey ctxKey = 1
 
 const (
 	sessionCookieName = "mailx_session"
+
+	// sessionLookupTimeout bounds the session lookup. This middleware runs
+	// *before* any request budget — the routes that need a session are wrapped
+	// around the budget — so a slow or locked database would otherwise hang
+	// every URL, /login and /healthz included, without writing a single log
+	// line. That is the "the panel just loads forever" report, seen from the
+	// browser. A lookup that cannot complete in time is treated as "no
+	// session": the request continues unauthenticated (the panel answers
+	// /login, or redirects to it) and the reason goes to the log.
+	sessionLookupTimeout = 5 * time.Second
 )
 
 func (s *SessionStore) Middleware(next http.Handler) http.Handler {
@@ -21,15 +34,21 @@ func (s *SessionStore) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		sess, err := s.Get(r.Context(), cookie.Value)
+		ctx, cancel := context.WithTimeout(r.Context(), sessionLookupTimeout)
+		sess, err := s.Get(ctx, cookie.Value)
+		cancel()
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				slog.Warn("session lookup did not finish in time; treating the request as signed out",
+					"timeout", sessionLookupTimeout.String(), "err", err)
+			}
 			// invalid/expired — clear cookie and continue unauthenticated
 			clearSessionCookie(w)
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), sessionCtxKey, sess)
+		ctx = context.WithValue(r.Context(), sessionCtxKey, sess)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

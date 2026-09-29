@@ -22,10 +22,15 @@ func (s *Server) buildRouter() http.Handler {
 
 	// Auth (no session, no CSRF — login itself needs protection but the
 	// session cookie can't exist yet, so we use Origin/Referer checking
-	// in the login handler instead)
-	mux.HandleFunc("GET /login", s.handleLoginPage)
-	mux.HandleFunc("POST /login", s.handleLoginSubmit)
-	mux.HandleFunc("POST /logout", s.handleLogout)
+	// in the login handler instead).
+	//
+	// They run inside the request budget too: logging in queries the database
+	// (the admin user, then the session insert) and it is the page an operator
+	// opens first when something is wrong, so it has to answer or explain —
+	// never spin.
+	mux.Handle("GET /login", s.requestTimeout(http.HandlerFunc(s.handleLoginPage)))
+	mux.Handle("POST /login", s.requestTimeout(http.HandlerFunc(s.handleLoginSubmit)))
+	mux.Handle("POST /logout", s.requestTimeout(http.HandlerFunc(s.handleLogout)))
 
 	// Protected routes
 	protected := http.NewServeMux()
