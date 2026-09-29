@@ -216,6 +216,9 @@ hide_output() {
             echo "----------------------------------------"
             cat "$OUTPUT"
             echo "----------------------------------------"
+            if grep -q "Unable to locate package" "$OUTPUT" 2>/dev/null; then
+                log_warning "A package name is not provided by this release's repositories (Debian/Ubuntu rename sub-packages between releases)."
+            fi
             rm -f "$OUTPUT"
             exit $E
         fi
@@ -249,9 +252,71 @@ apt_get_quiet() {
     DEBIAN_FRONTEND=noninteractive hide_output apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" "$@"
 }
 
+# Debian/Ubuntu rename or split sub-packages between releases. The Dovecot LMTP
+# service has always been "dovecot-lmtpd" ("dovecot-lmtp" does not exist), and
+# "dovecot-managesieved" was "dovecot-managesieve" on older releases.
+# Returns the candidate names for a package, primary name first.
+apt_package_candidates() {
+    case "$1" in
+        dovecot-lmtp)         echo "dovecot-lmtpd" ;;
+        dovecot-managesieved) echo "dovecot-managesieved dovecot-managesieve" ;;
+        *)                    echo "$1" ;;
+    esac
+}
+
+apt_package_available() {
+    apt-cache show "$1" >/dev/null 2>&1
+}
+
+# Echo the name the current apt sources actually provide, or return 1.
+resolve_apt_package() {
+    local candidate
+    for candidate in $(apt_package_candidates "$1"); do
+        if apt_package_available "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+APT_INDEX_REFRESHED=0
+
+refresh_apt_index_once() {
+    [ "$APT_INDEX_REFRESHED" -eq 1 ] && return 0
+    APT_INDEX_REFRESHED=1
+    log_info "Refreshing package index (apt-get update)..."
+    DEBIAN_FRONTEND=noninteractive apt-get -qq update >/dev/null 2>&1 || true
+}
+
 apt_install() {
-    log_info "Installing packages: $@"
-    retry_command apt_get_quiet install "$@"
+    local pkg resolved
+    local -a wanted=() unresolved=()
+
+    for pkg in "$@"; do
+        if resolved="$(resolve_apt_package "$pkg")"; then
+            wanted+=("$resolved")
+        else
+            unresolved+=("$pkg")
+        fi
+    done
+
+    # An unknown name is usually a stale package index: refresh once, then hand
+    # anything still unknown to apt unchanged (it may be a virtual package that
+    # apt-cache show cannot list, e.g. mysql-client on some releases).
+    if [ ${#unresolved[@]} -gt 0 ]; then
+        refresh_apt_index_once
+        for pkg in "${unresolved[@]}"; do
+            if resolved="$(resolve_apt_package "$pkg")"; then
+                wanted+=("$resolved")
+            else
+                wanted+=("$pkg")
+            fi
+        done
+    fi
+
+    log_info "Installing packages: ${wanted[*]}"
+    retry_command apt_get_quiet install "${wanted[@]}"
 }
 
 restart_service() {
@@ -318,7 +383,7 @@ configure_dovecot_sasl() {
 
     log_info "Configuring Dovecot SASL..."
 
-    apt_install dovecot-sieve dovecot-managesieved dovecot-lmtp sasl2-bin
+    apt_install dovecot-sieve dovecot-managesieved dovecot-lmtpd sasl2-bin
 
     if ! id vmail >/dev/null 2>&1; then
         groupadd -g 5000 vmail
@@ -2124,15 +2189,30 @@ uninstall_all() {
     log_info "Purging installed packages..."
     export DEBIAN_FRONTEND=noninteractive
 
-    apt-get -y remove --purge \
+    # Only purge packages that are really installed: apt aborts the whole
+    # command (removing nothing at all) when a single name is unknown to this
+    # release, which is how the old "dovecot-lmtp" name silently disabled this
+    # step. Candidate names cover both old and new package names.
+    local -a purge_pkgs=()
+    local purge_name purge_candidate
+    for purge_name in \
         postfix postfix-mysql mailutils \
         dovecot-core dovecot-imapd dovecot-pop3d dovecot-mysql dovecot-sieve dovecot-managesieved dovecot-lmtp \
         sasl2-bin \
         opendkim opendkim-tools \
         mysql-server mysql-client mysql-common \
         apache2 libapache2-mod-fcgid \
-        certbot python3-certbot-apache \
-        2>/dev/null || true
+        certbot python3-certbot-apache; do
+        for purge_candidate in $(apt_package_candidates "$purge_name"); do
+            if is_package_installed "$purge_candidate"; then
+                purge_pkgs+=("$purge_candidate")
+            fi
+        done
+    done
+
+    if [ ${#purge_pkgs[@]} -gt 0 ]; then
+        apt-get -y remove --purge "${purge_pkgs[@]}" 2>/dev/null || true
+    fi
 
     local php_pkgs
     php_pkgs=$(dpkg -l 2>/dev/null | awk '/^ii.*php/ {print $2}')
@@ -2317,14 +2397,20 @@ repair_postfix_config() {
     echo "=============================================="
     echo ""
 
-    local domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
-    local host=$(hostname)
+    # Accepts domain and hostname as $1/$2 so the installer can call this
+    # unattended; otherwise fall back to the saved domain and system hostname.
+    local domain=${1:-$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')}
+    local host=${2:-$(hostname)}
 
-    if [ -z "$domain" ]; then
+    if [ -z "$domain" ] && [ -t 0 ]; then
         read -p "Enter your email domain (e.g., example.com): " domain
     fi
-    if [ -z "$host" ] || [ "$host" = "localhost" ]; then
+    if { [ -z "$host" ] || [ "$host" = "localhost" ]; } && [ -t 0 ]; then
         read -p "Enter your hostname (e.g., mail.example.com): " host
+    fi
+    if [ -z "$domain" ]; then
+        log_error "No email domain available: pass it as an argument or create /usr/local/roundcube_mail_domain.txt"
+        return 1
     fi
 
     echo "Domain:   $domain"
@@ -3266,12 +3352,12 @@ EOF
     if ! is_stage_completed "mail_server_installation"; then
         log_info "=== Stage 4: Mail Server Installation ==="
 
-        apt_install net-tools mailutils dovecot-core dovecot-imapd dovecot-pop3d dovecot-mysql swaks
+        apt_install postfix net-tools mailutils dovecot-core dovecot-imapd dovecot-pop3d dovecot-mysql swaks
 
         configure_dovecot_quota
         configure_dovecot_sasl
 
-        systemctl restart dovecot 2>/dev/null || true
+        systemctl restart dovecot postfix 2>/dev/null || true
 
         verify_postfix_dovecot_connection
         test_sasl_authentication
@@ -3443,6 +3529,11 @@ EOF
         fi
 
         restart_service postfix
+
+        # Re-apply the full Postfix configuration (templates, virtual maps,
+        # milter and LMTP settings) so the stage is self-healing.
+        repair_postfix_config "$EMAIL_DOMAIN" "$HOSTNAME"
+
         mark_stage_complete "postfix_configuration"
     fi
 
@@ -3503,7 +3594,7 @@ EOF
     log_info "=== Final: Restarting Services ==="
     systemctl restart opendkim 2>/dev/null || true
     sleep 2
-    systemctl restart apache2 dovecot 2>/dev/null || true
+    systemctl restart apache2 dovecot postfix 2>/dev/null || true
 
     # Dry-run reconcile to prove parity
     if [ -x "$ADMIN_BINARY_PATH" ] && [ -f "$ADMIN_CONFIG_FILE" ]; then
