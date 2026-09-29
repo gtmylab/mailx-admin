@@ -156,13 +156,11 @@ func (s *Server) requestTimeout(next http.Handler) http.Handler {
 
 			rec := s.noteTimeout(r, budget)
 			buf.reset()
+			buf.Header().Set("Content-Type", "text/html; charset=utf-8")
+			buf.WriteHeader(http.StatusServiceUnavailable)
 			if r.Header.Get("HX-Request") == "true" {
-				buf.Header().Set("Content-Type", "text/html; charset=utf-8")
-				buf.WriteHeader(http.StatusServiceUnavailable)
 				fmt.Fprint(buf, timeoutFragment(rec))
 			} else {
-				buf.Header().Set("Content-Type", "text/html; charset=utf-8")
-				buf.WriteHeader(http.StatusServiceUnavailable)
 				fmt.Fprint(buf, timeoutPage(rec))
 			}
 			buf.flush(w)
