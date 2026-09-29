@@ -21,6 +21,7 @@
         <span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-xs">{{.Role}}</span>
         {{end}}
         <form method="post" action="/logout">
+          <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
           <button class="text-slate-400 hover:text-slate-100">Sign out</button>
         </form>
       </div>

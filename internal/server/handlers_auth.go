@@ -16,14 +16,34 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
-	s.render(w, http.StatusOK, "login.html", map[string]any{
-		"Error": nil,
+	s.renderLogin(w, http.StatusOK, "", false)
+}
+
+// renderLogin renders login.html with a freshly issued CSRF token.
+//
+// login.html is a plain (non-HTMX) form and POST /login sits behind the global
+// CSRF middleware (see buildRouter), so the token cannot come from the layout's
+// hx-headers: it has to travel in a hidden form field, with the matching
+// double-submit cookie set on the same response. Issuing a token on every
+// render - including the error re-renders below - is what keeps a login retry
+// after a typo from failing with "csrf token missing".
+func (s *Server) renderLogin(w http.ResponseWriter, status int, errMsg string, totpRequired bool) {
+	token, err := s.csrf.Issue(w)
+	if err != nil {
+		s.logger.Error("issue csrf token", "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, status, "login.html", map[string]any{
+		"Error":        errMsg,
+		"TOTPRequired": totpRequired,
+		"CSRFToken":    token,
 	})
 }
 
 func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		s.render(w, 400, "login.html", map[string]any{"Error": "Invalid form"})
+		s.renderLogin(w, http.StatusBadRequest, "Invalid form", false)
 		return
 	}
 
@@ -32,7 +52,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	totp := strings.TrimSpace(r.FormValue("totp"))
 
 	if username == "" || password == "" {
-		s.render(w, 400, "login.html", map[string]any{"Error": "Username and password required"})
+		s.renderLogin(w, http.StatusBadRequest, "Username and password required", false)
 		return
 	}
 
@@ -53,37 +73,31 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 
 	if err == sql.ErrNoRows || active != 1 {
 		s.auditLogin(ctx, username, "error", "unknown user")
-		s.render(w, 401, "login.html", map[string]any{"Error": "Invalid credentials"})
+		s.renderLogin(w, http.StatusUnauthorized, "Invalid credentials", false)
 		return
 	}
 	if err != nil {
 		s.logger.Error("login query", "err", err)
-		s.render(w, 500, "login.html", map[string]any{"Error": "Internal error"})
+		s.renderLogin(w, http.StatusInternalServerError, "Internal error", false)
 		return
 	}
 
 	ok, err := auth.VerifyPassword(password, hash)
 	if err != nil || !ok {
 		s.auditLogin(ctx, username, "error", "bad password")
-		s.render(w, 401, "login.html", map[string]any{"Error": "Invalid credentials"})
+		s.renderLogin(w, http.StatusUnauthorized, "Invalid credentials", false)
 		return
 	}
 
 	// TOTP check
 	if totpEnabled == 1 {
 		if totp == "" {
-			s.render(w, 200, "login.html", map[string]any{
-				"Error":        nil,
-				"TOTPRequired": true,
-			})
+			s.renderLogin(w, http.StatusOK, "", true)
 			return
 		}
 		if !totpSecret.Valid || !auth.VerifyTOTP(totpSecret.String, totp) {
 			s.auditLogin(ctx, username, "error", "bad totp")
-			s.render(w, 401, "login.html", map[string]any{
-				"Error":        "Invalid 2FA code",
-				"TOTPRequired": true,
-			})
+			s.renderLogin(w, http.StatusUnauthorized, "Invalid 2FA code", true)
 			return
 		}
 	}
@@ -92,7 +106,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.sessions.Create(ctx, id, r.UserAgent(), clientIP(r))
 	if err != nil {
 		s.logger.Error("create session", "err", err)
-		s.render(w, 500, "login.html", map[string]any{"Error": "Internal error"})
+		s.renderLogin(w, http.StatusInternalServerError, "Internal error", false)
 		return
 	}
 
