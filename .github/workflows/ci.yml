@@ -1,0 +1,115 @@
+# Continuous integration for the mailx-admin panel.
+#
+# Why this file exists: release.yml runs the same suite, but only for a tag
+# that is already pushed, and nothing ran the tests on main. v1.0.5, v1.0.6 and
+# v1.0.7 were all tagged with the suite failing on the Linux runner, so all
+# three died at the Test step, no release was ever published for them, and
+# Mailx-Installer's releases/latest/download URL kept serving the v1.0.4 binary
+# the whole time. The failure was only visible in the Actions log of the tag.
+#
+# The bug that class of failure hides in is the one a developer never runs
+# locally: the suite is green on a workstation without cgo, because the SQLite
+# tests skip themselves when the driver is a stub, while the runner compiles
+# and runs them for real. So this workflow runs the very same "make test"
+# (go test -race) on every push, and when it fails it republishes the failure
+# as a check-run annotation. Check-run annotations are readable through the
+# REST API without admin rights, which is what makes a red main diagnosable
+# from a workstation that has no Linux toolchain:
+#
+#   curl -s -H 'User-Agent: ci' \
+#     'https://api.github.com/repos/gtmylab/mailx-admin/commits/main/check-runs' \
+#   | grep -o '"id":[0-9]*'   # then .../check-runs/<id>/annotations
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: gofmt, vet and go test -race
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the commit
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify the cgo toolchain
+        run: |
+          set -euo pipefail
+          go version
+          gcc --version | head -n 1
+          go env CGO_ENABLED
+
+      - name: Check formatting
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error title=gofmt::unformatted files: $(echo "$unformatted" | tr '\n' ' ')"
+            exit 1
+          fi
+
+      - name: Vet
+        run: |
+          set -uo pipefail
+          if ! go vet ./... > vet.log 2>&1; then
+            echo "::error title=go vet failed::$(tail -n 40 vet.log | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'BEGIN{ORS=""} NR>1{printf "%%0A"} {print}' | head -c 6000)"
+            exit 1
+          fi
+
+      # The assertion that matters: the same command release.yml runs before it
+      # builds the artifact. A red run here means tagging would publish nothing.
+      - name: Test
+        run: |
+          set -uo pipefail
+          make test > test.log 2>&1
+          status=$?
+          tail -n 250 test.log
+
+          {
+            echo "### make test (go test -race)"
+            echo
+            echo "exit status: $status"
+            echo
+            echo '```'
+            tail -n 120 test.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$status" -ne 0 ]; then
+            # The failing tests, their messages and the package verdicts. Kept
+            # short: it travels as one annotation.
+            excerpt="$(grep -E '^(--- FAIL|FAIL|panic:|ok  )|^[[:space:]]+[A-Za-z0-9_]+_test\.go:[0-9]+:|^[[:space:]]+(goroutine|exit status|signal:)' test.log | head -n 100 || true)"
+            if [ -z "$excerpt" ]; then
+              excerpt="$(tail -n 80 test.log)"
+            fi
+            escaped="$(printf '%s\n' "$excerpt" \
+              | sed -e 's/%/%25/g' -e 's/\r$//' \
+              | awk 'BEGIN{ORS=""} NR>1{printf "%%0A"} {print}' \
+              | head -c 6000)"
+            echo "::error title=go test -race failed::$escaped"
+            exit 1
+          fi
+
+      - name: Report the build metadata the tests ran against
+        if: success()
+        run: |
+          set -euo pipefail
+          echo "suite is green on $(go version) with CGO_ENABLED=$(go env CGO_ENABLED)"
