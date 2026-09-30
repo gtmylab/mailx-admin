@@ -44,6 +44,11 @@ func WriteFile(path string, content []byte, mode os.FileMode, dryRun bool) (File
 	}
 	afterHash := hash(content)
 
+	// An existing file whose bytes are identical is left alone. The early
+	// return below is what keeps a no-op reconcile from rewriting every managed
+	// file on every sync.
+	unchanged := beforeExists && beforeHash == afterHash
+
 	change := FileChange{
 		Path:       path,
 		BeforeHash: beforeHash,
@@ -53,17 +58,28 @@ func WriteFile(path string, content []byte, mode os.FileMode, dryRun bool) (File
 	switch {
 	case !beforeExists:
 		change.Action = "create"
-	case beforeHash == afterHash:
+	case unchanged:
 		change.Action = "unchanged"
-		return change, nil // don't touch disk
 	default:
 		change.Action = "update"
 	}
 
+	// A dry run carries the content of everything it reports, unchanged entries
+	// included. The preview modal renders its diff from Before/After (see
+	// internal/server/diff.go), and the reconciler lists every managed file it
+	// rendered, not only the ones it would rewrite. Returning early for an
+	// unchanged file -- the obvious optimisation, and what v1.0.5 shipped --
+	// left those entries with no content at all, so previewing a change that
+	// does not touch this file showed the operator an empty box where "no
+	// change here" belonged, which is indistinguishable from a broken diff.
 	if dryRun {
 		change.Before = before
 		change.After = content
 		return change, nil
+	}
+
+	if unchanged {
+		return change, nil // don't touch disk
 	}
 
 	// Atomic write: temp file in same dir, fsync, rename
