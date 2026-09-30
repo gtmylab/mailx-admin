@@ -107,7 +107,10 @@ func TestRenderPostfixMainCF(t *testing.T) {
 		"mydomain = example.com",
 		"virtual_mailbox_domains = example.com, example.org",
 		"virtual_mailbox_base = /var/mail/vhosts",
-		"virtual_uid_maps = static:5000",
+		// Ownership is per recipient now, not `static:5000`: a mailbox on a
+		// real Unix account has to be delivered as that account.
+		"virtual_uid_maps = hash:/etc/postfix/vuidmaps",
+		"virtual_gid_maps = hash:/etc/postfix/vgidmaps",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
@@ -132,6 +135,8 @@ func TestIdempotentRendering(t *testing.T) {
 	renderers := map[string]func() []byte{
 		"virtual":     func() []byte { return RenderVirtualMap(snap) },
 		"vmailbox":    func() []byte { return RenderVmailboxMap(snap) },
+		"vuidmaps":    func() []byte { return RenderVirtualUidMaps(snap) },
+		"vgidmaps":    func() []byte { return RenderVirtualGidMaps(snap) },
 		"helo_access": func() []byte { return RenderHeloAccess(snap, "mail.example.com") },
 		"keytable":    func() []byte { return RenderKeyTable(snap, "/etc/opendkim") },
 		"signing":     func() []byte { return RenderSigningTable(snap) },

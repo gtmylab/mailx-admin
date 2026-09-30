@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gtmylab/mailx-admin/internal/auth"
+	"github.com/gtmylab/mailx-admin/internal/models"
 )
 
 type CreateUserInput struct {
@@ -16,6 +17,31 @@ type CreateUserInput struct {
 	Password string
 	QuotaMB  int
 	IsAdmin  bool
+
+	// Kind is models.KindVirtual (the default when empty) or
+	// models.KindSystem.
+	//
+	// A system mailbox is one that belongs to a real Unix account — the
+	// installer's "Add MailX User", a shell `useradd`. The panel does not
+	// create the account; it records it, renders it into the same passwd-file
+	// with the account's own uid/gid/home, and from then on the sync keeps it
+	// instead of deleting its alias.
+	Kind string
+
+	// SysUID/SysGID/Home describe that account. Required for a system mailbox,
+	// ignored for a virtual one.
+	SysUID int
+	SysGID int
+	Home   string
+
+	// PasswordHash, when set, is stored as-is instead of hashing Password.
+	//
+	// It is how a system mailbox keeps the password its Unix account already
+	// has: the scanner reads the crypt(3) hash from /etc/shadow as
+	// "{CRYPT}..." and that scheme is the only one the account's own tools
+	// understand. Re-hashing with argon2 would silently change the user's
+	// Unix password into something `passwd` and login cannot read.
+	PasswordHash string
 }
 
 func (s *Service) CreateUser(ctx context.Context, actor Actor, in CreateUserInput) (*Result, string, error) {
@@ -33,9 +59,9 @@ func (s *Service) CreateUser(ctx context.Context, actor Actor, in CreateUserInpu
 	}
 	email := strings.ToLower(in.Username) + "@" + domainName
 
-	hash, err := auth.DovecotHash(in.Password)
+	hash, err := passwordHashFor(in)
 	if err != nil {
-		return nil, "", fmt.Errorf("hash password: %w", err)
+		return nil, "", err
 	}
 
 	res, err := s.Apply(ctx, actor, "user.create", map[string]any{"email": email}, func(tx *sql.Tx) error {
@@ -47,9 +73,32 @@ func (s *Service) CreateUser(ctx context.Context, actor Actor, in CreateUserInpu
 	return res, email, nil
 }
 
-// validateCreateUser normalizes the username in place and checks the input.
+// validateCreateUser normalizes the username and kind in place and checks the
+// input.
 func validateCreateUser(in *CreateUserInput) error {
 	in.Username = strings.TrimSpace(strings.ToLower(in.Username))
+
+	switch in.Kind {
+	case "":
+		in.Kind = models.KindVirtual
+	case models.KindVirtual:
+	case models.KindSystem:
+		// The panel cannot create Unix accounts, so a system mailbox is only
+		// ever recorded from an account that already exists. Without its uid
+		// and home the renderer would write the vmail defaults into the
+		// passwd-file, and Dovecot would then refuse every folder of a
+		// maildir owned by somebody else.
+		if in.SysUID <= 0 || in.Home == "" {
+			return fmt.Errorf("%w: a system mailbox needs the account's uid and home; "+
+				"use `mailbox add --kind system` so they are read from /etc/passwd", ErrInvalidInput)
+		}
+		if !strings.HasPrefix(in.Home, "/") || strings.ContainsAny(in.Home, " \t") {
+			return fmt.Errorf("%w: home must be an absolute path without spaces", ErrInvalidInput)
+		}
+	default:
+		return fmt.Errorf("%w: unknown mailbox kind %q (want %q or %q)",
+			ErrInvalidInput, in.Kind, models.KindVirtual, models.KindSystem)
+	}
 
 	if in.DomainID == 0 {
 		return fmt.Errorf("%w: domain is required", ErrInvalidInput)
@@ -60,13 +109,35 @@ func validateCreateUser(in *CreateUserInput) error {
 	if strings.ContainsAny(in.Username, "@/ ") {
 		return fmt.Errorf("%w: username may not contain @, /, or space", ErrInvalidInput)
 	}
-	if len(in.Password) < 8 {
+	switch {
+	case in.PasswordHash != "":
+		// Pre-hashed input has to look like the passwd-file's own format, or
+		// the account silently becomes impossible to log into.
+		if !strings.HasPrefix(in.PasswordHash, "{") {
+			return fmt.Errorf("%w: password hash must be in Dovecot format, e.g. {CRYPT}$6$...",
+				ErrInvalidInput)
+		}
+	case len(in.Password) < 8:
 		return fmt.Errorf("%w: password must be at least 8 characters", ErrInvalidInput)
 	}
 	if in.QuotaMB < 0 {
 		return fmt.Errorf("%w: quota may not be negative", ErrInvalidInput)
 	}
 	return nil
+}
+
+// passwordHashFor produces the value the passwd-file will hold: either the hash
+// the caller supplied (already in Dovecot format) or an argon2id hash of the
+// plaintext password.
+func passwordHashFor(in CreateUserInput) (string, error) {
+	if in.PasswordHash != "" {
+		return in.PasswordHash, nil
+	}
+	hash, err := auth.DovecotHash(in.Password)
+	if err != nil {
+		return "", fmt.Errorf("hash password: %w", err)
+	}
+	return hash, nil
 }
 
 func applyCreateUserTx(ctx context.Context, tx *sql.Tx, in CreateUserInput, email, hash string) error {
@@ -79,9 +150,11 @@ func applyCreateUserTx(ctx context.Context, tx *sql.Tx, in CreateUserInput, emai
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `
-        INSERT INTO users (domain_id, username, email, password_hash, quota_mb, active, is_admin)
-        VALUES (?, ?, ?, ?, ?, 1, ?)
-    `, in.DomainID, in.Username, email, hash, in.QuotaMB, boolInt(in.IsAdmin))
+        INSERT INTO users (domain_id, username, email, password_hash, quota_mb, active, is_admin,
+                           kind, sys_uid, sys_gid, home)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?, NULLIF(?, 0), NULLIF(?, 0), NULLIF(?, ''))
+    `, in.DomainID, in.Username, email, hash, in.QuotaMB, boolInt(in.IsAdmin),
+		in.Kind, in.SysUID, in.SysGID, in.Home)
 	return err
 }
 
@@ -100,7 +173,7 @@ func (s *Service) ApplyCreateUserToTx(ctx context.Context, tx *sql.Tx, in Create
 	}
 	email := strings.ToLower(in.Username) + "@" + domainName
 
-	hash, err := auth.DovecotHash(in.Password)
+	hash, err := passwordHashFor(in)
 	if err != nil {
 		return err
 	}

@@ -48,9 +48,18 @@ func RenderPostfixMainCF(snap *models.Snapshot, hostname string) []byte {
 	b.WriteString("\n# Virtual maps\n")
 	b.WriteString("virtual_alias_maps = hash:/etc/postfix/virtual\n")
 	b.WriteString("virtual_mailbox_maps = hash:/etc/postfix/vmailbox\n")
-	b.WriteString("virtual_mailbox_base = /var/mail/vhosts\n")
-	b.WriteString("virtual_uid_maps = static:5000\n")
-	b.WriteString("virtual_gid_maps = static:5000\n")
+	b.WriteString("virtual_mailbox_base = " + models.VmailBase + "\n")
+	// Per-recipient ownership instead of `static:5000`. Every mailbox is still
+	// delivered by virtual(8); what changes per recipient is the maildir path
+	// (vmailbox) and the uid/gid it is delivered as. A system mailbox belongs
+	// to its real account and Postfix has to deliver into /home/<user>/Maildir
+	// as that account, or the write fails with EACCES.
+	//
+	// The maps are rendered for every active mailbox, so a lookup can only miss
+	// when the panel and the server disagree — and then the error names the
+	// recipient instead of silently dropping the mail.
+	b.WriteString("virtual_uid_maps = hash:/etc/postfix/vuidmaps\n")
+	b.WriteString("virtual_gid_maps = hash:/etc/postfix/vgidmaps\n")
 
 	b.WriteString("\n# DKIM milter\n")
 	b.WriteString("milter_default_action = accept\n")
@@ -118,17 +127,24 @@ func RenderVirtualMap(snap *models.Snapshot) []byte {
 	return b.Bytes()
 }
 
-// RenderVmailboxMap produces /etc/postfix/vmailbox — virtual mailbox paths.
+// RenderVmailboxMap produces /etc/postfix/vmailbox — where each mailbox's mail
+// is delivered.
 //
 // Format: <email> <maildir_path>
+//
+// The path is absolute for both kinds of mailbox: virtual ones live under
+// virtual_mailbox_base, system ones in /home/<user>/Maildir. Postfix's
+// virtual(8) takes the path from this map and the ownership from
+// virtual_uid_maps/virtual_gid_maps, so the two have to agree per recipient —
+// see RenderVirtualUidMaps.
 func RenderVmailboxMap(snap *models.Snapshot) []byte {
 	var b bytes.Buffer
 	b.WriteString("# Managed by mailx-admin — DO NOT EDIT\n\n")
 
 	lines := make([]string, 0, len(snap.Users))
 	for _, u := range snap.Users {
-		// /var/mail/vhosts/<domain>/<user>/Maildir/
-		path := fmt.Sprintf("/var/mail/vhosts/%s/%s/Maildir/", u.DomainName, u.Username)
+		// Trailing slash: Postfix then treats the value as a maildir.
+		path := u.MaildirPath() + "/"
 		lines = append(lines, fmt.Sprintf("%s\t%s", u.Email, path))
 	}
 	sort.Strings(lines)
@@ -138,6 +154,43 @@ func RenderVmailboxMap(snap *models.Snapshot) []byte {
 		b.WriteString("\n")
 	}
 
+	return b.Bytes()
+}
+
+// RenderVirtualUidMaps produces /etc/postfix/vuidmaps: the uid virtual(8) must
+// deliver each recipient as.
+//
+// Format: <email> <uid>
+//
+// A single `static:5000` was enough while every mailbox was virtual, and it is
+// precisely what breaks a mailbox on a real account: uid 5000 cannot write into
+// /home/test1/Maildir. See RenderVirtualGidMaps for the gid half.
+func RenderVirtualUidMaps(snap *models.Snapshot) []byte {
+	return renderOwnerMap(snap, func(u models.User) int { return u.DeliveryUID() })
+}
+
+// RenderVirtualGidMaps produces /etc/postfix/vgidmaps, the gid half of
+// RenderVirtualUidMaps.
+func RenderVirtualGidMaps(snap *models.Snapshot) []byte {
+	return renderOwnerMap(snap, func(u models.User) int { return u.DeliveryGID() })
+}
+
+func renderOwnerMap(snap *models.Snapshot, pick func(models.User) int) []byte {
+	var b bytes.Buffer
+	b.WriteString("# Managed by mailx-admin — DO NOT EDIT\n")
+	b.WriteString("# Recipient -> the uid/gid Postfix delivers as.\n")
+	b.WriteString("# vmail mailboxes use 5000:5000, system ones the account's own.\n\n")
+
+	lines := make([]string, 0, len(snap.Users))
+	for _, u := range snap.Users {
+		lines = append(lines, fmt.Sprintf("%s\t%d", u.Email, pick(u)))
+	}
+	sort.Strings(lines)
+
+	for _, l := range lines {
+		b.WriteString(l)
+		b.WriteString("\n")
+	}
 	return b.Bytes()
 }
 

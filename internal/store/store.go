@@ -52,21 +52,22 @@ func (s *Store) listDomains(ctx context.Context, tx *sql.Tx) ([]models.Domain, e
 	return out, rows.Err()
 }
 
-func (s *Store) listUsers(ctx context.Context, tx *sql.Tx) ([]models.User, error) {
-	rows, err := tx.QueryContext(ctx, `
-        SELECT u.id, u.domain_id, u.username, u.email, u.password_hash,
+// userColumns is the column list every users query selects, in the order
+// scanUsers reads it.
+//
+// It lives in one place because the list view, the users page and the
+// reconciler's snapshot all have to agree. When the snapshot grows a column and
+// only one query is updated, the panel quietly renders one shape of mailbox as
+// another — which is exactly how system mailboxes used to be written into
+// /var/mail/vhosts instead of /home.
+const userColumns = `u.id, u.domain_id, u.username, u.email, u.password_hash,
                u.quota_mb, u.active, u.is_admin, u.last_login,
-               u.created_at, u.updated_at, d.name
-        FROM users u
-        JOIN domains d ON d.id = u.domain_id
-        WHERE u.active = 1 AND d.active = 1
-        ORDER BY d.name, u.username
-    `)
-	if err != nil {
-		return nil, fmt.Errorf("list users: %w", err)
-	}
-	defer rows.Close()
+               u.created_at, u.updated_at, d.name,
+               u.kind, COALESCE(u.sys_uid, 0), COALESCE(u.sys_gid, 0), COALESCE(u.home, '')`
 
+// scanUsers drains a users query into models, applying the same conversions for
+// every caller.
+func scanUsers(rows *sql.Rows) ([]models.User, error) {
 	var out []models.User
 	for rows.Next() {
 		var u models.User
@@ -77,6 +78,7 @@ func (s *Store) listUsers(ctx context.Context, tx *sql.Tx) ([]models.User, error
 			&u.ID, &u.DomainID, &u.Username, &u.Email, &u.PasswordHash,
 			&u.QuotaMB, &active, &isAdmin, &lastLogin,
 			&u.CreatedAt, &u.UpdatedAt, &u.DomainName,
+			&u.Kind, &u.SysUID, &u.SysGID, &u.Home,
 		); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
@@ -88,6 +90,21 @@ func (s *Store) listUsers(ctx context.Context, tx *sql.Tx) ([]models.User, error
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) listUsers(ctx context.Context, tx *sql.Tx) ([]models.User, error) {
+	rows, err := tx.QueryContext(ctx, `
+        SELECT `+userColumns+`
+        FROM users u
+        JOIN domains d ON d.id = u.domain_id
+        WHERE u.active = 1 AND d.active = 1
+        ORDER BY d.name, u.username
+    `)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+	return scanUsers(rows)
 }
 
 func (s *Store) listAliases(ctx context.Context, tx *sql.Tx) ([]models.Alias, error) {
@@ -224,15 +241,30 @@ type UserInsert struct {
 	PasswordHash string
 	QuotaMB      int
 	Active       bool
+
+	// Kind is models.KindVirtual (the default when empty) or
+	// models.KindSystem.
+	Kind string
+
+	// SysUID/SysGID/Home are only meaningful for a system mailbox: the uid,
+	// gid and maildir parent of the Unix account it belongs to.
+	SysUID int
+	SysGID int
+	Home   string
 }
 
 func (s *Store) InsertUserTx(ctx context.Context, tx *sql.Tx, in UserInsert) (int64, error) {
+	if in.Kind == "" {
+		in.Kind = models.KindVirtual
+	}
 	var id int64
 	err := tx.QueryRowContext(ctx, `
-        INSERT INTO users (domain_id, username, email, password_hash, quota_mb, active)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO users (domain_id, username, email, password_hash, quota_mb, active,
+                           kind, sys_uid, sys_gid, home)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, 0), NULLIF(?, 0), NULLIF(?, ''))
         RETURNING id
-    `, in.DomainID, in.Username, in.Email, in.PasswordHash, in.QuotaMB, boolInt(in.Active)).Scan(&id)
+    `, in.DomainID, in.Username, in.Email, in.PasswordHash, in.QuotaMB, boolInt(in.Active),
+		in.Kind, in.SysUID, in.SysGID, in.Home).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("insert user: %w", err)
 	}
@@ -274,9 +306,7 @@ func (s *Store) Users(ctx context.Context, includeInactive bool) ([]models.User,
 	defer tx.Rollback()
 
 	query := `
-        SELECT u.id, u.domain_id, u.username, u.email, u.password_hash,
-               u.quota_mb, u.active, u.is_admin, u.last_login,
-               u.created_at, u.updated_at, d.name
+        SELECT ` + userColumns + `
         FROM users u
         JOIN domains d ON d.id = u.domain_id
         WHERE d.active = 1`
@@ -290,27 +320,7 @@ func (s *Store) Users(ctx context.Context, includeInactive bool) ([]models.User,
 		return nil, fmt.Errorf("list users: %w", err)
 	}
 	defer rows.Close()
-
-	var out []models.User
-	for rows.Next() {
-		var u models.User
-		var active, isAdmin int
-		var lastLogin sql.NullTime
-		if err := rows.Scan(
-			&u.ID, &u.DomainID, &u.Username, &u.Email, &u.PasswordHash,
-			&u.QuotaMB, &active, &isAdmin, &lastLogin,
-			&u.CreatedAt, &u.UpdatedAt, &u.DomainName,
-		); err != nil {
-			return nil, fmt.Errorf("scan user: %w", err)
-		}
-		u.Active = active == 1
-		u.IsAdmin = isAdmin == 1
-		if lastLogin.Valid {
-			u.LastLogin = &lastLogin.Time
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
+	return scanUsers(rows)
 }
 
 // ExistingKeysTx returns the identifiers already in the database, for the

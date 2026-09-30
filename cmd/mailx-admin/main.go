@@ -33,6 +33,7 @@ func main() {
 		cmdDoctor(),
 		cmdServe(),
 		cmdUser(),
+		cmdMailbox(),
 	)
 
 	if err := root.Execute(); err != nil {

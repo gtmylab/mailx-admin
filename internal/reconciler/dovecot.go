@@ -9,24 +9,48 @@ import (
 )
 
 // RenderDovecotPasswd produces /etc/dovecot/users — the passwd-file used by
-// Dovecot's passdb. Format:
+// Dovecot's passdb and userdb. Format:
 //
-//	alice@example.com:{ARGON2ID}$argon2id$...:5000:5000::/var/mail/vhosts/example.com/alice::
+//	alice@example.com:{ARGON2ID}$argon2id$...:5000:5000::/var/mail/vhosts/example.com/alice::userdb_quota_rule=*:storage=1024M
+//	test1@example.com:{CRYPT}$6$...:1000:1000::/home/test1::userdb_quota_rule=*:storage=2048M
 //
-// Quota is enforced via the `userdb` extra field: `userdb_quota_rule=*:storage=1024M`
+// One file, one passdb, two shapes of mailbox:
+//
+//   - a virtual mailbox is owned by the vmail account and lives under
+//     virtual_mailbox_base (models.VmailBase);
+//   - a system mailbox belongs to a real Unix account, keeps that account's
+//     uid/gid, and its mail sits in /home/<user>/Maildir.
+//
+// The uid/gid/home on each line override the userdb defaults in
+// RenderDovecotUsersConf, which is what lets both kinds share one passdb.
+// Rendering a system mailbox with 5000:5000 would leave Dovecot unable to open
+// a maildir owned by the account — the login succeeds and every folder then
+// fails with "Permission denied".
+//
+// The passdb's `scheme=ARGON2ID` argument is only the default for a password
+// with no {SCHEME} prefix. Imported system mailboxes carry {CRYPT}<hash> and are
+// verified with the system's crypt() (yescrypt/sha512), which is exactly why
+// they are stored in that scheme and not re-hashed with argon2id.
+//
+// Quota is enforced via the userdb extra field:
+// `userdb_quota_rule=*:storage=1024M`.
 func RenderDovecotPasswd(snap *models.Snapshot) []byte {
 	var b bytes.Buffer
 	b.WriteString("# Managed by mailx-admin — DO NOT EDIT\n")
-	b.WriteString("# Format: user:password:uid:gid:gecos:home:shell:extra\n\n")
+	b.WriteString("# Format: user:password:uid:gid:gecos:home:shell:extra\n")
+	b.WriteString("# uid/gid/home are the account's own for a system mailbox\n")
+	b.WriteString("# (kind=system in the panel), the vmail account under\n")
+	b.WriteString("# virtual_mailbox_base for a virtual one.\n\n")
 
 	lines := make([]string, 0, len(snap.Users))
 	for _, u := range snap.Users {
-		home := fmt.Sprintf("/var/mail/vhosts/%s/%s", u.DomainName, u.Username)
 		extra := fmt.Sprintf("userdb_quota_rule=*:storage=%dM", u.QuotaMB)
-		line := fmt.Sprintf("%s:%s:5000:5000::%s::%s",
+		line := fmt.Sprintf("%s:%s:%d:%d::%s::%s",
 			u.Email,
 			u.PasswordHash,
-			home,
+			u.DeliveryUID(),
+			u.DeliveryGID(),
+			u.MailHome(),
 			extra,
 		)
 		lines = append(lines, line)
@@ -72,10 +96,16 @@ protocol pop3 {
 
 // RenderDovecotUsersConf produces the drop-in that tells Dovecot to use
 // our passwd-file for authentication.
+//
+// `default_fields` is only a fallback: every line of the passwd-file carries its
+// own uid/gid/home, so a system mailbox keeps its real account while a virtual
+// one falls back to the vmail account under virtual_mailbox_base.
 func RenderDovecotUsersConf(passwdFilePath string) []byte {
 	return []byte(fmt.Sprintf(`# Managed by mailx-admin — DO NOT EDIT
 passdb {
   driver = passwd-file
+  # scheme= is the default for hashes with no {SCHEME} prefix; imported system
+  # mailboxes carry {CRYPT}... and are checked with crypt() instead.
   args = username_format=%%u scheme=ARGON2ID %s
 }
 

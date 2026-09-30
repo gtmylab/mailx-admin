@@ -391,6 +391,14 @@ configure_dovecot_sasl() {
         chown -R vmail:vmail /var/mail/vmail
     fi
 
+    # Virtual mailboxes live under /var/mail/vhosts/<domain>/<user>. The panel
+    # creates the per-mailbox directories when it reconciles; this parent has to
+    # exist and belong to vmail first, or the first delivery into a brand new
+    # mailbox fails with "cannot create .../Maildir: Permission denied".
+    mkdir -p /var/mail/vhosts
+    chown vmail:vmail /var/mail/vhosts
+    chmod 0770 /var/mail/vhosts
+
     mkdir -p /var/spool/postfix/private
     chown -R postfix:postfix /var/spool/postfix/private
     chmod -R 0750 /var/spool/postfix/private
@@ -470,14 +478,21 @@ namespace inbox {
 EOF
 
     # Sieve configuration for per-user scripts managed by mailx-admin
+    #
+    # The path is home-relative on purpose: a virtual mailbox's home is
+    # /var/mail/vhosts/<domain>/<user> and a system mailbox's is /home/<user>,
+    # and Dovecot's userdb supplies the right one for each. Hard-coding the
+    # vhosts path here meant a mailbox on a real Unix account had its Sieve
+    # scripts written somewhere Dovecot never looked, so the rules silently did
+    # nothing.
     cat > /etc/dovecot/conf.d/90-sieve.conf <<'EOF'
 # Managed by mailx-admin — DO NOT EDIT
-# Per-user scripts: /var/mail/vhosts/<domain>/<user>/sieve/managesieve.sieve
+# Per-user scripts: <home>/sieve/managesieve.sieve
 
 plugin {
-  sieve = file:/var/mail/vhosts/%d/%n/sieve/managesieve.sieve
-  sieve_default = file:/var/mail/vhosts/%d/%n/sieve/managesieve.sieve
-  sieve_dir = /var/mail/vhosts/%d/%n/sieve
+  sieve = file:~/sieve/managesieve.sieve
+  sieve_default = file:~/sieve/managesieve.sieve
+  sieve_dir = ~/sieve
 }
 EOF
 
@@ -647,11 +662,13 @@ update_postfix_virtual() {
     local domain=$1
     local username=$2
 
-    if ! check_string_in_file "/etc/postfix/virtual" "$username@$domain"; then
-        echo "$username@$domain $username" >> /etc/postfix/virtual
-        postmap /etc/postfix/virtual 2>/dev/null
-        log_info "Updated /etc/postfix/virtual with $username@$domain"
-    fi
+    # This used to append "$username@$domain $username" to /etc/postfix/virtual
+    # and run postmap. That file belongs to the panel now: it is rewritten from
+    # the panel's database on every sync, so the appended line survived only
+    # until the next sync — after which the mailbox received nothing and looked
+    # like it had disappeared. Registering the mailbox is the supported way to
+    # add the mapping, and it survives the sync by definition.
+    register_mailbox_in_panel "${username}@${domain}" 1024 || true
 }
 
 setup_postfix_header_checks() {
@@ -1724,6 +1741,48 @@ manage_ssl_certificates() {
 # User Management
 # ============================================================================
 
+# ----------------------------------------------------------------------------
+# Register a mailbox in the panel.
+#
+# "Add MailX User" creates a Unix account, a maildir and a quota note. That is
+# half a mailbox: the panel — which owns /etc/dovecot/users and
+# /etc/postfix/{virtual,vmailbox} and rewrites them from its database on every
+# sync — has to know about it, or the mailbox does not appear in the UI and the
+# next sync deletes the line this script used to append to /etc/postfix/virtual.
+#
+# So the account is registered through the panel's own write path
+# (`mailbox add --kind system`), which reads the uid/gid/home from /etc/passwd
+# and the password from /etc/shadow: the Unix login keeps working exactly as it
+# did, and the panel stops ignoring it.
+# ----------------------------------------------------------------------------
+register_mailbox_in_panel() {
+    local email=$1
+    local quota_size=${2:-1024}
+
+    if [ ! -x "$ADMIN_BINARY_PATH" ] || [ ! -f "$ADMIN_CONFIG_FILE" ]; then
+        # Fresh install: the panel is staged after this point. The account and
+        # its maildir are ready, and the install's seed step imports every
+        # /home/<user>/Maildir mailbox it finds, so nothing is lost.
+        log_info "Panel not installed yet — $email will be imported when the panel is seeded"
+        return 0
+    fi
+
+    local out
+    if out=$("$ADMIN_BINARY_PATH" mailbox add "$email" \
+                --kind system --quota "$quota_size" \
+                --config "$ADMIN_CONFIG_FILE" 2>&1); then
+        echo "$out" | tee -a "$LOG_FILE"
+        log_info "Mailbox $email registered in the panel"
+        return 0
+    fi
+
+    echo "$out" | tee -a "$LOG_FILE"
+    log_warning "Could not register $email in the panel."
+    log_warning "The Unix account and its maildir are fine. Finish with:"
+    log_warning "    mailx-admin mailbox add $email --kind system --config $ADMIN_CONFIG_FILE"
+    return 1
+}
+
 add_roundcube_user() {
     local username=$1
     local password=$2
@@ -1735,6 +1794,9 @@ add_roundcube_user() {
 
     if id "$username" >/dev/null 2>&1; then
         log_info "User $username already exists, skipping creation..."
+        # The account may predate the panel (or this release). Make sure the
+        # panel knows about it instead of returning silently.
+        register_mailbox_in_panel "$email" "$quota_size" || true
         return 0
     fi
 
@@ -1747,8 +1809,7 @@ add_roundcube_user() {
     echo "quota_rule = *:storage=${quota_size}M" > "/home/$username/.dovecot.quota"
     chown "$username:$username" "/home/$username/.dovecot.quota"
 
-    echo "$email $username" >> /etc/postfix/virtual
-    postmap /etc/postfix/virtual
+    register_mailbox_in_panel "$email" "$quota_size" || true
 
     ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 

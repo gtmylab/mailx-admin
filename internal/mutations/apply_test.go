@@ -289,6 +289,7 @@ func sqliteTestService(t *testing.T) (*Service, *db.DB, string) {
 		Hostname:          "mail.example.test",
 		SkipServiceReload: true, // there is no systemctl in a unit test
 		SkipValidation:    true, // nor postmap/postfix/doveconf
+		SkipMaildirs:      true, // nor a /var/mail/vhosts to write into
 		BackupDir:         filepath.Join(dir, "backups"),
 	}, nil)
 

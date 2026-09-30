@@ -34,6 +34,13 @@ type Config struct {
 	DryRun            bool
 	SkipServiceReload bool // for tests
 
+	// SkipMaildirs disables the mailbox directory pass (see ensureMaildirs).
+	// Set by the test suite and by nothing else: every reconcile that is
+	// allowed to write files also has to make sure the directories the
+	// daemons were just told about exist, or the first delivery after a
+	// "successful" sync fails.
+	SkipMaildirs bool
+
 	// SkipValidation disables the external validators (postmap, `postfix
 	// check`, `doveconf -n`). The panel never sets it: postmap also *builds* the
 	// hash maps Postfix reads, so skipping it in production would leave the
@@ -68,6 +75,11 @@ type Result struct {
 	// Drift lists the entries this run removed because they are not in the
 	// panel (see Drift).
 	Drift []Drift `json:"drift,omitempty"`
+
+	// Maildirs names the mailbox directories this run created. It is what the
+	// CLI prints after `mailbox add` and what the sync banner reports, so an
+	// operator can tell "the mailbox exists" from "the mailbox can receive".
+	Maildirs []string `json:"maildirs,omitempty"`
 }
 
 type Reconciler struct {
@@ -127,6 +139,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 		{
 			path:    filepath.Join(r.cfg.PostfixConfDir, "vmailbox"),
 			content: RenderVmailboxMap(snap),
+			mode:    0o644,
+			service: "postfix",
+		},
+		{
+			// Per-recipient delivery ownership. Without these two maps a
+			// mailbox on a real account is looked up in vmailbox (delivery
+			// path /home/<user>/Maildir) and then delivered as uid 5000,
+			// which cannot write there.
+			path:    filepath.Join(r.cfg.PostfixConfDir, "vuidmaps"),
+			content: RenderVirtualUidMaps(snap),
+			mode:    0o644,
+			service: "postfix",
+		},
+		{
+			path:    filepath.Join(r.cfg.PostfixConfDir, "vgidmaps"),
+			content: RenderVirtualGidMaps(snap),
 			mode:    0o644,
 			service: "postfix",
 		},
@@ -266,13 +294,36 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 	}
 
 	// ------------------------------------------------------------------
-	// Postfix hash maps: virtual, vmailbox, helo_access need `postmap`.
+	// Mailbox directories.
+	//
+	// The configs above describe mailboxes that have to exist on disk before
+	// the daemons can deliver into them: nothing in this project ever created
+	// /var/mail/vhosts/<domain>/<user>, which is why a mailbox created in the
+	// panel could be listed, rendered into every map, and still bounce.
+	//
+	// Failures are warnings (see ensureMaildirs): the files are already
+	// written and valid, and refusing to reload on top of a directory the
+	// panel cannot create would turn a permissions problem into a broken
+	// mailserver.
+	// ------------------------------------------------------------------
+	if !r.cfg.DryRun && !r.cfg.SkipMaildirs {
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
+		created, warnings := ensureMaildirs(ctx, snap)
+		res.Maildirs = created
+		res.Warnings = append(res.Warnings, warnings...)
+	}
+
+	// ------------------------------------------------------------------
+	// Postfix hash maps: virtual, vmailbox, vuidmaps, vgidmaps and
+	// helo_access need `postmap`.
 	// ------------------------------------------------------------------
 	if !r.cfg.DryRun && !r.cfg.SkipValidation {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
-		for _, name := range []string{"virtual", "vmailbox", "helo_access"} {
+		for _, name := range []string{"virtual", "vmailbox", "vuidmaps", "vgidmaps", "helo_access"} {
 			path := filepath.Join(r.cfg.PostfixConfDir, name)
 			if fileChanged(res.Changes, path) {
 				if err := runCmd(ctx, commandTimeout, "postmap", path); err != nil {
@@ -334,6 +385,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 				"files_changed":     countChanged(res.Changes),
 				"services_reloaded": res.ReloadedSvcs,
 				"drift":             len(res.Drift),
+				"maildirs_created":  len(res.Maildirs),
 				"warnings":          res.Warnings,
 			},
 		})

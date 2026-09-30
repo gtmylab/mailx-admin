@@ -137,6 +137,7 @@ func testSyncer(t *testing.T, snaps Snapshotter, rec *fakeRecorder) *Syncer {
 		Hostname:          "mail.example.test",
 		SkipServiceReload: true, // no systemctl in a unit test
 		SkipValidation:    true, // no postmap/postfix/doveconf on a build machine
+		SkipMaildirs:      true, // nor a /var/mail/vhosts to create
 		BackupDir:         filepath.Join(dir, "backups"),
 	}, nil)
 
@@ -229,6 +230,7 @@ func TestRunNowRecordsFailure(t *testing.T) {
 		Hostname:          "mail.example.test",
 		SkipServiceReload: true,
 		SkipValidation:    true,
+		SkipMaildirs:      true,
 		BackupDir:         filepath.Join(dir, "backups"),
 	}, nil)
 	s := newWithRecorder(&countingSnapshots{}, r, rec, nil)

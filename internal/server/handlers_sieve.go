@@ -21,13 +21,19 @@ func (s *Server) handleUserSieve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load user
+	//
+	// The mailbox kind travels with it: the Sieve path is derived from the
+	// mailbox's own home (models.User.MailHome), so a system mailbox's rules
+	// have to be written into /home/<user>/sieve, not the vmail tree.
 	var u models.User
 	err = s.db.QueryRowContext(r.Context(), `
         SELECT u.id, u.domain_id, u.username, u.email, u.quota_mb, u.active,
-               u.is_admin, d.name
+               u.is_admin, d.name,
+               u.kind, COALESCE(u.sys_uid, 0), COALESCE(u.sys_gid, 0), COALESCE(u.home, '')
         FROM users u JOIN domains d ON d.id = u.domain_id
         WHERE u.id = ?
-    `, userID).Scan(&u.ID, &u.DomainID, &u.Username, &u.Email, &u.QuotaMB, &u.Active, &u.IsAdmin, &u.DomainName)
+    `, userID).Scan(&u.ID, &u.DomainID, &u.Username, &u.Email, &u.QuotaMB, &u.Active, &u.IsAdmin, &u.DomainName,
+		&u.Kind, &u.SysUID, &u.SysGID, &u.Home)
 	if err != nil {
 		s.renderError(w, 404, "User not found")
 		return

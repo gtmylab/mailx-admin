@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gtmylab/mailx-admin/internal/models"
 	"github.com/gtmylab/mailx-admin/internal/store"
 )
 
@@ -108,6 +109,13 @@ func adopt(ctx context.Context, st *store.Store, f *Found, dryRun bool) (*Import
 			PasswordHash: src.PasswordHash, // already in Dovecot format
 			QuotaMB:      src.QuotaMB,
 			Active:       true,
+			// A mailbox on a real Unix account keeps that account: the
+			// renderer needs its uid, gid and home to write a passwd-file
+			// line Dovecot can actually deliver into.
+			Kind:   src.Kind,
+			SysUID: src.SysUID,
+			SysGID: src.SysGID,
+			Home:   src.Home,
 		}); err != nil {
 			return nil, fmt.Errorf("import user %s: %w", src.Email, err)
 		}
@@ -198,13 +206,22 @@ func computePlan(f *Found, existingDomains, existingEmails, existingAliases map[
 			continue
 		}
 		if strings.TrimSpace(u.PasswordHash) == "" {
+			detail := "no password hash found on the server; create the mailbox in the panel instead"
+			if u.Kind == models.KindSystem {
+				detail = "the account exists but its password could not be read from /etc/shadow (run as root); create the mailbox in the panel to set one"
+			}
 			plan.Skipped = append(plan.Skipped, ImportItem{
 				Key:    email,
-				Detail: "no password hash found on the server; create the mailbox in the panel instead",
+				Detail: detail,
 			})
 			continue
 		}
 		detail := fmt.Sprintf("%s, quota %d MB", u.Domain, u.QuotaMB)
+		if u.Kind == models.KindSystem {
+			// Say which account it belongs to: this is the line the operator
+			// uses to recognise the mailbox they created with useradd.
+			detail = fmt.Sprintf("system mailbox on uid %d, %s, quota %d MB", u.SysUID, u.Home, u.QuotaMB)
+		}
 		if !known[u.Domain] {
 			detail += ", creates the domain"
 		}

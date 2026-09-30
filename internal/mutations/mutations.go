@@ -88,6 +88,12 @@ type Result struct {
 	Changes      []reconciler.FileChange
 	ReloadedSvcs []string
 	Warnings     []string
+
+	// Maildirs names the mailbox directories the inline reconcile created.
+	// Empty when the sync was queued: the worker creates them and the dashboard
+	// reports it there. `mailbox add` reconciles inline precisely so that it can
+	// tell the operator the mailbox is deliverable, not merely recorded.
+	Maildirs []string
 }
 
 // Preview runs a mutation in "what-if" mode: it validates, renders the configs
@@ -188,6 +194,7 @@ func (s *Service) Apply(ctx context.Context, actor Actor, action string, detail 
 		}
 		res.Changes = recRes.Changes
 		res.ReloadedSvcs = recRes.ReloadedSvcs
+		res.Maildirs = recRes.Maildirs
 		res.Warnings = append(res.Warnings, recRes.Warnings...)
 		_ = s.auditor.Log(ctx, audit.Entry{
 			Actor:    actor.Name,

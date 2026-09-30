@@ -84,6 +84,7 @@ func driftReconciler(t *testing.T) (*Reconciler, string, string) {
 		Hostname:          "mail.example.test",
 		SkipServiceReload: true,
 		SkipValidation:    true, // no postmap/postfix/doveconf on a build machine
+		SkipMaildirs:      true, // nor a /var/mail/vhosts to create
 		BackupDir:         backupDir,
 	}, nil), postfix, backupDir
 }
