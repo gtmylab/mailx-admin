@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gtmylab/mailx-admin/internal/auth"
+	"github.com/gtmylab/mailx-admin/internal/dovecot"
 	"github.com/gtmylab/mailx-admin/internal/models"
 )
 
@@ -59,7 +60,7 @@ func (s *Service) CreateUser(ctx context.Context, actor Actor, in CreateUserInpu
 	}
 	email := strings.ToLower(in.Username) + "@" + domainName
 
-	hash, err := passwordHashFor(in)
+	hash, err := s.passwordHashFor(ctx, in)
 	if err != nil {
 		return nil, "", err
 	}
@@ -70,6 +71,10 @@ func (s *Service) CreateUser(ctx context.Context, actor Actor, in CreateUserInpu
 	if err != nil {
 		return nil, "", err
 	}
+
+	// Roundcube only after the commit, and never fatal: see seedRoundcube.
+	s.seedRoundcube(ctx, actor, email, res)
+
 	return res, email, nil
 }
 
@@ -127,17 +132,43 @@ func validateCreateUser(in *CreateUserInput) error {
 }
 
 // passwordHashFor produces the value the passwd-file will hold: either the hash
-// the caller supplied (already in Dovecot format) or an argon2id hash of the
+// the caller supplied (already in Dovecot format) or a fresh hash of the
 // plaintext password.
-func passwordHashFor(in CreateUserInput) (string, error) {
+func (s *Service) passwordHashFor(ctx context.Context, in CreateUserInput) (string, error) {
 	if in.PasswordHash != "" {
 		return in.PasswordHash, nil
 	}
-	hash, err := auth.DovecotHash(in.Password)
+	return s.hashPassword(ctx, in.Password)
+}
+
+// hashPassword hashes one plaintext password with a scheme the local Dovecot
+// can verify.
+//
+// The scheme is asked for, never assumed. An argon2id hash handed to a Dovecot
+// built without libsodium is not a strong password — it is a login that always
+// fails, with nothing in the panel able to explain why. internal/dovecot
+// decides (and internal/reconciler renders the same answer into the passdb),
+// so the hash and the daemon that has to check it always agree.
+func (s *Service) hashPassword(ctx context.Context, password string) (string, error) {
+	scheme, err := dovecot.Resolve(ctx, s.passwdScheme(), dovecot.ProbeCached)
+	if err != nil {
+		return "", fmt.Errorf("password scheme: %w", err)
+	}
+
+	hash, err := auth.DovecotHashScheme(password, scheme.Scheme)
 	if err != nil {
 		return "", fmt.Errorf("hash password: %w", err)
 	}
 	return hash, nil
+}
+
+// passwdScheme is [mail] passwd_scheme, as the reconciler was configured with
+// it ("" and "auto" both mean "ask the local Dovecot").
+func (s *Service) passwdScheme() string {
+	if s.rec == nil {
+		return ""
+	}
+	return s.rec.Config().PasswdScheme
 }
 
 func applyCreateUserTx(ctx context.Context, tx *sql.Tx, in CreateUserInput, email, hash string) error {
@@ -173,7 +204,7 @@ func (s *Service) ApplyCreateUserToTx(ctx context.Context, tx *sql.Tx, in Create
 	}
 	email := strings.ToLower(in.Username) + "@" + domainName
 
-	hash, err := passwordHashFor(in)
+	hash, err := s.passwordHashFor(ctx, in)
 	if err != nil {
 		return err
 	}
@@ -267,9 +298,9 @@ func (s *Service) ResetUserPassword(ctx context.Context, actor Actor, in ResetPa
 		return nil, fmt.Errorf("%w: password must be at least 8 characters", ErrInvalidInput)
 	}
 
-	hash, err := auth.DovecotHash(in.Password)
+	hash, err := s.hashPassword(ctx, in.Password)
 	if err != nil {
-		return nil, fmt.Errorf("hash password: %w", err)
+		return nil, err
 	}
 
 	res, err := s.Apply(ctx, actor, "user.reset_password", map[string]any{

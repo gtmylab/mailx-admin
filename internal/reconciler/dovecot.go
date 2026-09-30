@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/gtmylab/mailx-admin/internal/dovecot"
 	"github.com/gtmylab/mailx-admin/internal/models"
 )
 
@@ -100,13 +101,25 @@ protocol pop3 {
 // `default_fields` is only a fallback: every line of the passwd-file carries its
 // own uid/gid/home, so a system mailbox keeps its real account while a virtual
 // one falls back to the vmail account under virtual_mailbox_base.
-func RenderDovecotUsersConf(passwdFilePath string) []byte {
+//
+// scheme is the passdb's default for a password with no {SCHEME} prefix. The
+// panel never writes an unprefixed hash, so it only matters for lines an
+// operator added by hand — but it has to be a scheme this Dovecot can verify,
+// or the whole passdb refuses to initialise. It comes from
+// internal/dovecot.Resolve, which asks the local Dovecot what it supports;
+// empty means ARGON2ID, the panel's preferred scheme.
+func RenderDovecotUsersConf(passwdFilePath, scheme string) []byte {
+	if scheme == "" {
+		scheme = dovecot.SchemeArgon2id
+	}
 	return []byte(fmt.Sprintf(`# Managed by mailx-admin — DO NOT EDIT
 passdb {
   driver = passwd-file
-  # scheme= is the default for hashes with no {SCHEME} prefix; imported system
-  # mailboxes carry {CRYPT}... and are checked with crypt() instead.
-  args = username_format=%%u scheme=ARGON2ID %s
+  # scheme= is the default for hashes with no {SCHEME} prefix, and has to be one
+  # this Dovecot was built with (doveadm pw -l lists them). Every line the panel
+  # writes carries its own {SCHEME}: an imported system mailbox keeps its
+  # {CRYPT} hash and is checked with crypt(), not with this default.
+  args = username_format=%%u scheme=%s %s
 }
 
 userdb {
@@ -117,5 +130,5 @@ userdb {
 
 auth_mechanisms = plain login
 disable_plaintext_auth = yes
-`, passwdFilePath, passwdFilePath))
+`, scheme, passwdFilePath, passwdFilePath))
 }

@@ -180,9 +180,11 @@ func applyUserMutation(ctx context.Context, cfg *config.Config, database *db.DB,
 		DovecotConfDir: cfg.Mail.DovecotConfDir,
 		OpenDKIMDir:    cfg.Mail.OpenDKIMDir,
 		Hostname:       cfg.Server.Hostname,
+		PasswdScheme:   cfg.Mail.PasswdScheme,
 	}, auditor)
 
-	svc := mutations.New(database.DB, st, rec, auditor, cfg.Server.Hostname, nil)
+	svc := mutations.New(database.DB, st, rec, auditor, cfg.Server.Hostname, nil,
+		mutations.NewRoundcubeSeeder(cfg.Roundcube))
 	return svc.CreateUser(ctx, mutations.Actor{Name: "cli:mailbox"}, in)
 }
 
@@ -347,8 +349,10 @@ longer needed.`,
 				DovecotConfDir: cfg.Mail.DovecotConfDir,
 				OpenDKIMDir:    cfg.Mail.OpenDKIMDir,
 				Hostname:       cfg.Server.Hostname,
+				PasswdScheme:   cfg.Mail.PasswdScheme,
 			}, auditor)
-			svc := mutations.New(database.DB, st, rec, auditor, cfg.Server.Hostname, nil)
+			svc := mutations.New(database.DB, st, rec, auditor, cfg.Server.Hostname, nil,
+				mutations.NewRoundcubeSeeder(cfg.Roundcube))
 
 			res, err := svc.DeleteUser(ctx, mutations.Actor{Name: "cli:mailbox"}, userID)
 			if err != nil {

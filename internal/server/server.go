@@ -84,7 +84,8 @@ func New(cfg *config.Config, database *sql.DB, st *store.Store, rec *reconciler.
 	// The syncer owns the config sync. It never touches disk inside a request:
 	// mutations queue a run, and the run reports back through reconcile_runs.
 	sync := syncer.New(database, st, rec, logger)
-	mut := mutations.New(database, st, rec, aud, cfg.Server.Hostname, sync)
+	mut := mutations.New(database, st, rec, aud, cfg.Server.Hostname, sync,
+		mutations.NewRoundcubeSeeder(cfg.Roundcube))
 
 	return &Server{
 		cfg:       cfg,

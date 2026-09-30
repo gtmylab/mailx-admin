@@ -11,6 +11,7 @@ import (
 	"github.com/gtmylab/mailx-admin/internal/audit"
 	"github.com/gtmylab/mailx-admin/internal/models"
 	"github.com/gtmylab/mailx-admin/internal/reconciler"
+	"github.com/gtmylab/mailx-admin/internal/roundcube"
 	"github.com/gtmylab/mailx-admin/internal/store"
 )
 
@@ -34,6 +35,11 @@ type Service struct {
 	auditor  *audit.Logger
 	hostname string
 
+	// roundcube pre-seeds a new mailbox in Roundcube's own database. Nil when
+	// the [roundcube] section is disabled, which is the safe default: the
+	// panel then never writes into a database it was not told about.
+	roundcube RoundcubeSeeder
+
 	// sync queues the config sync that used to run inside the request. When it
 	// is nil (tests, and any caller that wires the service by hand) Apply falls
 	// back to syncing inline, which is what the CLI-style callers want.
@@ -45,21 +51,32 @@ type Service struct {
 	syncMu sync.Mutex
 }
 
+// RoundcubeSeeder is Roundcube's pre-seed, as the mutation service needs it:
+// an idempotent "make webmail know about this mailbox".
+//
+// It is an interface (and the concrete type lives in internal/roundcube) so
+// the service can be tested, and so a deployment without Roundcube wires
+// nothing at all.
+type RoundcubeSeeder interface {
+	EnsureUser(ctx context.Context, login string) (roundcube.Result, error)
+}
+
 // SyncQueuer is the background syncer. Declared here as a one-method interface
 // so the mutation service can be exercised without a running worker.
 type SyncQueuer interface {
 	Request(trigger string)
 }
 
-func New(db *sql.DB, st *store.Store, rec *reconciler.Reconciler, aud *audit.Logger, hostname string, queue SyncQueuer) *Service {
+func New(db *sql.DB, st *store.Store, rec *reconciler.Reconciler, aud *audit.Logger, hostname string, queue SyncQueuer, roundcube RoundcubeSeeder) *Service {
 	return &Service{
-		db:       db,
-		store:    st,
-		rec:      rec,
-		preview:  newPreviewReconciler(rec),
-		auditor:  aud,
-		hostname: hostname,
-		sync:     queue,
+		db:        db,
+		store:     st,
+		rec:       rec,
+		preview:   newPreviewReconciler(rec),
+		auditor:   aud,
+		hostname:  hostname,
+		sync:      queue,
+		roundcube: roundcube,
 	}
 }
 

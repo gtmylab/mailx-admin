@@ -1,9 +1,12 @@
 package mutations
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
 
+	"github.com/gtmylab/mailx-admin/internal/auth"
 	"github.com/gtmylab/mailx-admin/internal/models"
 )
 
@@ -79,8 +82,40 @@ func TestValidateCreateUserPassword(t *testing.T) {
 		t.Errorf("validateCreateUser with a {CRYPT} hash: %v", err)
 	}
 
-	hash, err := passwordHashFor(in)
+	hash, err := (&Service{}).passwordHashFor(context.Background(), in)
 	if err != nil || hash != in.PasswordHash {
 		t.Errorf("passwordHashFor = %q, %v; want the supplied hash unchanged", hash, err)
+	}
+}
+
+// TestHashPasswordUsesAVerifiableScheme: whichever scheme the local Dovecot
+// supports, what lands in the passwd-file has to be checkable — that is the
+// whole point of asking instead of assuming argon2id.
+func TestHashPasswordUsesAVerifiableScheme(t *testing.T) {
+	ctx := context.Background()
+	password := "correct horse battery staple"
+
+	hash, err := (&Service{}).hashPassword(ctx, password)
+	if err != nil {
+		t.Fatalf("hashPassword: %v", err)
+	}
+
+	switch {
+	case strings.HasPrefix(hash, "{ARGON2ID}"):
+		ok, err := auth.VerifyPassword(password, strings.TrimPrefix(hash, "{ARGON2ID}"))
+		if err != nil || !ok {
+			t.Errorf("the {ARGON2ID} hash does not verify: ok=%v err=%v", ok, err)
+		}
+	case strings.HasPrefix(hash, "{SSHA512}"):
+		ok, err := auth.VerifySSHA512(password, hash)
+		if err != nil || !ok {
+			t.Errorf("the {SSHA512} hash does not verify: ok=%v err=%v", ok, err)
+		}
+	default:
+		t.Fatalf("hash %q carries no {SCHEME} prefix; Dovecot would have to guess", hash)
+	}
+
+	if ok, _ := auth.VerifySSHA512("not the password", hash); ok {
+		t.Error("a wrong password verified against the new hash")
 	}
 }

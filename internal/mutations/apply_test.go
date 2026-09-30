@@ -295,7 +295,11 @@ func sqliteTestService(t *testing.T) (*Service, *db.DB, string) {
 
 	// nil queue: these tests exercise the inline path (the panel always passes a
 	// syncer, see internal/syncer).
-	svc := New(database.DB, store.New(database), rec, audit.New(database.DB), "mail.example.test", nil)
+	//
+	// No Roundcube seeder either: the tests must not require a MySQL client, and
+	// "no seeder wired" is the behaviour of every deployment that has not
+	// enabled [roundcube]. See roundcube_test.go for the seeder itself.
+	svc := New(database.DB, store.New(database), rec, audit.New(database.DB), "mail.example.test", nil, nil)
 	return svc, database, conf
 }
 

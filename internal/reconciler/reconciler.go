@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gtmylab/mailx-admin/internal/audit"
+	"github.com/gtmylab/mailx-admin/internal/dovecot"
 	"github.com/gtmylab/mailx-admin/internal/execx"
 	"github.com/gtmylab/mailx-admin/internal/models"
 	"github.com/gtmylab/mailx-admin/internal/ports"
@@ -51,6 +53,16 @@ type Config struct {
 	// BackupDir is where the previous version of a managed file is preserved
 	// before it is overwritten. Empty means /var/backups/mailx.
 	BackupDir string
+
+	// PasswdScheme is what new mailbox passwords are hashed with, and the
+	// passdb's default scheme — [mail] passwd_scheme in admin.toml.
+	//
+	// Empty and "auto" both mean "ask the local Dovecot", which is what a
+	// server wants: argon2id where Dovecot supports it, SSHA512 where it was
+	// built without libsodium. An explicit name is honoured only if the local
+	// Dovecot can verify it; otherwise the sync fails with an explanation
+	// rather than writing hashes nothing can check.
+	PasswdScheme string
 }
 
 // backupRoot is the directory the per-run backup folders are created in.
@@ -108,6 +120,37 @@ type managedFile struct {
 	service string // which service to reload if this changes ("" = no reload)
 }
 
+// resolveScheme decides which password scheme this host's Dovecot can verify,
+// and records a warning when the panel had to fall back from argon2id.
+//
+// The probe is skipped when the caller asked for no external helpers (the test
+// suite, and anything that is not the mail server itself): the configured
+// scheme is then taken at face value, with argon2id as the default — exactly
+// what the panel rendered before the probe existed.
+//
+// Otherwise it goes through dovecot.ProbeCached, which answers from memory
+// after the first call: this runs inside a dry run too, where a database
+// transaction is open and forking would be a very bad idea (see
+// internal/mutations). A failed probe is not fatal — argon2id is kept, which is
+// what the panel did unconditionally before this existed.
+func (r *Reconciler) resolveScheme(ctx context.Context, res *Result) (string, error) {
+	if r.cfg.SkipValidation {
+		if r.cfg.PasswdScheme == "" {
+			return dovecot.SchemeArgon2id, nil
+		}
+		return strings.ToUpper(strings.TrimSpace(r.cfg.PasswdScheme)), nil
+	}
+
+	resolution, err := dovecot.Resolve(ctx, r.cfg.PasswdScheme, dovecot.ProbeCached)
+	if err != nil {
+		return "", fmt.Errorf("password scheme: %w", err)
+	}
+	if resolution.Fallback {
+		res.Warnings = append(res.Warnings, resolution.Detail)
+	}
+	return resolution.Scheme, nil
+}
+
 // Reconcile renders all configs from snap and applies them.
 //
 // Guarantees:
@@ -118,6 +161,21 @@ type managedFile struct {
 func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Result, error) {
 	res := &Result{StartedAt: time.Now()}
 	defer func() { res.FinishedAt = time.Now() }()
+
+	// ------------------------------------------------------------------
+	// Password scheme.
+	//
+	// This is decided before anything is rendered, and it is what the
+	// mutation service hashes new passwords with too: a hash written in one
+	// scheme while Dovecot is told to treat another as the default is a
+	// mailbox nobody can log into. The probe also has to happen before the
+	// configs are written, because an explicit scheme this Dovecot cannot
+	// verify must fail the run rather than reach the daemons.
+	// ------------------------------------------------------------------
+	scheme, err := r.resolveScheme(ctx, res)
+	if err != nil {
+		return res, err
+	}
 
 	// ------------------------------------------------------------------
 	// Build all desired file contents first. Nothing touches disk yet.
@@ -190,7 +248,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 		},
 		{
 			path:    filepath.Join(r.cfg.DovecotConfDir, "conf.d", "10-auth-mailx.conf"),
-			content: RenderDovecotUsersConf(filepath.Join(r.cfg.DovecotConfDir, "users")),
+			content: RenderDovecotUsersConf(filepath.Join(r.cfg.DovecotConfDir, "users"), scheme),
 			mode:    0o644,
 			service: "dovecot",
 		},

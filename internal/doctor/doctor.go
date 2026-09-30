@@ -114,8 +114,9 @@ func Run(ctx context.Context, opts Options) *Report {
 	report.checks(validationCheck(ctx, opts))
 	report.checks(serverStateCheck(ctx, opts))
 	report.checks(serviceCheck(ctx, opts))
+	report.checks(schemeCheck(ctx, opts))
 	report.checks(lastSyncCheck(ctx, opts))
-	report.checks(roundcubeNote())
+	report.checks(roundcubeCheck(ctx, opts))
 
 	return report
 }

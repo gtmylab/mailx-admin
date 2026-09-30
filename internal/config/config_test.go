@@ -97,6 +97,21 @@ func TestInstallerAdminTomlRoundTrips(t *testing.T) {
 					got.PGHost, got.PGPort, got.PGDatabase)
 			}
 		}
+
+		// The two sections that make a new mailbox usable: the scheme its
+		// password is hashed with, and the Roundcube database that should know
+		// about it. Both are read by the panel, so a template that omits them
+		// leaves the panel on its defaults and an operator wondering why.
+		if cfg.Mail.PasswdScheme == "" {
+			t.Error("installer template has no [mail] passwd_scheme: the panel would fall back to its own default")
+		}
+		if !cfg.Roundcube.Enabled {
+			t.Error("installer template does not enable [roundcube]: new mailboxes would not be pre-seeded")
+		}
+		if cfg.Roundcube.Database == "" || cfg.Roundcube.MailHost == "" {
+			t.Errorf("installer template [roundcube] database/mail_host = %q/%q, want both set",
+				cfg.Roundcube.Database, cfg.Roundcube.MailHost)
+		}
 	}
 }
 

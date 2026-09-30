@@ -26,7 +26,7 @@
 # and a host is never stuck re-running a stale copy.
 #
 # Re-publishing an existing tag is safe - the publish step clobbers its assets:
-#   Actions > Release > Run workflow, tag: v1.0.8
+#   Actions > Release > Run workflow, tag: v1.0.9
 
 name: Release
 

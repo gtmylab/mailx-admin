@@ -118,15 +118,6 @@ func lastSyncCheck(ctx context.Context, opts Options) Check {
 	}
 }
 
-func roundcubeNote() Check {
-	return Check{
-		Name:   "roundcube data",
-		Status: Info,
-		Detail: "importing Roundcube's MySQL address books and identities is not part of this release",
-		Hint:   "mailboxes, domains and aliases are imported; Roundcube's own tables are left untouched",
-	}
-}
-
 func plural(n int, one, many string) string {
 	if n == 1 {
 		return one

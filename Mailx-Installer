@@ -1811,9 +1811,13 @@ add_roundcube_user() {
 
     register_mailbox_in_panel "$email" "$quota_size" || true
 
+    # Roundcube keys its own rows by the address the user logs in with, and the
+    # panel pre-seeds exactly that address, so both write $email and not the
+    # bare UNIX user name. (A bare "test1" row is never matched once
+    # username_domain completes the login to test1@$domain.)
     ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 
-    USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se "INSERT INTO users (username, mail_host, created, last_login, language, preferences) VALUES ('$username', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE'); SELECT LAST_INSERT_ID();" 2>/dev/null || echo "")
+    USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se "INSERT INTO users (username, mail_host, created, last_login, language, preferences) VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE'); SELECT LAST_INSERT_ID();" 2>/dev/null || echo "")
 
     if [ -n "$USER_ID" ]; then
         mysql $ROUNDCUBE_DB_NAME -e "INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$email', '$email', '', '1');" 2>/dev/null || true
@@ -1977,6 +1981,34 @@ EOF
 # Roundcube Installation
 # ============================================================================
 
+# Set one $config['key'] in Roundcube's config.inc.php.
+#
+# Roundcube's own sample file comments out most of the defaults, so the plain
+# `sed -i "s|\$config['x'] = .*|...|"` this used to do silently changed nothing
+# on a fresh install: the setting was never applied, and the logins the panel
+# creates were then refused by webmail with no way to see why. This rewrites
+# the line whether it is active or commented out, and adds the key when the
+# sample does not mention it at all.
+#
+# `[$]` and `[?]` are used instead of backslashes inside the expressions, so
+# neither the shell nor sed has to agree about escaping.
+rc_set_config() {
+    local file=$1 key=$2 value=$3
+
+    if grep -qF "\$config['$key']" "$file"; then
+        sed -i -E "s|^[[:space:]]*(//)?[[:space:]]*[$]config\['$key'\].*|\$config['$key'] = $value;|" "$file"
+        return
+    fi
+
+    # Not mentioned: add it, but never after a closing tag, which would print
+    # the line in the browser instead of setting it.
+    if grep -qF '?>' "$file"; then
+        sed -i -E "/^[?]>/i \$config['$key'] = $value;" "$file"
+    else
+        printf '%s\n' "\$config['$key'] = $value;" >> "$file"
+    fi
+}
+
 install_roundcube_application() {
     local EMAIL_DOMAIN=$1
     local HOSTNAME=$2
@@ -2106,22 +2138,35 @@ EOF
     fi
 
     log_info "Configuring Roundcube database..."
-    sed -i "s|\$config\['db_dsnw'\] = .*|\$config\['db_dsnw'\] = 'mysql://$ROUNDCUBE_DB_USER:$ROUNDCUBE_DB_PASSWORD@localhost/$ROUNDCUBE_DB_NAME';|" config/config.inc.php
-    sed -i "s|\$config\['default_host'\] = .*|\$config\['default_host'\] = 'localhost';|" config/config.inc.php
-    sed -i "s|\$config\['smtp_server'\] = .*|\$config\['smtp_server'\] = 'localhost';|" config/config.inc.php
-    sed -i "s|\$config\['smtp_port'\] = .*|\$config\['smtp_port'\] = 25;|" config/config.inc.php
-    sed -i "s|\$config\['support_url'\] = .*|\$config\['support_url'\] = 'mailto:$ROUNDCUBE_ADMIN_EMAIL';|" config/config.inc.php
+    rc_set_config config/config.inc.php db_dsnw "'mysql://$ROUNDCUBE_DB_USER:$ROUNDCUBE_DB_PASSWORD@localhost/$ROUNDCUBE_DB_NAME'"
 
-    if ! grep -q "mail_domain" config/config.inc.php; then
-        sed -i "/\$config\['smtp_server'\]/a \$config['mail_domain'] = '$EMAIL_DOMAIN';" config/config.inc.php
-    else
-        sed -i "s|\$config\['mail_domain'\] = .*|\$config\['mail_domain'\] = '$EMAIL_DOMAIN';|" config/config.inc.php
-    fi
+    # The IMAP and SMTP host, under both names Roundcube has used for them.
+    # 1.6's sample only carries the new spelling (imap_host / smtp_host) and the
+    # older one did not use it at all, so writing just one of them leaves half
+    # the supported versions pointing somewhere else. Both are set to the same
+    # local daemons, and the ports match what this installer configures:
+    # Dovecot on 143, Postfix's submission service on 587.
+    rc_set_config config/config.inc.php imap_host "'localhost:143'"
+    rc_set_config config/config.inc.php default_host "'localhost:143'"
+    rc_set_config config/config.inc.php smtp_host "'localhost:587'"
+    rc_set_config config/config.inc.php smtp_server "'localhost'"
+    rc_set_config config/config.inc.php smtp_port "587"
+    rc_set_config config/config.inc.php support_url "'mailto:$ROUNDCUBE_ADMIN_EMAIL'"
 
-    if grep -q "\$config\['des_key'\] = ''" config/config.inc.php; then
-        local DES_KEY=$(openssl rand -base64 24)
-        sed -i "s|\$config\['des_key'\] = '';|\$config\['des_key'\] = '$DES_KEY';|" config/config.inc.php
-    fi
+    # mail_domain is the domain shown in the UI. username_domain is the one that
+    # decides whether a login works: Dovecot's passwd-file is keyed by the whole
+    # address (alice@$EMAIL_DOMAIN), so a user who types just "alice" has to be
+    # completed to it before Roundcube sends the login — nothing else does that,
+    # and without it the bare name is refused even though the mailbox exists.
+    rc_set_config config/config.inc.php mail_domain "'$EMAIL_DOMAIN'"
+    rc_set_config config/config.inc.php username_domain "'$EMAIL_DOMAIN'"
+
+    # des_key: Roundcube's sample ships a well-known one ("rcmail-!24ByteDESkey*Str"),
+    # so it is replaced unconditionally — not only when it is empty. It encrypts
+    # the session and any IMAP/SMTP password Roundcube stores, and a shared key
+    # is a shared secret.
+    local DES_KEY=$(openssl rand -base64 24)
+    rc_set_config config/config.inc.php des_key "'$DES_KEY'"
 
     log_info "Initializing Roundcube database schema..."
     if [ -f "bin/initdb.sh" ]; then
@@ -3070,6 +3115,27 @@ postfix_conf_dir    = "/etc/postfix"
 dovecot_conf_dir    = "/etc/dovecot"
 opendkim_dir        = "/etc/opendkim"
 primary_domain_file = "/usr/local/roundcube_mail_domain.txt"
+# Which scheme new mailbox passwords are hashed with. "auto" asks the local
+# Dovecot (doveadm pw -l): ARGON2ID where it was built with libsodium, SSHA512
+# where it was not. A hard-coded ARGON2ID on a Dovecot without libsodium is a
+# mailbox that can never log in.
+passwd_scheme       = "auto"
+
+[roundcube]
+# Pre-seed Roundcube's own database (a users row and its default identity) for
+# every mailbox the panel creates, so webmail knows the account before its owner
+# first logs in. Roundcube would create the rows itself at first login; doing it
+# here is what makes "does webmail know about this mailbox?" answerable.
+enabled   = true
+database  = "roundcubemail"
+# The MySQL client, on the local socket as root — the same way the installer
+# creates these rows. If root needs a password on this server, add the file that
+# holds it: args = ["--defaults-file=/root/.my.cnf"]
+binary    = "mysql"
+# Has to match Roundcube's imap_host/default_host, or the row written here is
+# not the one a login looks up.
+mail_host = "localhost"
+language  = "en_GB"
 
 [dns]
 resolver = "1.1.1.1:53"
@@ -3107,6 +3173,27 @@ postfix_conf_dir    = "/etc/postfix"
 dovecot_conf_dir    = "/etc/dovecot"
 opendkim_dir        = "/etc/opendkim"
 primary_domain_file = "/usr/local/roundcube_mail_domain.txt"
+# Which scheme new mailbox passwords are hashed with. "auto" asks the local
+# Dovecot (doveadm pw -l): ARGON2ID where it was built with libsodium, SSHA512
+# where it was not. A hard-coded ARGON2ID on a Dovecot without libsodium is a
+# mailbox that can never log in.
+passwd_scheme       = "auto"
+
+[roundcube]
+# Pre-seed Roundcube's own database (a users row and its default identity) for
+# every mailbox the panel creates, so webmail knows the account before its owner
+# first logs in. Roundcube would create the rows itself at first login; doing it
+# here is what makes "does webmail know about this mailbox?" answerable.
+enabled   = true
+database  = "roundcubemail"
+# The MySQL client, on the local socket as root — the same way the installer
+# creates these rows. If root needs a password on this server, add the file that
+# holds it: args = ["--defaults-file=/root/.my.cnf"]
+binary    = "mysql"
+# Has to match Roundcube's imap_host/default_host, or the row written here is
+# not the one a login looks up.
+mail_host = "localhost"
+language  = "en_GB"
 
 [dns]
 resolver = "1.1.1.1:53"

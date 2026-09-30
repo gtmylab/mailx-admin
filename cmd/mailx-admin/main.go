@@ -34,6 +34,7 @@ func main() {
 		cmdServe(),
 		cmdUser(),
 		cmdMailbox(),
+		cmdRoundcube(),
 	)
 
 	if err := root.Execute(); err != nil {

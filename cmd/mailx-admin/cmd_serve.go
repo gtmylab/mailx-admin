@@ -70,6 +70,7 @@ func cmdServe() *cobra.Command {
 				DovecotConfDir: cfg.Mail.DovecotConfDir,
 				OpenDKIMDir:    cfg.Mail.OpenDKIMDir,
 				Hostname:       cfg.Server.Hostname,
+				PasswdScheme:   cfg.Mail.PasswdScheme,
 			}, audit.New(database.DB))
 
 			srv, err := server.New(cfg, database.DB, st, rec, logger)
