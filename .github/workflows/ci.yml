@@ -76,12 +76,21 @@ jobs:
 
       # The assertion that matters: the same command release.yml runs before it
       # builds the artifact. A red run here means tagging would publish nothing.
+      #
+      # Careful with the shell: GitHub runs a run: block as "bash -e", and
+      # "set -uo pipefail" does not clear that -e. Written the obvious way
+      # (make test > test.log 2>&1; status=$?), the step aborts on the make line
+      # and every diagnostic below is skipped -- which is what made the v1.0.7
+      # failure a bare "Process completed with exit code 2" with no test name.
+      # Hence the "|| status=$?" form (a command in an || list is exempt from
+      # -e) and the "|| true" after each command substitution.
       - name: Test
         run: |
           set -uo pipefail
-          make test > test.log 2>&1
-          status=$?
-          tail -n 250 test.log
+
+          status=0
+          make test > test.log 2>&1 || status=$?
+          tail -n 250 test.log || true
 
           {
             echo "### make test (go test -race)"
@@ -89,21 +98,21 @@ jobs:
             echo "exit status: $status"
             echo
             echo '```'
-            tail -n 120 test.log
+            tail -n 120 test.log || true
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } >> "$GITHUB_STEP_SUMMARY" || true
 
           if [ "$status" -ne 0 ]; then
             # The failing tests, their messages and the package verdicts. Kept
             # short: it travels as one annotation.
-            excerpt="$(grep -E '^(--- FAIL|FAIL|panic:|ok  )|^[[:space:]]+[A-Za-z0-9_]+_test\.go:[0-9]+:|^[[:space:]]+(goroutine|exit status|signal:)' test.log | head -n 100 || true)"
+            excerpt="$(grep -E '^(--- FAIL|FAIL|panic:|ok  )|^[[:space:]]+[A-Za-z0-9_]+_test\.go:[0-9]+:|^[[:space:]]+(goroutine|exit status|signal:)' test.log | head -n 100)" || true
             if [ -z "$excerpt" ]; then
-              excerpt="$(tail -n 80 test.log)"
+              excerpt="$(tail -n 80 test.log)" || true
             fi
             escaped="$(printf '%s\n' "$excerpt" \
               | sed -e 's/%/%25/g' -e 's/\r$//' \
               | awk 'BEGIN{ORS=""} NR>1{printf "%%0A"} {print}' \
-              | head -c 6000)"
+              | head -c 6000)" || true
             echo "::error title=go test -race failed::$escaped"
             exit 1
           fi
