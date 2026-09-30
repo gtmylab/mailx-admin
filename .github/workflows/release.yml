@@ -15,6 +15,18 @@
 # The installer's wget is unauthenticated, so the repository (or at least the
 # release asset) must be publicly readable. On a private repo, install offline
 # instead: copy the binary to /tmp/mailx-admin before running the installer.
+#
+# Published per tag:
+#   mailx-admin-linux-amd64  the version-stamped binary stage 13e downloads
+#   SHA256SUMS               covers that binary and Mailx-Installer
+#   Mailx-Installer          the installer itself, as of this tag
+# Mailx-Installer keeps the same file name in every release (it is
+# version-agnostic and always pulls the newest binary), so
+# releases/latest/download/Mailx-Installer is a stable place to fetch it from
+# and a host is never stuck re-running a stale copy.
+#
+# Re-publishing an existing tag is safe - the publish step clobbers its assets:
+#   Actions > Release > Run workflow, tag: v1.0.8
 
 name: Release
 
@@ -113,6 +125,28 @@ jobs:
           test -s bin/SHA256SUMS
           cat bin/SHA256SUMS
 
+      - name: Add the installer to the artifact set
+        run: |
+          set -euo pipefail
+          # Mailx-Installer ships with the release so a server can fetch the
+          # current one instead of re-running whatever copy it downloaded months
+          # ago:
+          #   .../releases/latest/download/Mailx-Installer
+          # It stays unversioned on purpose: it is version-agnostic and always
+          # downloads releases/latest/download/mailx-admin-linux-amd64. Publishing
+          # it per tag is what stops a host from reusing stale installer logic
+          # the panel has since outgrown (it used to append to /etc/postfix/
+          # virtual, a file the panel rewrites from its database on every sync).
+          test -s Mailx-Installer
+          head -n 1 Mailx-Installer | grep -q '^#!' \
+            || { echo "::error::Mailx-Installer does not start with a shebang"; exit 1; }
+          # The installer looks its checksum up by name (awk '$2 == name'), not
+          # with 'sha256sum -c', so one extra line is harmless to older copies.
+          if ! grep -qE '[[:space:]]\*?Mailx-Installer$' bin/SHA256SUMS; then
+            sha256sum Mailx-Installer >> bin/SHA256SUMS
+          fi
+          cat bin/SHA256SUMS
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -121,9 +155,11 @@ jobs:
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release $TAG already exists - replacing its assets"
-            gh release upload "$TAG" bin/mailx-admin-linux-amd64 bin/SHA256SUMS --clobber
+            gh release upload "$TAG" \
+              bin/mailx-admin-linux-amd64 bin/SHA256SUMS Mailx-Installer --clobber
           else
-            gh release create "$TAG" bin/mailx-admin-linux-amd64 bin/SHA256SUMS \
+            gh release create "$TAG" \
+              bin/mailx-admin-linux-amd64 bin/SHA256SUMS Mailx-Installer \
               --title "$TAG" \
               --generate-notes
           fi
@@ -136,9 +172,16 @@ jobs:
           {
             echo "### Released ${TAG}"
             echo ""
-            echo "Assets: mailx-admin-linux-amd64 plus SHA256SUMS."
-            echo "Mailx-Installer downloads that exact file name from"
-            echo "releases/latest/download/, so no installer change is needed."
+            echo "Assets: mailx-admin-linux-amd64, SHA256SUMS and Mailx-Installer."
+            echo "The installer is version-agnostic (it always pulls"
+            echo "releases/latest/download/mailx-admin-linux-amd64), so it is the same"
+            echo "file for every release; publishing it per tag is what keeps a host"
+            echo "from re-running a stale copy."
+            echo ""
+            echo "Fetch this release's installer (or upgrade an existing host):"
+            echo ""
+            echo "    curl -fsSLO https://github.com/gtmylab/mailx-admin/releases/latest/download/Mailx-Installer"
+            echo "    chmod +x Mailx-Installer"
             echo ""
             echo "Install or upgrade on a server:"
             echo ""

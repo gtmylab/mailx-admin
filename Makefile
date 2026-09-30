@@ -58,9 +58,11 @@ build-linux:
 	@./bin/$(LINUX_ARTIFACT) --version
 
 # Release artifact set: the version-stamped Linux binary plus its checksum.
-# GitHub Actions publishes exactly these two files (see
-# .github/workflows/release.yml), and Mailx-Installer downloads the first one
-# from releases/latest/download/mailx-admin-linux-amd64.
+# GitHub Actions publishes this binary, its checksum, and Mailx-Installer itself
+# (see .github/workflows/release.yml) - the installer is appended there rather
+# than here because it is a sourced file, not a build product. Mailx-Installer
+# downloads the binary from
+# releases/latest/download/mailx-admin-linux-amd64.
 release: build-linux
 	@cd bin && sha256sum $(LINUX_ARTIFACT) > SHA256SUMS
 	@echo "checksums:" && cat bin/SHA256SUMS

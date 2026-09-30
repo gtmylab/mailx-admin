@@ -155,6 +155,11 @@ func TestLinuxArtifactNameMatchesInstaller(t *testing.T) {
 // and the release workflow is what actually puts it on GitHub. If the workflow
 // stops building through "make release", or publishes a different file name,
 // the installer's download URL goes dead again while everything looks fine.
+//
+// The installer itself is part of that set: it changed between v1.0.4 and
+// v1.0.8 (it no longer appends to /etc/postfix/virtual, which the panel
+// rewrites from its database on every sync), so a host that only ever kept its
+// first download would keep installing mailboxes the panel then deletes.
 func TestReleaseWorkflowPublishesArtifactSet(t *testing.T) {
 	workflow := repoFile(t, filepath.Join(".github", "workflows", "release.yml"))
 
@@ -162,6 +167,7 @@ func TestReleaseWorkflowPublishesArtifactSet(t *testing.T) {
 		"make release",            // one build path: the Makefile owns the names
 		"mailx-admin-linux-amd64", // the asset the installer downloads
 		"SHA256SUMS",              // provenance for what is installed
+		"Mailx-Installer",         // the installer itself ships with the release
 		"gh release",              // official CLI, no third-party release action
 		"VERSION=",                // tag must be stamped into the binary
 	} {
