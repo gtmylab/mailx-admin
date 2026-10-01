@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/gtmylab/mailx-admin/internal/dovecot"
 	"github.com/gtmylab/mailx-admin/internal/models"
@@ -105,12 +106,21 @@ protocol pop3 {
 // scheme is the passdb's default for a password with no {SCHEME} prefix. The
 // panel never writes an unprefixed hash, so it only matters for lines an
 // operator added by hand — but it has to be a scheme this Dovecot can verify,
-// or the whole passdb refuses to initialise. It comes from
-// internal/dovecot.Resolve, which asks the local Dovecot what it supports;
+// or the whole passdb refuses to initialise. It comes from resolveScheme
+// (internal/dovecot.Resolve), which asks the local Dovecot what it supports;
 // empty means ARGON2ID, the panel's preferred scheme.
+//
+// A placeholder must never reach the file: "auto" and "AUTO" are the panel's way
+// of saying "ask the local Dovecot" — the caller does — and a Dovecot handed
+// `scheme=auto` cannot parse the passdb at all, which refuses every login rather
+// than one. Names are upper-cased because that is the spelling `doveadm pw -l`
+// prints and the one Dovecot matches against.
 func RenderDovecotUsersConf(passwdFilePath, scheme string) []byte {
-	if scheme == "" {
+	switch {
+	case resolvesToHostScheme(scheme):
 		scheme = dovecot.SchemeArgon2id
+	default:
+		scheme = strings.ToUpper(strings.TrimSpace(scheme))
 	}
 	return []byte(fmt.Sprintf(`# Managed by mailx-admin — DO NOT EDIT
 passdb {
