@@ -1,6 +1,8 @@
 package doctor
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -51,6 +53,19 @@ func TestUnverifiableHashes(t *testing.T) {
 			def:     dovecot.SchemeSSHA512,
 		},
 		{
+			name:    "unprefixed hashes with the default Dovecot itself uses",
+			counts:  map[string]int{"(default)": 1},
+			schemes: dovecot.ParseSchemes("PLAIN, CRYPT, SHA512, SSHA512"),
+			def:     dovecot.DefaultPassdbScheme,
+		},
+		{
+			name:     "unprefixed hashes on a Dovecot with no crypt() either",
+			counts:   map[string]int{"(default)": 1},
+			schemes:  dovecot.ParseSchemes("PLAIN, SHA512"),
+			def:      dovecot.DefaultPassdbScheme,
+			wantSubs: []string{"1 hash(es) with no {SCHEME}"},
+		},
+		{
 			name:   "an empty passwd-file",
 			counts: map[string]int{},
 			def:    dovecot.SchemeArgon2id,
@@ -81,6 +96,60 @@ func TestUnverifiableHashes(t *testing.T) {
 		if len(tc.wantSubs) == 0 && len(got) != 0 {
 			t.Errorf("%s: reported %v, want nothing", tc.name, got)
 		}
+	}
+}
+
+// TestPassdbDefaultScheme — the doctor has to read what the passdb actually says,
+// because the panel writes no `scheme=` at all when it could not ask the host
+// which schemes it has (see reconciler.RenderDovecotUsersConf). Assuming the
+// panel's preferred scheme there would report working mailboxes as broken, and
+// assuming nothing would report broken ones as fine.
+func TestPassdbDefaultScheme(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "the passdb names one",
+			content: "passdb {\n  driver = passwd-file\n  args = username_format=%u scheme=ssha512 /etc/dovecot/users\n}\n",
+			want:    "SSHA512",
+		},
+		{
+			name:    "the passdb names none, so Dovecot's own default applies",
+			content: "passdb {\n  driver = passwd-file\n  args = username_format=%u /etc/dovecot/users\n}\n",
+			want:    dovecot.DefaultPassdbScheme,
+		},
+		{
+			name: "a commented-out argument is not an argument",
+			content: "passdb {\n  # args = username_format=%u scheme=ARGON2ID /etc/dovecot/users\n" +
+				"  args = username_format=%u /etc/dovecot/users\n}\n",
+			want: dovecot.DefaultPassdbScheme,
+		},
+		{
+			name:    "the file is not there at all",
+			content: "",
+			want:    dovecot.DefaultPassdbScheme,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.content != "" {
+				if err := os.MkdirAll(filepath.Join(dir, "conf.d"), 0o755); err != nil {
+					t.Fatalf("mkdir conf.d: %v", err)
+				}
+				path := filepath.Join(dir, "conf.d", "10-auth-mailx.conf")
+				if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+					t.Fatalf("write %s: %v", path, err)
+				}
+			}
+
+			if got := passdbDefaultScheme(dir); got != tc.want {
+				t.Errorf("passdbDefaultScheme = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

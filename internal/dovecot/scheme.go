@@ -34,11 +34,25 @@ const (
 	// SchemeSSHA512 is the fallback. Any Dovecot supports it, because it is
 	// plain SHA-512 — at the price of a single round, no salt stretching and
 	// no memory hardness.
+	//
+	// It is also what an unanswerable probe falls back to (see resolveAuto).
+	// When nobody can say what this Dovecot was built with, the only safe
+	// answer is the scheme no build lacks: argon2id would be a hash this host
+	// may be unable to verify at all, which is a mailbox nobody can log into.
 	SchemeSSHA512 = auth.SchemeSSHA512
 
 	// SchemeAuto lets the host decide: argon2id where it exists, SSHA512
 	// where it does not.
 	SchemeAuto = "auto"
+
+	// DefaultPassdbScheme is the scheme Dovecot verifies a hash with when the
+	// passwd-file passdb carries no `scheme=` and the hash has no {SCHEME}
+	// prefix. It is Dovecot's own compiled-in default for that passdb
+	// (PASSWD_FILE_DEFAULT_SCHEME in db-passwd-file.h), which is also the
+	// convention /etc/shadow lines rely on — and it is what the panel leaves
+	// such a hash to when it could not ask the host which schemes it supports,
+	// rather than writing a name the build may not know.
+	DefaultPassdbScheme = "CRYPT"
 )
 
 // probeTimeout bounds `doveadm pw -l`, which lists schemes from memory and
@@ -237,17 +251,19 @@ func resolveExplicit(ctx context.Context, explicit string, probe ProbeFunc) (Res
 func resolveAuto(ctx context.Context, probe ProbeFunc) (Resolution, error) {
 	if probe == nil {
 		return Resolution{
-			Scheme: SchemeArgon2id,
-			Detail: "the local Dovecot was not asked; assuming " + SchemeArgon2id,
+			Scheme: SchemeSSHA512, Fallback: true,
+			Detail: "the local Dovecot was not asked; hashing with " + SchemeSSHA512 +
+				", which every Dovecot can verify",
 		}, nil
 	}
 
 	out, err := probe(ctx)
 	if err != nil {
 		return Resolution{
-			Scheme: SchemeArgon2id,
+			Scheme: SchemeSSHA512, Fallback: true,
 			Detail: fmt.Sprintf("could not list the password schemes Dovecot supports (%v); "+
-				"keeping %s", err, SchemeArgon2id),
+				"hashing with %s, which every Dovecot can verify — set [mail] passwd_scheme "+
+				"to %s once the probe answers again", err, SchemeSSHA512, SchemeArgon2id),
 		}, nil
 	}
 

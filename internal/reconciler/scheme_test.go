@@ -22,23 +22,38 @@ func probeBroken() dovecot.ProbeFunc {
 	return func(context.Context) (string, error) { return "", errors.New("doveadm: not found") }
 }
 
-// TestRenderDovecotUsersConfNeverEmitsAPlaceholder — scheme= has to name a
-// scheme the local Dovecot was built with. "auto", "AUTO" and "" are the panel's
-// way of saying "ask the local Dovecot" (resolveScheme does), and a Dovecot
-// handed `scheme=auto` cannot parse the passdb at all: every login fails, not
-// one.
-func TestRenderDovecotUsersConfNeverEmitsAPlaceholder(t *testing.T) {
-	cases := map[string]string{
-		"":         dovecot.SchemeArgon2id,
-		"auto":     dovecot.SchemeArgon2id,
-		"AUTO":     dovecot.SchemeArgon2id,
-		" Auto ":   dovecot.SchemeArgon2id,
-		"argon2id": dovecot.SchemeArgon2id,
-		"CRYPT":    "CRYPT",
-		"crypt":    "CRYPT",
+// TestRenderDovecotUsersConfNeverWritesAnUnverifiableScheme — a written scheme=
+// has to name a scheme the local Dovecot was built with, and the renderer only
+// writes one the caller could actually confirm. "auto", "AUTO" and "" are the
+// panel's way of saying "ask the local Dovecot": when nobody could answer, no
+// scheme= is written at all, which leaves Dovecot on its own default for a
+// prefix-less hash (dovecot.DefaultPassdbScheme) — instead of `scheme=auto`, a
+// name no build has, or a guess at argon2id, half the builds' users of which
+// cannot verify.
+func TestRenderDovecotUsersConfNeverWritesAnUnverifiableScheme(t *testing.T) {
+	// Nobody named a scheme: the passdb carries no scheme= argument.
+	for _, in := range []string{"", "auto", "AUTO", " Auto "} {
+		out := string(RenderDovecotUsersConf("/etc/dovecot/users", in))
+
+		if strings.Contains(out, "scheme=") {
+			t.Errorf("scheme %q was rendered as an argument, but nobody could name one:\n%s", in, out)
+		}
+		if !strings.Contains(out, "driver = passwd-file") {
+			t.Errorf("scheme %q lost the passdb:\n%s", in, out)
+		}
+		if !strings.Contains(out, "username_format=%u /etc/dovecot/users") {
+			t.Errorf("scheme %q lost the passwd-file argument:\n%s", in, out)
+		}
 	}
 
-	for in, want := range cases {
+	// A scheme that was confirmed is written, upper-cased: that is the spelling
+	// `doveadm pw -l` prints and the one Dovecot matches against.
+	for in, want := range map[string]string{
+		"argon2id": dovecot.SchemeArgon2id,
+		"ARGON2ID": dovecot.SchemeArgon2id,
+		"CRYPT":    "CRYPT",
+		"crypt":    "CRYPT",
+	} {
 		out := string(RenderDovecotUsersConf("/etc/dovecot/users", in))
 		if !strings.Contains(out, "scheme="+want+" ") {
 			t.Errorf("scheme %q did not render as scheme=%s:\n%s", in, want, out)
@@ -57,6 +72,11 @@ func TestRenderDovecotUsersConfNeverEmitsAPlaceholder(t *testing.T) {
 // Dovecot is concerned, so an "auto" that could not be answered used to make
 // every panel mailbox unloggable, with nothing to look at. Before v1.0.9 the
 // passdb's scheme= was a constant and this path did not exist.
+//
+// What it falls back to has to be a scheme that works on any build. For a probe
+// that could not run that is SSHA512; for one that answered without either usable
+// scheme there is no scheme= to write at all, and the run says so — never
+// argon2id, whose absence on the host is what started this.
 func TestResolveSchemeAutoNeverAbortsTheReconcile(t *testing.T) {
 	ctx := context.Background()
 
@@ -80,14 +100,19 @@ func TestResolveSchemeAutoNeverAbortsTheReconcile(t *testing.T) {
 		{
 			name:  "probe could not run",
 			probe: probeBroken(),
-			want:  dovecot.SchemeArgon2id,
+			want:  dovecot.SchemeSSHA512,
+			warn:  true,
 		},
 		{
 			// The regression itself: the probe worked and listed neither
 			// usable scheme, which used to be an error that aborted the run.
+			// "" means "no passdb default": the renderer then writes none, so
+			// Dovecot falls back to its own, and a mailbox created in this
+			// state fails loudly when its password is hashed rather than being
+			// stored in a scheme this host cannot verify.
 			name:  "probe answered, neither usable scheme available",
 			probe: probeFixed("PLAIN, CLEARTEXT, CRYPT, SHA512"),
-			want:  dovecot.SchemeArgon2id,
+			want:  "",
 			warn:  true,
 		},
 	}
@@ -145,11 +170,12 @@ func TestResolveSchemeExplicitUnsupportedIsStillFatal(t *testing.T) {
 }
 
 // TestResolveSchemeSkipValidationResolvesAuto — SkipValidation is the test-suite
-// switch and the only path that skips the probe. It used to hand "auto" straight
-// back (upper-cased, so "AUTO"), and the renderer then wrote `scheme=AUTO` into
-// the passdb: a name no Dovecot was built with, which stops the passdb
-// initialising. Only tests set SkipValidation today, but the value goes through
-// the same renderer production uses.
+// switch and the only path that skips the probe, so nothing here has asked what
+// the host can verify. "auto"/"" used to be handed straight back (upper-cased, so
+// "AUTO") and the renderer then wrote `scheme=AUTO` into the passdb: a name no
+// Dovecot was built with. Resolving them to argon2id instead assumed a libsodium
+// this path cannot know about; SSHA512 is the one scheme no build lacks, so that
+// is what a host nobody asked gets.
 func TestResolveSchemeSkipValidationResolvesAuto(t *testing.T) {
 	ctx := context.Background()
 
@@ -159,12 +185,15 @@ func TestResolveSchemeSkipValidationResolvesAuto(t *testing.T) {
 		if err != nil {
 			t.Fatalf("passwd_scheme %q: %v", in, err)
 		}
-		if got != dovecot.SchemeArgon2id {
-			t.Errorf("passwd_scheme %q resolved to %q, want %q", in, got, dovecot.SchemeArgon2id)
+		if got != dovecot.SchemeSSHA512 {
+			t.Errorf("passwd_scheme %q resolved to %q, want %q", in, got, dovecot.SchemeSSHA512)
 		}
 		out := string(RenderDovecotUsersConf("/etc/dovecot/users", got))
 		if strings.Contains(strings.ToLower(out), "scheme=auto") {
 			t.Errorf("passwd_scheme %q rendered as scheme=auto:\n%s", in, out)
+		}
+		if !strings.Contains(out, "scheme="+dovecot.SchemeSSHA512) {
+			t.Errorf("passwd_scheme %q left the passdb without a verifiable default:\n%s", in, out)
 		}
 	}
 
@@ -183,6 +212,10 @@ func TestResolveSchemeSkipValidationResolvesAuto(t *testing.T) {
 // regression ran through: [mail] passwd_scheme = "auto" (what the installer
 // writes) has to resolve and then actually land the files. A mailbox that never
 // reaches /etc/dovecot/users is one Dovecot refuses to authenticate.
+//
+// The fixture runs with SkipValidation, so nothing here asked the host which
+// schemes it has, and the passdb therefore gets SSHA512 — a scheme every build
+// verifies — rather than an argon2id that may not exist on the server.
 func TestReconcileWithAutoSchemeStillWritesThePasswdFile(t *testing.T) {
 	base, _, _ := driftReconciler(t)
 
@@ -206,7 +239,7 @@ func TestReconcileWithAutoSchemeStillWritesThePasswdFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the passdb drop-in: %v", err)
 	}
-	if !strings.Contains(string(auth), "scheme="+dovecot.SchemeArgon2id) {
+	if !strings.Contains(string(auth), "scheme="+dovecot.SchemeSSHA512) {
 		t.Errorf("the passdb drop-in has no scheme this Dovecot can verify:\n%s", auth)
 	}
 	if strings.Contains(strings.ToLower(string(auth)), "scheme=auto") {

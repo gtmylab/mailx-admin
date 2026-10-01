@@ -60,8 +60,10 @@ type MailConfig struct {
 	// PasswdScheme is the password scheme new mailboxes are hashed with, and
 	// the passdb's `scheme=` default. Empty and "auto" both mean "ask the
 	// local Dovecot": ARGON2ID where Dovecot was built with libsodium,
-	// SSHA512 where it was not. Anything else is honoured only if this
-	// Dovecot can verify it.
+	// SSHA512 where it was not — and SSHA512 too when it cannot be asked at
+	// all, because a scheme no build lacks is the only safe answer there.
+	// Anything else is honoured only if this Dovecot can verify it; when it
+	// cannot, the sync stops and names the schemes it does support.
 	PasswdScheme string `toml:"passwd_scheme"`
 }
 

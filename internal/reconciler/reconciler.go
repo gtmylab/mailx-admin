@@ -59,7 +59,10 @@ type Config struct {
 	//
 	// Empty and "auto" both mean "ask the local Dovecot", which is what a
 	// server wants: argon2id where Dovecot supports it, SSHA512 where it was
-	// built without libsodium. An explicit name is honoured only if the local
+	// built without libsodium — and SSHA512 too when the question cannot be
+	// answered at all, because the scheme no build lacks is the only safe guess
+	// when hashing a password nobody can check later would lock the mailbox out.
+	// An explicit name is honoured only if the local
 	// Dovecot can verify it; otherwise the sync fails with an explanation
 	// rather than writing hashes nothing can check.
 	PasswdScheme string
@@ -132,9 +135,11 @@ type managedFile struct {
 // Dovecot" rather than naming a scheme itself: empty and "auto", case- and
 // space-insensitively, because it comes from a config file a human edited.
 //
-// dovecot.Resolve routes both to its auto path, and the passdb renderer has to
-// turn them into a real name — `scheme=auto` is a passdb Dovecot cannot parse,
-// and one it refuses to load at all.
+// dovecot.Resolve routes both to its auto path. If either spelling still reaches
+// the passdb renderer — a direct call — it is rendered as "no scheme= at all"
+// rather than as `scheme=auto`: a Dovecot cannot resolve that name, so writing it
+// leaves the passdb with a default no build has, where writing nothing leaves it
+// on its own (dovecot.DefaultPassdbScheme).
 func resolvesToHostScheme(scheme string) bool {
 	scheme = strings.TrimSpace(scheme)
 	return scheme == "" || strings.EqualFold(scheme, dovecot.SchemeAuto)
@@ -144,9 +149,10 @@ func resolvesToHostScheme(scheme string) bool {
 // and records a warning when the panel had to fall back from argon2id.
 //
 // The probe is skipped when the caller asked for no external helpers (the test
-// suite, and anything that is not the mail server itself): the configured
-// scheme is then taken at face value, with argon2id as the default — exactly
-// what the panel rendered before the probe existed.
+// suite, and anything that is not the mail server itself): the configured scheme
+// is then taken at face value, and an unset one resolves to SSHA512 — the scheme
+// every build can verify, since nothing on this path has asked what this one
+// has.
 //
 // Otherwise it goes through the scheme probe (dovecot.ProbeCached by default),
 // which answers from memory after the first call: this runs inside a dry run
@@ -155,15 +161,22 @@ func resolvesToHostScheme(scheme string) bool {
 //
 // The one thing it must not do is fail the run over a scheme the panel chose for
 // itself. Reconcile calls this before it renders anything and returns the error
-// unchanged, so an "auto" that could not be answered would drop the whole
-// passwd-file: every mailbox gone from Dovecot, logins refused, and not a line
-// written to say why. That is the v1.0.9 regression — before it, the passdb's
-// scheme= was a constant and this path did not exist. So neither a probe that
-// could not run nor one that answered without listing ARGON2ID or SSHA512 is
-// fatal: both keep argon2id, which is what the panel did unconditionally before
-// the probe existed, and both are reported in the run's warnings. An *explicit*
-// scheme this Dovecot cannot verify stays fatal, because a passdb whose default
-// the daemon cannot parse takes every login down, not one.
+// unchanged, so aborting here leaves /etc/dovecot/users unrendered: on a host
+// that has never been synced that is every mailbox missing from the passdb, and
+// logins refused with nothing to look at. That is the v1.0.9 regression — before
+// it, the passdb's scheme= was a constant and this path did not exist.
+//
+// So a probe that could not run is neither fatal nor a guess at argon2id: the
+// answer is SSHA512, which every Dovecot can verify, and the run warns about it.
+// Neither is a probe that answered without listing either usable scheme (an
+// installation that needs fixing, and what the doctor reports): the run carries
+// on with no passdb default at all — Dovecot's own default then applies, which is
+// what a prefix-less hash expects — and creating a mailbox fails at hash time with
+// the list of schemes this Dovecot does have, instead of quietly writing a hash it
+// cannot check.
+//
+// An *explicit* scheme this Dovecot cannot verify stays fatal: the operator asked
+// for it, and every password hashed in it would be one this Dovecot refuses.
 func (r *Reconciler) resolveScheme(ctx context.Context, res *Result) (string, error) {
 	configured := strings.TrimSpace(r.cfg.PasswdScheme)
 
@@ -172,14 +185,15 @@ func (r *Reconciler) resolveScheme(ctx context.Context, res *Result) (string, er
 	hostDecides := resolvesToHostScheme(configured)
 
 	if r.cfg.SkipValidation {
-		// "auto"/"" name no scheme of their own, so they resolve to the
-		// default here too. Handing "auto" back verbatim (upper-cased, at
-		// that) put `scheme=AUTO` in the passdb: a name no Dovecot was built
-		// with, so the passdb did not initialise. Only the test suite sets
-		// SkipValidation, but the value goes through the same renderer
-		// production uses.
+		// "auto"/"" name no scheme of their own and nothing on this path
+		// asked the host, so they resolve to the one that needs no answer:
+		// SSHA512 is plain SHA-512 and is in every build. Handing them back
+		// as they came (upper-cased, at that) put `scheme=AUTO` in the
+		// passdb, and resolving them to argon2id assumed a libsodium this
+		// path has no way to know about. Only tests set SkipValidation, but
+		// the value goes through the same renderer production uses.
 		if hostDecides {
-			return dovecot.SchemeArgon2id, nil
+			return dovecot.SchemeSSHA512, nil
 		}
 		return strings.ToUpper(configured), nil
 	}
@@ -192,21 +206,24 @@ func (r *Reconciler) resolveScheme(ctx context.Context, res *Result) (string, er
 	resolution, err := dovecot.Resolve(ctx, r.cfg.PasswdScheme, probe)
 	if err != nil {
 		if !hostDecides {
-			// The operator named a scheme this Dovecot cannot verify: say so
-			// rather than write a passdb whose default the daemon cannot parse.
+			// The operator named a scheme this Dovecot cannot verify: fail the
+			// run and let the error name the ones it does have, rather than
+			// hash a password nothing on this host can ever check.
 			return "", fmt.Errorf("password scheme: %w", err)
 		}
-		// "auto" could not be answered. Keep the panel's default: scheme= only
-		// ever applies to a hash with no {SCHEME} prefix, and the panel writes
-		// the prefix on every hash it creates, so this cannot make a panel
-		// mailbox unauthenticatable — while aborting the reconcile would drop
-		// every mailbox it was about to write.
+		// "auto" could not be answered: the probe that ran said this Dovecot
+		// has neither usable scheme. Write no passdb default rather than a
+		// name this build may not know — scheme= only ever applies to a hash
+		// with no {SCHEME} prefix, and the panel prefixes every hash it
+		// creates, so nothing the panel wrote depends on it. Aborting instead
+		// would leave the passwd-file unrendered; a mailbox created in this
+		// state fails loudly when its password is hashed.
 		res.Warnings = append(res.Warnings, fmt.Sprintf(
 			"could not work out which password schemes this Dovecot supports (%v); "+
-				"using %s as the passdb default — set [mail] passwd_scheme to override",
-			err, dovecot.SchemeArgon2id,
+				"writing no passdb default — set [mail] passwd_scheme to one of the "+
+				"schemes it does support", err,
 		))
-		return dovecot.SchemeArgon2id, nil
+		return "", nil
 	}
 	if resolution.Fallback {
 		res.Warnings = append(res.Warnings, resolution.Detail)

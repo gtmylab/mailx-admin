@@ -41,6 +41,12 @@ func TestParseSchemes(t *testing.T) {
 }
 
 // TestResolveAuto is the decision that decides whether a new mailbox can log in.
+//
+// The two cases where nobody could be asked both fall back to SSHA512, not to
+// argon2id: a probe that never ran is no evidence that this Dovecot was built
+// with libsodium, and argon2id written on a build without it is a mailbox whose
+// password can never be checked again. SSHA512 is plain SHA-512 and is in every
+// build, so it is the only answer that cannot lock a mailbox out.
 func TestResolveAuto(t *testing.T) {
 	ctx := context.Background()
 
@@ -62,14 +68,16 @@ func TestResolveAuto(t *testing.T) {
 			fallback: true,
 		},
 		{
-			name:  "not asked at all",
-			probe: nil,
-			want:  SchemeArgon2id,
+			name:     "not asked at all",
+			probe:    nil,
+			want:     SchemeSSHA512,
+			fallback: true,
 		},
 		{
-			name:  "probe failed",
-			probe: func(context.Context) (string, error) { return "", errors.New("doveadm: not found") },
-			want:  SchemeArgon2id,
+			name:     "probe failed",
+			probe:    func(context.Context) (string, error) { return "", errors.New("doveadm: not found") },
+			want:     SchemeSSHA512,
+			fallback: true,
 		},
 	}
 

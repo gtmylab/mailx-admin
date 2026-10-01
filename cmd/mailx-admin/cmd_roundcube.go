@@ -147,9 +147,10 @@ being able to answer "does webmail know about this mailbox?" without guessing.`,
 }
 
 // printRoundcubeSync reports what happened, and then the one thing an operator
-// has to check next: a Roundcube whose `imap_host` (or `default_host`) is not
-// the mail_host we just wrote looks up a different row on every login, and the
-// account looks like it was never created.
+// has to check next: Roundcube keys an account by the login name as it arrives,
+// so a login that does not match the row just written gets a fresh account of
+// its own — without the preferences, which looks exactly like a sync that did
+// nothing.
 func printRoundcubeSync(cfg roundcube.Config, rows []roundcubeSyncRow, created, present, failed int, dryRun bool) {
 	fmt.Printf("roundcube database %s on %s\n\n", cfg.Database, cfg.MailHost)
 
@@ -172,8 +173,11 @@ func printRoundcubeSync(cfg roundcube.Config, rows []roundcubeSyncRow, created, 
 
 	fmt.Printf("\n%d created, %d already present, %d failed\n", created, present, failed)
 	if created > 0 {
-		fmt.Printf("\nCheck that Roundcube's `imap_host` (or `default_host`) is %q, or that\n"+
-			"`username_domain` is set to the mail domain: the account is only found on\n"+
-			"login if the two agree.\n", cfg.MailHost)
+		fmt.Printf("\nThese accounts are keyed by the full address, which is how the\n" +
+			"/etc/dovecot/users passwd-file is keyed too, so a login has to arrive as\n" +
+			"the whole address. A bare user name only finds its row if Roundcube is\n" +
+			"told to complete the name (`username_domain`), and getting that wrong is\n" +
+			"what refused every webmail login in v1.0.10 — set it only together with a\n" +
+			"login test afterwards.\n")
 	}
 }

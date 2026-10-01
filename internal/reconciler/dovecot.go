@@ -103,33 +103,39 @@ protocol pop3 {
 // own uid/gid/home, so a system mailbox keeps its real account while a virtual
 // one falls back to the vmail account under virtual_mailbox_base.
 //
-// scheme is the passdb's default for a password with no {SCHEME} prefix. The
-// panel never writes an unprefixed hash, so it only matters for lines an
-// operator added by hand — but it has to be a scheme this Dovecot can verify,
-// or the whole passdb refuses to initialise. It comes from resolveScheme
-// (internal/dovecot.Resolve), which asks the local Dovecot what it supports;
-// empty means ARGON2ID, the panel's preferred scheme.
+// scheme is the passdb's default for a hash with no {SCHEME} prefix. The panel
+// writes the prefix on every hash it creates, so this only matters for a line an
+// operator added by hand — but it must not be a name this Dovecot was not built
+// with. It comes from resolveScheme (internal/dovecot.Resolve), which asks the
+// local Dovecot what it supports.
+//
+// When nobody could answer — "" or "auto", which is the caller saying it could
+// not ask — no scheme= is written at all rather than a guess. Dovecot then
+// verifies a prefix-less hash with its own compiled-in default
+// (dovecot.DefaultPassdbScheme, CRYPT), which is what an /etc/shadow-style line
+// expects; argon2id written there would be a default half the world's builds
+// cannot resolve.
 //
 // A placeholder must never reach the file: "auto" and "AUTO" are the panel's way
-// of saying "ask the local Dovecot" — the caller does — and a Dovecot handed
-// `scheme=auto` cannot parse the passdb at all, which refuses every login rather
-// than one. Names are upper-cased because that is the spelling `doveadm pw -l`
-// prints and the one Dovecot matches against.
+// of saying "ask the local Dovecot", and `scheme=auto` would hand Dovecot a name
+// no build has. Names that are written are upper-cased, because that is the
+// spelling `doveadm pw -l` prints and the one Dovecot matches against.
 func RenderDovecotUsersConf(passwdFilePath, scheme string) []byte {
-	switch {
-	case resolvesToHostScheme(scheme):
-		scheme = dovecot.SchemeArgon2id
-	default:
-		scheme = strings.ToUpper(strings.TrimSpace(scheme))
+	passdbArgs := fmt.Sprintf("username_format=%%u %s", passwdFilePath)
+	if !resolvesToHostScheme(scheme) {
+		passdbArgs = fmt.Sprintf("username_format=%%u scheme=%s %s",
+			strings.ToUpper(strings.TrimSpace(scheme)), passwdFilePath)
 	}
+
 	return []byte(fmt.Sprintf(`# Managed by mailx-admin — DO NOT EDIT
 passdb {
   driver = passwd-file
-  # scheme= is the default for hashes with no {SCHEME} prefix, and has to be one
-  # this Dovecot was built with (doveadm pw -l lists them). Every line the panel
-  # writes carries its own {SCHEME}: an imported system mailbox keeps its
-  # {CRYPT} hash and is checked with crypt(), not with this default.
-  args = username_format=%%u scheme=%s %s
+  # args: username_format, plus a scheme only when one this Dovecot was built
+  # with is known. Without it Dovecot uses its own default (%s) for a hash with no
+  # {SCHEME} prefix — every line the panel writes carries its own {SCHEME}
+  # anyway: an imported system mailbox keeps its {CRYPT} hash, which is checked
+  # with crypt() rather than with this default.
+  args = %s
 }
 
 userdb {
@@ -140,5 +146,5 @@ userdb {
 
 auth_mechanisms = plain login
 disable_plaintext_auth = yes
-`, scheme, passwdFilePath, passwdFilePath))
+`, dovecot.DefaultPassdbScheme, passdbArgs, passwdFilePath))
 }

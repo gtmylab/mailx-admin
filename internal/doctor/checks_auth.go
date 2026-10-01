@@ -16,12 +16,13 @@ import (
 // Dovecot verify the hashes the panel writes?
 //
 // There are two ways it cannot, and they look identical from the outside. The
-// passdb's `scheme=` default can name a scheme the build does not know, in
-// which case the passdb does not initialise at all; or one mailbox's hash can
-// carry a {SCHEME} the build does not know, in which case exactly that mailbox
-// is refused — created in the panel or imported years ago, the panel cannot
-// tell the difference. The second is invisible everywhere else in this panel,
-// which is why it is checked here.
+// local Dovecot can have been built without the scheme the panel hashes with —
+// libsodium is what adds ARGON2I/ARGON2ID — and a hash stored in a scheme the
+// build does not know is refused however right the password is. Or the passdb's
+// `scheme=` default can name a scheme the build does not know, which only
+// affects a hash kept without a {SCHEME} prefix. The first is a mailbox created
+// in the panel; the second is a line an operator added by hand. Neither is
+// visible anywhere else in the panel, which is why it is checked here.
 func schemeCheck(ctx context.Context, opts Options) Check {
 	const name = "password scheme"
 	if opts.Config == nil {
@@ -31,10 +32,11 @@ func schemeCheck(ctx context.Context, opts Options) Check {
 	out, err := dovecot.ProbeCached(ctx)
 	if err != nil {
 		return Check{
-			Name:    name,
-			Status:  Warn,
-			Detail:  "this Dovecot could not be asked which password schemes it supports: " + err.Error(),
-			Hint:    "run doctor on the mail server itself; until then the panel keeps using ARGON2ID",
+			Name:   name,
+			Status: Warn,
+			Detail: "this Dovecot could not be asked which password schemes it supports: " + err.Error(),
+			Hint: "the panel hashes with SSHA512, which every build can verify, until the probe answers; " +
+				"run doctor on the mail server itself to check ARGON2ID is really available",
 			Command: "doveadm pw -l",
 		}
 	}
@@ -60,7 +62,11 @@ func schemeCheck(ctx context.Context, opts Options) Check {
 		return Check{Name: name, Status: Warn, Detail: err.Error()}
 	}
 
-	unverifiable := unverifiableHashes(counts, schemes, resolution.Scheme)
+	// What a hash with no {SCHEME} prefix is verified with. It is the passdb's
+	// own `scheme=` when it has one and Dovecot's compiled-in default when it
+	// does not — which is what the renderer writes when the panel could not ask
+	// this host, so reading the file is the only way to know.
+	unverifiable := unverifiableHashes(counts, schemes, passdbDefaultScheme(opts.Config.Mail.DovecotConfDir))
 	mailboxes := 0
 	for _, n := range counts {
 		mailboxes += n
@@ -79,12 +85,20 @@ func schemeCheck(ctx context.Context, opts Options) Check {
 	}
 
 	if resolution.Fallback {
+		// Two different reasons to be here: this build has no libsodium, or
+		// the probe never got to answer. The hint has to match, or the
+		// operator installs a library on a host where nothing asked for it.
+		hint := "install libsodium (apt install libsodium23) and restart Dovecot to get the memory-hard scheme back"
+		if !resolution.Known {
+			hint = "run doctor on the mail server itself: the local Dovecot could not be asked, " +
+				"so the panel is hashing with SSHA512 until it can be"
+		}
 		return Check{
 			Name:   name,
 			Status: Warn,
 			Detail: resolution.Detail + fmt.Sprintf(" (%d mailbox hash(es) in %s, all verifiable)",
 				mailboxes, passwdFile),
-			Hint:    "install libsodium (apt install libsodium23) and restart Dovecot to get the memory-hard scheme back",
+			Hint:    hint,
 			Command: "doveadm pw -l",
 		}
 	}
@@ -95,6 +109,36 @@ func schemeCheck(ctx context.Context, opts Options) Check {
 		Detail: fmt.Sprintf("%s; %d mailbox hash(es) in %s, all verifiable",
 			resolution.Detail, mailboxes, passwdFile),
 	}
+}
+
+// passdbDefaultScheme is the scheme Dovecot verifies a hash with when the hash
+// carries no {SCHEME} prefix: the passwd-file passdb's own `scheme=` argument
+// when it has one, and otherwise Dovecot's compiled-in default for that passdb.
+//
+// Reading the drop-in rather than assuming the panel's resolved scheme matters,
+// because the panel deliberately writes no `scheme=` when it could not ask the
+// local Dovecot which schemes it supports (reconciler.RenderDovecotUsersConf).
+// Such a file leaves Dovecot on its own default, so reporting hashes as
+// unverifiable — or as fine — against a scheme the file never mentions would be a
+// guess in the one check whose whole job is to answer this exactly.
+func passdbDefaultScheme(dovecotConfDir string) string {
+	data, err := os.ReadFile(filepath.Join(dovecotConfDir, "conf.d", "10-auth-mailx.conf"))
+	if err != nil {
+		return dovecot.DefaultPassdbScheme
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		for _, field := range strings.Fields(line) {
+			if v := strings.TrimPrefix(field, "scheme="); v != field && v != "" {
+				return strings.ToUpper(v)
+			}
+		}
+	}
+	return dovecot.DefaultPassdbScheme
 }
 
 // unverifiableHashes lists what in a passwd-file this Dovecot cannot check.
@@ -176,22 +220,49 @@ func roundcubeCheck(ctx context.Context, opts Options) Check {
 
 	have := make(map[string]bool, len(known))
 	for _, login := range known {
-		have[login] = true
+		have[strings.ToLower(login)] = true
 	}
 
-	var missing []string
+	// A row is keyed by the name it was created with. The panel pre-seeds the
+	// address; the installer has always pre-seeded the bare UNIX user name, so
+	// either one counts as "webmail knows this mailbox" — but a row matched only
+	// by local part is called out separately, because it is not the row a
+	// full-address login looks up: Roundcube creates that one itself, without
+	// the identity and preferences the pre-seeded row was meant to carry.
+	var missing, localOnly []string
 	for _, u := range snap.Users {
-		if email := strings.ToLower(u.Email); !have[email] {
-			missing = append(missing, email)
+		email := strings.ToLower(u.Email)
+		if have[email] {
+			continue
 		}
+		if local, _, ok := strings.Cut(email, "@"); ok && local != "" && have[local] {
+			localOnly = append(localOnly, email)
+			continue
+		}
+		missing = append(missing, email)
 	}
 	sort.Strings(missing)
+	sort.Strings(localOnly)
 
 	detail := fmt.Sprintf("%d account(s) in %s on %s; %d of %d mailbox(es) have no account",
 		len(known), rc.Database, rc.MailHost, len(missing), len(snap.Users))
+	if len(localOnly) > 0 {
+		detail += fmt.Sprintf("; %d keyed by the bare user name rather than the address (%s)",
+			len(localOnly), firstFew(localOnly, 5))
+	}
 
 	if len(missing) == 0 {
-		return Check{Name: name, Status: OK, Detail: detail}
+		if len(localOnly) == 0 {
+			return Check{Name: name, Status: OK, Detail: detail}
+		}
+		return Check{
+			Name:   name,
+			Status: Warn,
+			Detail: detail,
+			Hint: "such a row is only matched by a login that omits the domain; " +
+				"a login with the address gets a fresh account without those preferences",
+			Command: "mailx-admin roundcube sync",
+		}
 	}
 	return Check{
 		Name:   name,

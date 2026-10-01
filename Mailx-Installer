@@ -1783,6 +1783,42 @@ register_mailbox_in_panel() {
     return 1
 }
 
+# verify_login — prove that the credentials just handed out actually log in.
+#
+# Why this exists: v1.0.9 shipped a webmail regression that only its users could
+# see, because nothing in the installer or in the panel ever performed a login.
+# `doveadm auth test` runs the same passdb/userdb lookup Dovecot performs for
+# IMAP, so a password hashed with a scheme this Dovecot cannot verify, a mailbox
+# missing from the passwd-file, and a locked account all surface here — in the
+# install log, with the reason — instead of as "login failed" in webmail.
+#
+# It never fails the install: the account is sound once the cause is fixed, and
+# the admin account this runs for must not abort an otherwise good run.
+verify_login() {
+    local address=$1
+    local password=$2
+
+    if ! command -v doveadm >/dev/null 2>&1; then
+        log_warning "doveadm not found, cannot verify the login for $address"
+        return 2
+    fi
+
+    local out
+    if out=$(doveadm auth test "$address" "$password" 2>&1); then
+        echo "$out" | tee -a "$LOG_FILE"
+        log_info "Login verified: $address authenticates against Dovecot"
+        return 0
+    fi
+
+    echo "$out" | tee -a "$LOG_FILE"
+    log_error "LOGIN VERIFICATION FAILED for $address - webmail will refuse this account."
+    log_error "Check, in this order:"
+    log_error "  1. doveadm pw -l                 what this Dovecot can verify"
+    log_error "  2. grep '^$address' /etc/dovecot/users    is the mailbox in the passwd file"
+    log_error "  3. $ADMIN_BINARY_PATH doctor     hash scheme, passwd file, Roundcube"
+    return 1
+}
+
 add_roundcube_user() {
     local username=$1
     local password=$2
@@ -1811,19 +1847,27 @@ add_roundcube_user() {
 
     register_mailbox_in_panel "$email" "$quota_size" || true
 
-    # Roundcube keys its own rows by the address the user logs in with, and the
-    # panel pre-seeds exactly that address, so both write $email and not the
-    # bare UNIX user name. (A bare "test1" row is never matched once
-    # username_domain completes the login to test1@$domain.)
+    # Written under the bare UNIX user name, as in v1.0.8. It is cosmetic for
+    # logging in — Roundcube creates its own row whenever this lookup misses, and
+    # this release sets no username_domain to complete a bare name into an
+    # address — so a login arrives as the full address (test1@$domain, which is
+    # what the passwd-file is keyed by and what verify_login proves) and this row
+    # carries the preferences for it. Whether the row should instead be keyed by
+    # the address, as the panel's own seeder does, is the one thing here left to
+    # the login test rather than a guess.
     ROUNDCUBE_PREFERENCE='a:6:{s:14:"compose_extwin";i:1;s:10:"htmleditor";i:1;s:11:"mdn_default";b:0;s:11:"dsn_default";b:0;s:13:"sig_separator";b:0;s:25:"compose_save_localstorage";i:1;}'
 
-    USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se "INSERT INTO users (username, mail_host, created, last_login, language, preferences) VALUES ('$email', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE'); SELECT LAST_INSERT_ID();" 2>/dev/null || echo "")
+    USER_ID=$(mysql $ROUNDCUBE_DB_NAME -se "INSERT INTO users (username, mail_host, created, last_login, language, preferences) VALUES ('$username', 'localhost', NOW(), NOW(), 'en_GB', '$ROUNDCUBE_PREFERENCE'); SELECT LAST_INSERT_ID();" 2>/dev/null || echo "")
 
     if [ -n "$USER_ID" ]; then
         mysql $ROUNDCUBE_DB_NAME -e "INSERT INTO identities (user_id, changed, del, standard, name, organization, email, \`reply-to\`, signature, html_signature) VALUES ('$USER_ID', NOW(), '0', '1', '$username', 'localhost', '$email', '$email', '', '1');" 2>/dev/null || true
     fi
 
     systemctl restart postfix dovecot 2>/dev/null || true
+
+    # Never hand out credentials without proving they work: this check is what
+    # was missing when the v1.0.9 webmail regression reached users.
+    verify_login "$email" "$password" || true
 
     send_welcome_email "$email" "$username"
 
@@ -1837,7 +1881,12 @@ send_welcome_email() {
     [ -z "$domain" ] && domain="localhost"
 
     local subject="Welcome to Roundcube Webmail, $roundcube_user"
-    local body="Dear User,\n\nCongratulations! Your Roundcube email has been successfully set up.\n\nHere are your login details:\n\nEmail Address: $recipient_email\nUsername: $roundcube_user\n\nYou can access your Roundcube webmail interface anytime\n\nThank you,\nAdmin Team"
+    # The login is the whole address, and a different value from the account name
+    # above: /etc/dovecot/users is keyed by the address, and this release sets no
+    # username_domain to complete a bare name into one, so printing the bare name
+    # as the login sent users to a name Dovecot refuses. It is also the value
+    # verify_login has just tested.
+    local body="Dear User,\n\nCongratulations! Your Roundcube email has been successfully set up.\n\nHere are your login details:\n\nWebmail login: $recipient_email\n\nYou can access your Roundcube webmail interface anytime\n\nThank you,\nAdmin Team"
 
     echo -e "$body" | mail -s "$subject" -a "From: admin@$domain" "$recipient_email" 2>/dev/null || true
 }
@@ -2140,33 +2189,37 @@ EOF
     log_info "Configuring Roundcube database..."
     rc_set_config config/config.inc.php db_dsnw "'mysql://$ROUNDCUBE_DB_USER:$ROUNDCUBE_DB_PASSWORD@localhost/$ROUNDCUBE_DB_NAME'"
 
-    # The IMAP and SMTP host, under both names Roundcube has used for them.
-    # 1.6's sample only carries the new spelling (imap_host / smtp_host) and the
-    # older one did not use it at all, so writing just one of them leaves half
-    # the supported versions pointing somewhere else. Both are set to the same
-    # local daemons, and the ports match what this installer configures:
-    # Dovecot on 143, Postfix's submission service on 587.
-    rc_set_config config/config.inc.php imap_host "'localhost:143'"
-    rc_set_config config/config.inc.php default_host "'localhost:143'"
-    rc_set_config config/config.inc.php smtp_host "'localhost:587'"
+    # v1.0.8's key set and values, written through rc_set_config instead of the
+    # `sed -i "s|\$config['x'] = .*|...|"` it replaced. The sed only ever
+    # matched a line that was already active, so on a stock sample — where most
+    # of these are commented out — some settings were never applied at all. The
+    # values below are v1.0.8's, they just arrive reliably now, including into a
+    # commented-out line.
+    #
+    # default_host is the IMAP server Roundcube logs in to. Dovecot listens on
+    # 143, which is also Roundcube's own default_port, so the port stays off the
+    # host name exactly as v1.0.8 left it.
+    #
+    # imap_host and smtp_host are deliberately NOT set: they are Roundcube 1.6
+    # spellings that take precedence over default_host wherever they appear, and
+    # this installer pins RC_VERSION 1.5.0 above, whose config reads only
+    # default_host. v1.0.9 wrote both spellings and also set username_domain;
+    # those are the only changes in that release that can make a webmail login
+    # fail, and the login bisect (run verify_login after each one) is what
+    # decides whether they come back.
+    rc_set_config config/config.inc.php default_host "'localhost'"
     rc_set_config config/config.inc.php smtp_server "'localhost'"
-    rc_set_config config/config.inc.php smtp_port "587"
+    rc_set_config config/config.inc.php smtp_port "25"
     rc_set_config config/config.inc.php support_url "'mailto:$ROUNDCUBE_ADMIN_EMAIL'"
-
-    # mail_domain is the domain shown in the UI. username_domain is the one that
-    # decides whether a login works: Dovecot's passwd-file is keyed by the whole
-    # address (alice@$EMAIL_DOMAIN), so a user who types just "alice" has to be
-    # completed to it before Roundcube sends the login — nothing else does that,
-    # and without it the bare name is refused even though the mailbox exists.
     rc_set_config config/config.inc.php mail_domain "'$EMAIL_DOMAIN'"
-    rc_set_config config/config.inc.php username_domain "'$EMAIL_DOMAIN'"
 
-    # des_key: Roundcube's sample ships a well-known one ("rcmail-!24ByteDESkey*Str"),
-    # so it is replaced unconditionally — not only when it is empty. It encrypts
-    # the session and any IMAP/SMTP password Roundcube stores, and a shared key
-    # is a shared secret.
-    local DES_KEY=$(openssl rand -base64 24)
-    rc_set_config config/config.inc.php des_key "'$DES_KEY'"
+    # des_key only when it is still the sample's empty value, as in v1.0.8.
+    # Rotating it on every run (v1.0.9) invalidates every live session and every
+    # IMAP password Roundcube has already stored, and gains nothing.
+    if grep -qE "^[[:space:]]*//?[[:space:]]*[$]config\['des_key'\][[:space:]]*=[[:space:]]*'';" config/config.inc.php; then
+        local DES_KEY=$(openssl rand -base64 24)
+        rc_set_config config/config.inc.php des_key "'$DES_KEY'"
+    fi
 
     log_info "Initializing Roundcube database schema..."
     if [ -f "bin/initdb.sh" ]; then
