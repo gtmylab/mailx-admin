@@ -105,7 +105,12 @@ func TestRenderPostfixMainCF(t *testing.T) {
 	for _, want := range []string{
 		"myhostname = mail.example.com",
 		"mydomain = example.com",
+		// The mail domain must not be local, or virtual mailboxes bounce.
+		"mydestination = localhost, localhost.$mydomain",
 		"virtual_mailbox_domains = example.com, example.org",
+		// Overrides the installer's alias-domain table, which would otherwise
+		// classify every domain as alias-only (no mailbox delivery).
+		"virtual_alias_domains =",
 		"virtual_mailbox_base = /var/mail/vhosts",
 		// Ownership is per recipient now, not `static:5000`: a mailbox on a
 		// real Unix account has to be delivered as that account.
@@ -115,6 +120,45 @@ func TestRenderPostfixMainCF(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
 		}
+	}
+
+	// A mail domain in mydestination is the bug that bounced every virtual
+	// mailbox: it made Postfix deliver locally, where no Unix account exists.
+	for _, notWant := range []string{
+		"mydestination = $myhostname",
+		", $mydomain",
+	} {
+		if strings.Contains(out, notWant) {
+			t.Errorf("mydestination still names a mail domain (found %q):\n%s", notWant, out)
+		}
+	}
+}
+
+// TestMergeMainCF — the managed block has to land in the main.cf Postfix reads,
+// replacing any previous block rather than growing the file on every reconcile.
+func TestMergeMainCF(t *testing.T) {
+	managed := RenderPostfixMainCF(fixtureSnapshot(), "mail.example.com")
+
+	// Fresh main.cf (no managed block yet): the block is appended.
+	template := []byte("smtpd_banner = $myhostname ESMTP\n")
+	merged := string(mergeMainCF(template, managed))
+	if !strings.Contains(merged, "smtpd_banner = $myhostname ESMTP") {
+		t.Errorf("merge dropped the template:\n%s", merged)
+	}
+	if !strings.Contains(merged, "# BEGIN mailx-admin managed block") {
+		t.Errorf("merge did not append the managed block:\n%s", merged)
+	}
+
+	// Re-running is idempotent: the old block is replaced, not duplicated.
+	twice := mergeMainCF([]byte(merged), managed)
+	if got := strings.Count(string(twice), "# BEGIN mailx-admin managed block"); got != 1 {
+		t.Errorf("merged main.cf has %d managed blocks, want 1:\n%s", got, twice)
+	}
+	if got := strings.Count(string(twice), "virtual_mailbox_domains ="); got != 1 {
+		t.Errorf("merged main.cf has %d virtual_mailbox_domains lines, want 1:\n%s", got, twice)
+	}
+	if got := strings.Count(string(twice), "smtpd_banner = $myhostname ESMTP"); got != 1 {
+		t.Errorf("merged main.cf has %d smtpd_banner lines, want 1:\n%s", got, twice)
 	}
 }
 

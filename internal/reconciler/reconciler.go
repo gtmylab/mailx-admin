@@ -135,6 +135,12 @@ type managedFile struct {
 	// passwd-file uses it: it is the one managed file read by a process that is
 	// not this one (see dovecotPasswdOwner).
 	owner *Ownership
+
+	// merge, when true, injects content into the file's existing bytes instead
+	// of replacing the file wholesale. Only main.cf uses it: the installer
+	// downloads the rest of that file from a template, so the panel owns just
+	// the delimited managed block at the end (see mergeMainCF).
+	merge bool
 }
 
 // resolvesToHostScheme reports whether a configured value means "ask the local
@@ -269,10 +275,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 
 	files := []managedFile{
 		{
-			path:    filepath.Join(r.cfg.PostfixConfDir, "main.cf.managed"),
+			path:    filepath.Join(r.cfg.PostfixConfDir, "main.cf"),
 			content: RenderPostfixMainCF(snap, r.cfg.Hostname),
 			mode:    0o644,
 			service: "postfix",
+			merge:   true,
 		},
 		{
 			path:    filepath.Join(r.cfg.PostfixConfDir, "virtual"),
@@ -416,7 +423,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 			return res, fmt.Errorf("read %s: %w", f.path, readErr)
 		}
 
-		change, err := WriteFileOwned(f.path, f.content, f.mode, f.owner, r.cfg.DryRun)
+		content := f.content
+		if f.merge {
+			// main.cf is not owned whole: merge the managed block into the
+			// template the installer downloaded, so Postfix actually reads it.
+			content = mergeMainCF(before, f.content)
+		}
+
+		change, err := WriteFileOwned(f.path, content, f.mode, f.owner, r.cfg.DryRun)
 		if errors.Is(err, ErrOwnership) {
 			// The content is in place; only the owner could not be set. Warn
 			// and carry on: see ErrOwnership, and doctor.passwdFileCheck, which
@@ -434,15 +448,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 		}
 
 		// Entries the renderer no longer produces: hand-added mailboxes, aliases
-		// or keys. Report them, and preserve the file they came from.
-		if drift := detectDrift(f.path, before, f.content); drift != nil {
-			if !r.cfg.DryRun {
-				drift.Backup = backupCopy(backupDir, f.path, before)
+		// or keys. Report them, and preserve the file they came from. main.cf is
+		// a merged template, not a rendered list, so drift does not apply to it.
+		if !f.merge {
+			if drift := detectDrift(f.path, before, content); drift != nil {
+				if !r.cfg.DryRun {
+					drift.Backup = backupCopy(backupDir, f.path, before)
+				}
+				res.Drift = append(res.Drift, *drift)
+				res.Warnings = append(res.Warnings, driftWarning(*drift))
+			} else if !r.cfg.DryRun && change.Action == "update" {
+				// Ordinary update: still keep the previous version around.
+				_ = backupCopy(backupDir, f.path, before)
 			}
-			res.Drift = append(res.Drift, *drift)
-			res.Warnings = append(res.Warnings, driftWarning(*drift))
 		} else if !r.cfg.DryRun && change.Action == "update" {
-			// Ordinary update: still keep the previous version around.
 			_ = backupCopy(backupDir, f.path, before)
 		}
 

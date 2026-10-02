@@ -20,12 +20,12 @@ import (
 func RenderPostfixMainCF(snap *models.Snapshot, hostname string) []byte {
 	var b bytes.Buffer
 
+	b.WriteString("# BEGIN mailx-admin managed block\n")
 	b.WriteString("# ============================================================================\n")
 	b.WriteString("# Managed by mailx-admin — DO NOT EDIT THIS BLOCK BY HAND\n")
 	b.WriteString("# Any changes here will be overwritten on the next reconcile.\n")
 	b.WriteString("# To add unmanaged settings, put them ABOVE this block.\n")
-	b.WriteString("# ============================================================================\n")
-	b.WriteString("# BEGIN mailx-admin managed block\n\n")
+	b.WriteString("# ============================================================================\n\n")
 
 	primary := snap.PrimaryDomain()
 	if primary == nil {
@@ -34,7 +34,11 @@ func RenderPostfixMainCF(snap *models.Snapshot, hostname string) []byte {
 		fmt.Fprintf(&b, "myhostname = %s\n", hostname)
 		fmt.Fprintf(&b, "mydomain = %s\n", primary.Name)
 		fmt.Fprintf(&b, "myorigin = $mydomain\n")
-		fmt.Fprintf(&b, "mydestination = $myhostname, localhost.$mydomain, localhost, $mydomain\n")
+		// mydestination must not name any mail domain: Postfix would classify it
+		// as local and refuse delivery to every virtual mailbox in it (a virtual
+		// mailbox has no Unix account, so local(8) bounces it as "unknown user").
+		// Keep only localhost; the mail domains belong to virtual_mailbox_domains.
+		fmt.Fprintf(&b, "mydestination = localhost, localhost.$mydomain\n")
 	}
 
 	// Virtual domains — one per line, "domain  OK"
@@ -44,6 +48,12 @@ func RenderPostfixMainCF(snap *models.Snapshot, hostname string) []byte {
 	}
 	sort.Strings(domains)
 	fmt.Fprintf(&b, "\nvirtual_mailbox_domains = %s\n", strings.Join(domains, ", "))
+
+	// The installer's main.cf leaves virtual_alias_domains pointing at
+	// /etc/postfix/virtual_domains, which would classify every domain as an
+	// alias domain (no mailbox delivery). Override it to empty: aliases live in
+	// virtual_alias_maps and are checked within virtual_mailbox_domains.
+	b.WriteString("virtual_alias_domains =\n")
 
 	b.WriteString("\n# Virtual maps\n")
 	b.WriteString("virtual_alias_maps = hash:/etc/postfix/virtual\n")
@@ -72,6 +82,37 @@ func RenderPostfixMainCF(snap *models.Snapshot, hostname string) []byte {
 
 	b.WriteString("\n# END mailx-admin managed block\n")
 	return b.Bytes()
+}
+
+// mergeMainCF injects the freshly-rendered managed block into an existing
+// main.cf. The installer downloads the rest of main.cf from a template, and the
+// panel owns only the delimited block at the end; Postfix reads main.cf itself,
+// so the block has to be merged into it rather than written to a sidecar file
+// nothing includes. A previous managed block is replaced, so the file stays
+// idempotent across reconciles.
+func mergeMainCF(existing, managed []byte) []byte {
+	const beginMarker = "# BEGIN mailx-admin managed block"
+	const endMarker = "# END mailx-admin managed block"
+
+	begin := []byte(beginMarker)
+	end := []byte(endMarker)
+
+	if i := bytes.Index(existing, begin); i >= 0 {
+		if j := bytes.Index(existing[i:], end); j >= 0 {
+			jEnd := i + j + len(end)
+			if jEnd < len(existing) && existing[jEnd] == '\n' {
+				jEnd++
+			}
+			existing = append(existing[:i:i], existing[jEnd:]...)
+		}
+	}
+
+	existing = bytes.TrimRight(existing, "\n")
+	out := make([]byte, 0, len(existing)+len(managed)+2)
+	out = append(out, existing...)
+	out = append(out, '\n', '\n')
+	out = append(out, managed...)
+	return out
 }
 
 // RenderVirtualMap produces /etc/postfix/virtual — alias lookups.
