@@ -8,7 +8,19 @@ import (
 	"mime/multipart"
 	"net/textproto"
 	"strings"
+	"time"
 )
+
+// sendWelcomeEmailAfterSync sends the welcome mail once the queued config sync
+// has rendered the new mailbox, so Postfix does not bounce it as "unknown user"
+// before the vmailbox entry exists. It runs off the request path and is
+// best-effort.
+func (s *Server) sendWelcomeEmailAfterSync(email string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	_ = s.syncer.Wait(ctx)
+	s.sendWelcomeEmail(ctx, email)
+}
 
 // sendWelcomeEmail sends a welcome message to a newly-created mailbox. It is the
 // panel's counterpart to the installer's welcome mail, and is best-effort: a mail
@@ -19,7 +31,9 @@ func (s *Server) sendWelcomeEmail(ctx context.Context, email string) {
 	webmailURL := "https://" + s.cfg.Server.Hostname + ":8080"
 
 	msg := buildWelcomeEmail(email, username, webmailURL, fromDomain)
-	if err := smtpSendLocal(ctx, "MailX Email System <admin@"+fromDomain+">", email, msg); err != nil {
+	// The envelope sender must be a bare address; the display name lives only in
+	// the From: header built by buildWelcomeEmail.
+	if err := smtpSendLocal(ctx, "admin@"+fromDomain, email, msg); err != nil {
 		s.logger.Warn("welcome email failed", "email", email, "err", err)
 	}
 }

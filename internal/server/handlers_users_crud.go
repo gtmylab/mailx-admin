@@ -60,9 +60,14 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Best-effort welcome mail: the account is already created, so a failed
-	// send must not fail the request.
-	s.sendWelcomeEmail(r.Context(), email)
+	// Warnings (for example a Roundcube seed that failed) go to the journal as
+	// well as the toast, so they are diagnosable from the server side.
+	for _, warning := range res.Warnings {
+		s.logger.Warn("user create warning", "email", email, "warning", warning)
+	}
+
+	// Best-effort welcome mail, sent after the queued sync renders the mailbox.
+	go s.sendWelcomeEmailAfterSync(email)
 
 	// Success: redirect the whole page and show a toast. Any warnings (for
 	// example a Roundcube seed that failed) ride along so the operator sees
