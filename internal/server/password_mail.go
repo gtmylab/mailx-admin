@@ -38,13 +38,7 @@ func (s *Server) sendPasswordEmail(ctx context.Context, userID int64, password, 
 	}
 
 	// Get primary domain for From address
-	var fromDomain string
-	_ = s.db.QueryRowContext(ctx,
-		`SELECT name FROM domains WHERE is_primary = 1 LIMIT 1`,
-	).Scan(&fromDomain)
-	if fromDomain == "" {
-		fromDomain = "localhost"
-	}
+	fromDomain := s.primaryDomain(ctx)
 
 	subject := "Your email password for " + user.Email
 	body := buildPasswordEmail(user.Email, password, fromDomain)

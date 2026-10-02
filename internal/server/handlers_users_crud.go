@@ -1,12 +1,14 @@
 package server
 
 import (
-	"github.com/gtmylab/mailx-admin/internal/auth"
-	"github.com/gtmylab/mailx-admin/internal/models"
-	"github.com/gtmylab/mailx-admin/internal/mutations"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
+
+	"github.com/gtmylab/mailx-admin/internal/auth"
+	"github.com/gtmylab/mailx-admin/internal/models"
+	"github.com/gtmylab/mailx-admin/internal/mutations"
 )
 
 // ---- New user form (rendered into a modal) ----
@@ -52,16 +54,26 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 		RemoteIP: clientIP(r),
 	}
 
-	_, email, err := s.mutations.CreateUser(r.Context(), actor, input)
+	res, email, err := s.mutations.CreateUser(r.Context(), actor, input)
 	if err != nil {
 		s.renderFormError(w, err.Error())
 		return
 	}
 
-	// Success: redirect the whole page and show a toast.
+	// Best-effort welcome mail: the account is already created, so a failed
+	// send must not fail the request.
+	s.sendWelcomeEmail(r.Context(), email)
+
+	// Success: redirect the whole page and show a toast. Any warnings (for
+	// example a Roundcube seed that failed) ride along so the operator sees
+	// them instead of finding out later from the mailbox owner.
 	// HTMX handles HX-Redirect by doing a full navigation, so the toast
 	// needs to survive. We use a flash message via query param.
-	w.Header().Set("HX-Redirect", "/users?flash="+encodeFlash("User "+email+" created"))
+	msg := "User " + email + " created"
+	if len(res.Warnings) > 0 {
+		msg += " — " + strings.Join(res.Warnings, "; ")
+	}
+	w.Header().Set("HX-Redirect", "/users?flash="+encodeFlash(msg))
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -187,12 +199,16 @@ func (s *Server) handleUserResetPassword(w http.ResponseWriter, r *http.Request)
 		RemoteIP: clientIP(r),
 	}
 
-	if _, err := s.mutations.ResetUserPassword(r.Context(), actor, mutations.ResetPasswordInput{
+	res, err := s.mutations.ResetUserPassword(r.Context(), actor, mutations.ResetPasswordInput{
 		UserID:   id,
 		Password: newPassword,
-	}); err != nil {
+	})
+	if err != nil {
 		s.renderFormError(w, err.Error())
 		return
+	}
+	for _, warning := range res.Warnings {
+		s.logger.Warn("password reset warning", "user_id", id, "warning", warning)
 	}
 
 	// Optional: email the new password to an alternate address
