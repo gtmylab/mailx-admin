@@ -41,6 +41,54 @@ func installerFunction(t *testing.T, src, name string) string {
 	return rest[:end]
 }
 
+// TestInstallerHandsOverThePasswordInsteadOfTheShadowHash — the fix for a mailbox
+// that cannot log in with the right password.
+//
+// The installer used to let the panel adopt the account's {CRYPT} hash from
+// /etc/shadow, and whether the host's crypt() can check such a hash depends on
+// what produced it: yescrypt ($y$), which current distributions write by default,
+// is refused with an internal failure rather than as a wrong password. Given the
+// plaintext, the panel writes a hash it has asked the local Dovecot about —
+// {ARGON2ID}, or {SSHA512} where libsodium is missing — and `mailbox add`
+// reconciles inline, so the login is proven before the command answers.
+func TestInstallerHandsOverThePasswordInsteadOfTheShadowHash(t *testing.T) {
+	body := installerFunction(t, installerSource(t), "register_mailbox_in_panel")
+
+	if !strings.Contains(body, `local password=${3:-}`) {
+		t.Error("register_mailbox_in_panel no longer takes the password as its third argument")
+	}
+	if !strings.Contains(body, "--password-stdin") {
+		t.Error("register_mailbox_in_panel registers an account without handing the password over")
+	}
+	if !strings.Contains(body, `printf '%s\n' "$password" |`) {
+		t.Error("the password is not piped into the panel: --password-stdin reads standard input, " +
+			"so the flag on its own would hang the installer")
+	}
+	// The panel refuses a plaintext password shorter than 8 characters, and
+	// adopting the hash is the older path: a short one has to fall back to it
+	// rather than fail to register the account at all.
+	if !strings.Contains(body, `[ ${#password} -lt 8 ]`) {
+		t.Error("register_mailbox_in_panel has no fallback for a password the panel would refuse")
+	}
+}
+
+// TestInstallerPassesThePasswordToEveryCallSite — a caller that forgets the third
+// argument silently gets the {CRYPT} path back, which is exactly the bug: the
+// mailbox is registered, the install says it succeeded, and webmail refuses it.
+func TestInstallerPassesThePasswordToEveryCallSite(t *testing.T) {
+	body := installerFunction(t, installerSource(t), "add_roundcube_user")
+
+	all := strings.Count(body, "register_mailbox_in_panel ")
+	withPassword := strings.Count(body, `register_mailbox_in_panel "$email" "$quota_size" "$password"`)
+	if all == 0 {
+		t.Fatal("add_roundcube_user never registers the mailbox in the panel")
+	}
+	if all != withPassword {
+		t.Errorf("%d of %d register_mailbox_in_panel calls hand the password over:\n%s",
+			withPassword, all, body)
+	}
+}
+
 // installerRoundcubeConfigKeys is the exact set of Roundcube `$config` keys the
 // installer writes, in the order it writes them.
 //

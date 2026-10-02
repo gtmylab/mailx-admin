@@ -1751,26 +1751,65 @@ manage_ssl_certificates() {
 # next sync deletes the line this script used to append to /etc/postfix/virtual.
 #
 # So the account is registered through the panel's own write path
-# (`mailbox add --kind system`), which reads the uid/gid/home from /etc/passwd
-# and the password from /etc/shadow: the Unix login keeps working exactly as it
-# did, and the panel stops ignoring it.
+# (`mailbox add --kind system`), which reads the uid/gid/home from /etc/passwd,
+# so the Unix login keeps working exactly as it did and the panel stops ignoring
+# the account.
+#
+# The password is handed over too (--password-stdin) rather than letting the
+# panel adopt the /etc/shadow hash. That is the whole point of the argument: a
+# {CRYPT} shadow hash is one the host's crypt() only sometimes checks — a
+# yescrypt ($y$) hash, which current distributions write by default, is refused
+# with an internal failure rather than a wrong password, and the mailbox then
+# cannot log in however right the password is. Given the plaintext, the panel
+# writes a hash it has asked the local Dovecot about and, because `mailbox add`
+# reconciles inline, proves the login before it answers.
 # ----------------------------------------------------------------------------
 register_mailbox_in_panel() {
     local email=$1
     local quota_size=${2:-1024}
+    local password=${3:-}
 
     if [ ! -x "$ADMIN_BINARY_PATH" ] || [ ! -f "$ADMIN_CONFIG_FILE" ]; then
         # Fresh install: the panel is staged after this point. The account and
         # its maildir are ready, and the install's seed step imports every
-        # /home/<user>/Maildir mailbox it finds, so nothing is lost.
-        log_info "Panel not installed yet — $email will be imported when the panel is seeded"
+        # /home/<user>/Maildir mailbox it finds, so nothing is lost — but that
+        # import has no plaintext and keeps the account's /etc/shadow hash, so
+        # say what to do if webmail refuses it later.
+        log_info "Panel not installed yet — $email will be imported (with its /etc/shadow hash) when the panel is seeded"
+        log_info "If webmail refuses $email after the install, set its password again in the panel (Users)"
         return 0
     fi
 
-    local out
-    if out=$("$ADMIN_BINARY_PATH" mailbox add "$email" \
-                --kind system --quota "$quota_size" \
-                --config "$ADMIN_CONFIG_FILE" 2>&1); then
+    # The panel refuses a plaintext password shorter than 8 characters (its rule
+    # for every mailbox it creates). Adopting the shadow hash is the older,
+    # weaker path; take it rather than refusing to register the account at all.
+    if [ ${#password} -lt 8 ]; then
+        if [ -n "$password" ]; then
+            log_warning "Password for $email is shorter than the panel's 8-character minimum"
+            log_warning "Registering it with its /etc/shadow hash instead; re-set the password in the panel to be sure of the login"
+        fi
+        password=""
+    fi
+
+    # Every call is an `if` condition, never a bare assignment: hide_output
+    # leaves `set -e` on, and a panel command that fails must reach the warning
+    # below rather than abort the install.
+    local out registered=0
+    if [ -n "$password" ]; then
+        if out=$(printf '%s\n' "$password" | "$ADMIN_BINARY_PATH" mailbox add "$email" \
+                    --kind system --quota "$quota_size" --password-stdin \
+                    --config "$ADMIN_CONFIG_FILE" 2>&1); then
+            registered=1
+        fi
+    else
+        if out=$("$ADMIN_BINARY_PATH" mailbox add "$email" \
+                    --kind system --quota "$quota_size" \
+                    --config "$ADMIN_CONFIG_FILE" 2>&1); then
+            registered=1
+        fi
+    fi
+
+    if [ "$registered" -eq 1 ]; then
         echo "$out" | tee -a "$LOG_FILE"
         log_info "Mailbox $email registered in the panel"
         return 0
@@ -1779,7 +1818,8 @@ register_mailbox_in_panel() {
     echo "$out" | tee -a "$LOG_FILE"
     log_warning "Could not register $email in the panel."
     log_warning "The Unix account and its maildir are fine. Finish with:"
-    log_warning "    mailx-admin mailbox add $email --kind system --config $ADMIN_CONFIG_FILE"
+    log_warning "    mailx-admin mailbox add $email --kind system --password-stdin --config $ADMIN_CONFIG_FILE"
+    log_warning "    (pipe the account's password in on standard input)"
     return 1
 }
 
@@ -1832,7 +1872,7 @@ add_roundcube_user() {
         log_info "User $username already exists, skipping creation..."
         # The account may predate the panel (or this release). Make sure the
         # panel knows about it instead of returning silently.
-        register_mailbox_in_panel "$email" "$quota_size" || true
+        register_mailbox_in_panel "$email" "$quota_size" "$password" || true
         return 0
     fi
 
@@ -1845,7 +1885,7 @@ add_roundcube_user() {
     echo "quota_rule = *:storage=${quota_size}M" > "/home/$username/.dovecot.quota"
     chown "$username:$username" "/home/$username/.dovecot.quota"
 
-    register_mailbox_in_panel "$email" "$quota_size" || true
+    register_mailbox_in_panel "$email" "$quota_size" "$password" || true
 
     # Written under the bare UNIX user name, as in v1.0.8. It is cosmetic for
     # logging in — Roundcube creates its own row whenever this lookup misses, and

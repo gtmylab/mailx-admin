@@ -26,7 +26,15 @@
 # and a host is never stuck re-running a stale copy.
 #
 # Re-publishing an existing tag is safe - the publish step clobbers its assets:
-#   Actions > Release > Run workflow, tag: v1.0.9
+#   Actions > Release > Run workflow, tag: v1.0.10-devbeta-2
+#
+# A test build is tagged and published like any other release (v1.0.10-devbeta,
+# v1.0.10-devbeta-2), and `gh release create` below makes a *normal* release,
+# never a prerelease - deliberately. The installer fetches
+# releases/latest/download/mailx-admin-linux-amd64, GitHub keeps prereleases out
+# of "latest", so marking a test build as a prerelease would leave a fresh
+# server installing the previous one while the new tag sits there looking
+# published. To keep a build away from new installs, do not push its tag.
 
 name: Release
 

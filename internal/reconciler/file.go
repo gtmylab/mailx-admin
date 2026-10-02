@@ -3,6 +3,7 @@ package reconciler
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,9 +28,40 @@ func hash(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// WriteFile writes `content` to `path` atomically. Returns a FileChange.
+// Ownership is the uid/gid a managed file has to be given.
+//
+// It exists for one file: Dovecot's passwd-file, which is read by a process that
+// is not the one that writes it — the auth process, which has dropped to the
+// unprivileged `dovecot` user (see dovecotPasswdOwner in owner.go).
+type Ownership struct {
+	UID int
+	GID int
+}
+
+// ErrOwnership reports that a file was written with the right content but could
+// not be given the requested owner.
+//
+// It is deliberately not a plain error, and callers must keep going: the content
+// is on disk, the daemons read that content, and a panel that is not running as
+// root can do nothing about the ownership however loudly it fails. Refusing the
+// sync would only replace a permissions problem with a server whose
+// configuration never lands.
+var ErrOwnership = errors.New("file ownership was not applied")
+
+// WriteFile writes `content` to `path` atomically, leaving ownership alone.
+// Returns a FileChange.
 // If `dryRun`, does not touch the filesystem.
 func WriteFile(path string, content []byte, mode os.FileMode, dryRun bool) (FileChange, error) {
+	return WriteFileOwned(path, content, mode, nil, dryRun)
+}
+
+// WriteFileOwned is WriteFile with an owner to apply.
+//
+// The order matters: the temporary file is chowned and *then* renamed, so the
+// file at `path` never exists for an instant with the right bytes and an owner
+// that cannot read them — the state that refuses a login. A chown that fails is
+// reported as ErrOwnership, after the content is in place.
+func WriteFileOwned(path string, content []byte, mode os.FileMode, owner *Ownership, dryRun bool) (FileChange, error) {
 	before, err := os.ReadFile(path)
 	var beforeExists bool
 	if err == nil {
@@ -109,6 +141,16 @@ func WriteFile(path string, content []byte, mode os.FileMode, dryRun bool) (File
 	if err := os.Chmod(tmpName, mode); err != nil {
 		return change, fmt.Errorf("chmod: %w", err)
 	}
+
+	// Ownership before the rename: see WriteFileOwned.
+	var ownErr error
+	if owner != nil {
+		if err := os.Chown(tmpName, owner.UID, owner.GID); err != nil {
+			ownErr = fmt.Errorf("%w: chown %s to %d:%d: %v",
+				ErrOwnership, path, owner.UID, owner.GID, err)
+		}
+	}
+
 	if err := os.Rename(tmpName, path); err != nil {
 		return change, fmt.Errorf("rename: %w", err)
 	}
@@ -119,7 +161,7 @@ func WriteFile(path string, content []byte, mode os.FileMode, dryRun bool) (File
 		_ = d.Close()
 	}
 
-	return change, nil
+	return change, ownErr
 }
 
 // BackupFile copies a file to `<path>.bak-<timestamp>`.

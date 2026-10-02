@@ -1,8 +1,10 @@
 package reconciler
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -119,5 +121,101 @@ func TestWriteFile_DryRunDoesNotTouchDisk(t *testing.T) {
 	}
 	if info2, _ := os.Stat(path); !info1.ModTime().Equal(info2.ModTime()) {
 		t.Error("dry run changed the file's mtime")
+	}
+}
+
+// TestWriteFileOwnedAppliesOwnership — the Dovecot passwd-file has to end up
+// owned by a group the auth process belongs to, and the ownership is applied to
+// the *temp* file before the rename: a file that appears at its final path with
+// the right bytes and an owner that cannot read them is a passdb that does not
+// load, which is the login failure this exists to prevent.
+//
+// Chowning to ourselves is the one ownership change an unprivileged test can
+// make, and it is enough: a chown that never happened, or one applied to the
+// wrong path, comes back as ErrOwnership here.
+func TestWriteFileOwnedAppliesOwnership(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no chown, so there is nothing to assert")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "users")
+
+	change, err := WriteFileOwned(path, []byte("alice@example.com:{SSHA512}x\n"), 0o640,
+		&Ownership{UID: os.Getuid(), GID: os.Getgid()}, false)
+	if err != nil {
+		t.Fatalf("WriteFileOwned with our own uid/gid: %v", err)
+	}
+	if change.Action != "create" {
+		t.Errorf("action = %q, want create", change.Action)
+	}
+
+	// The ownership step must not undo the mode the caller asked for: 0640 is
+	// what keeps the hashes away from everybody except root and the auth process.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat the written file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o640 {
+		t.Errorf("mode = %04o, want 0640", got)
+	}
+}
+
+// TestWriteFileOwnedReportsAFailedChown — a chown the panel is not allowed to
+// make must not take the configuration down with it. The content is written, the
+// daemons read it, and the caller is told with ErrOwnership, which the reconciler
+// turns into a warning; refusing the whole sync would leave a server whose
+// configuration never lands, over a permission the panel cannot grant itself.
+func TestWriteFileOwnedReportsAFailedChown(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no chown")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root may chown to anything, so this cannot fail here")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "users")
+
+	// uid/gid 1 is daemon's on every Unix, and is not ours.
+	change, err := WriteFileOwned(path, []byte("hello"), 0o600, &Ownership{UID: 1, GID: 1}, false)
+	if !errors.Is(err, ErrOwnership) {
+		t.Fatalf("err = %v, want ErrOwnership", err)
+	}
+	if change.Action != "create" {
+		t.Errorf("action = %q, want create: the content is written either way", change.Action)
+	}
+	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != "hello" {
+		t.Errorf("content = %q (read error %v), want the bytes on disk despite the chown", got, readErr)
+	}
+}
+
+// TestWriteFileLeavesOwnershipAlone — the other five managed files have no owner,
+// and the wrapper the rest of the reconcile calls must not chown anything: it
+// runs unprivileged on a build machine, where a chown would be an error rather
+// than a no-op.
+func TestWriteFileLeavesOwnershipAlone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+
+	change, err := WriteFile(path, []byte("hello"), 0o640, false)
+	if err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if change.Action != "create" {
+		t.Errorf("action = %q, want create", change.Action)
+	}
+
+	// Windows reports 0666 for every file whatever mode it was created with, so
+	// the mode is only worth asserting where there is one.
+	if runtime.GOOS == "windows" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Errorf("mode = %04o, want 0640", info.Mode().Perm())
 	}
 }

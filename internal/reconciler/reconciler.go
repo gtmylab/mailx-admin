@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -129,6 +130,11 @@ type managedFile struct {
 	content []byte
 	mode    os.FileMode
 	service string // which service to reload if this changes ("" = no reload)
+
+	// owner, when set, is the uid/gid the file has to be given. Only Dovecot's
+	// passwd-file uses it: it is the one managed file read by a process that is
+	// not this one (see dovecotPasswdOwner).
+	owner *Ownership
 }
 
 // resolvesToHostScheme reports whether a configured value means "ask the local
@@ -315,9 +321,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 			service: "postfix",
 		},
 		{
+			// 0640 root:dovecot, not 0600 root:root as this used to be written.
+			// Dovecot's auth process drops to the unprivileged `dovecot` user
+			// (default_internal_user) and is the process that opens this file:
+			// 0600 root:root is a passdb it cannot read, and the failure surfaces
+			// as a refused login rather than as a permissions error. 0640 keeps
+			// the hashes away from everybody except root and the auth process.
 			path:    filepath.Join(r.cfg.DovecotConfDir, "users"),
 			content: RenderDovecotPasswd(snap),
-			mode:    0o600,
+			mode:    0o640,
+			owner:   dovecotPasswdOwner(),
 			service: "dovecot",
 		},
 		{
@@ -403,7 +416,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 			return res, fmt.Errorf("read %s: %w", f.path, readErr)
 		}
 
-		change, err := WriteFile(f.path, f.content, f.mode, r.cfg.DryRun)
+		change, err := WriteFileOwned(f.path, f.content, f.mode, f.owner, r.cfg.DryRun)
+		if errors.Is(err, ErrOwnership) {
+			// The content is in place; only the owner could not be set. Warn
+			// and carry on: see ErrOwnership, and doctor.passwdFileCheck, which
+			// reports the resulting file.
+			res.Warnings = append(res.Warnings, err.Error())
+			err = nil
+		}
 		if err != nil {
 			return res, fmt.Errorf("write %s: %w", f.path, err)
 		}

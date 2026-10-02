@@ -40,8 +40,17 @@ type CreateUserInput struct {
 	// It is how a system mailbox keeps the password its Unix account already
 	// has: the scanner reads the crypt(3) hash from /etc/shadow as
 	// "{CRYPT}..." and that scheme is the only one the account's own tools
-	// understand. Re-hashing with argon2 would silently change the user's
-	// Unix password into something `passwd` and login cannot read.
+	// understand. Re-hashing the *Unix* password with argon2 would change what
+	// `passwd` and login read, which is why this field exists at all.
+	//
+	// It is no longer how the installer registers the accounts it creates: the
+	// installer knows the plaintext and hands it over with --password-stdin, so
+	// the mailbox gets a hash the local Dovecot was asked about — and, on the
+	// CLI path where the reconcile is inline, a login that was proven (see
+	// ensureLoginUsable). What is left here is the adopted account: whether this
+	// host's crypt() can check a given shadow hash depends on what hashed the
+	// Unix password (yescrypt, $y$, is the one that gets refused), which is why
+	// doctor reports every {CRYPT} row as unproven rather than as fine.
 	PasswordHash string
 }
 
@@ -71,6 +80,13 @@ func (s *Service) CreateUser(ctx context.Context, actor Actor, in CreateUserInpu
 	if err != nil {
 		return nil, "", err
 	}
+
+	// Prove the login before answering. This is the last moment the plaintext
+	// is known and the config is already on disk, and the one place a hash this
+	// Dovecot refuses can still be turned into one it accepts (see
+	// ensureLoginUsable). It runs before the Roundcube seed so the warnings the
+	// operator sees describe the credentials that will actually work.
+	s.ensureLoginUsable(ctx, actor, res, email, in.Password, hash)
 
 	// Roundcube only after the commit, and never fatal: see seedRoundcube.
 	s.seedRoundcube(ctx, actor, email, res)
@@ -303,11 +319,16 @@ func (s *Service) ResetUserPassword(ctx context.Context, actor Actor, in ResetPa
 		return nil, err
 	}
 
+	// The name a login arrives as, filled in by the transaction below: it is
+	// what the probe has to prove (see ensureLoginUsable).
+	var email string
+
 	res, err := s.Apply(ctx, actor, "user.reset_password", map[string]any{
 		"user_id": in.UserID,
 	}, func(tx *sql.Tx) error {
-		var exists int
-		err := tx.QueryRowContext(ctx, `SELECT 1 FROM users WHERE id = ?`, in.UserID).Scan(&exists)
+		// The address is what the login probe needs: a passwd-file is keyed by
+		// the full address, so the row's own email is the name to prove.
+		err := tx.QueryRowContext(ctx, `SELECT email FROM users WHERE id = ?`, in.UserID).Scan(&email)
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("%w: user not found", ErrNotFound)
 		}
@@ -320,7 +341,17 @@ func (s *Service) ResetUserPassword(ctx context.Context, actor Actor, in ResetPa
 		)
 		return err
 	})
-	return res, err
+	if err != nil {
+		return nil, err
+	}
+
+	// Same proof as a new mailbox: a password that was just set is the only one
+	// whose plaintext anyone can check, and a hash this Dovecot refuses is a
+	// password reset that reset nothing (see ensureLoginUsable). The panel's own
+	// path queues its sync, so there it is a no-op and doctor reports the row.
+	s.ensureLoginUsable(ctx, actor, res, email, in.Password, hash)
+
+	return res, nil
 }
 
 func boolInt(b bool) int {

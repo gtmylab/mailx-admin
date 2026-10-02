@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gtmylab/mailx-admin/internal/config"
 	"github.com/gtmylab/mailx-admin/internal/dovecot"
 )
 
@@ -164,5 +165,111 @@ func TestFirstFew(t *testing.T) {
 	got := firstFew(items, 2)
 	if !strings.Contains(got, "(+2 more)") || strings.Count(got, "@x.test") != 2 {
 		t.Errorf("firstFew(4 items, 2) = %q, want two addresses and a count of the rest", got)
+	}
+}
+
+// TestUnprovenHashes — the second half of the scheme check, and the one that
+// judging by scheme name cannot do: `doveadm pw -l` lists CRYPT on every build,
+// so a {CRYPT} row looks verifiable while the hash inside it may be one this
+// host's crypt() refuses. That is the login failure this release is about — a
+// correct password and "code=temp_fail" — and the panel can only answer it
+// honestly by saying it never proved that line.
+func TestUnprovenHashes(t *testing.T) {
+	cases := []struct {
+		name   string
+		counts map[string]int
+		want   []string
+	}{
+		{
+			name:   "a passwd-file the panel wrote",
+			counts: map[string]int{"ARGON2ID": 3, "SSHA512": 1},
+		},
+		{
+			name:   "one adopted system mailbox",
+			counts: map[string]int{"ARGON2ID": 3, "CRYPT": 1},
+			want:   []string{"1 {CRYPT} hash(es)"},
+		},
+		{
+			name:   "several, reported in a stable order",
+			counts: map[string]int{"CRYPT": 2},
+			want:   []string{"2 {CRYPT} hash(es)"},
+		},
+		{
+			name:   "an unprefixed hash is not a {CRYPT} row",
+			counts: map[string]int{"(default)": 2},
+		},
+		{
+			name:   "an empty passwd-file",
+			counts: map[string]int{},
+		},
+	}
+
+	for _, tc := range cases {
+		got := unprovenHashes(tc.counts)
+		joined := strings.Join(got, ", ")
+		for _, want := range tc.want {
+			if !strings.Contains(joined, want) {
+				t.Errorf("%s: %q not reported in %v", tc.name, want, got)
+			}
+		}
+		if len(tc.want) == 0 && len(got) != 0 {
+			t.Errorf("%s: reported %v, want nothing", tc.name, got)
+		}
+	}
+}
+
+// TestPasswdFileAccess — 0640 root:dovecot is the pairing the reconciler writes
+// (see reconciler.dovecotPasswdOwner). The two ways to get it wrong are a file
+// only root can read, which the auth process cannot open at all, and one every
+// user on the server can read, which hands out a password hash per mailbox.
+func TestPasswdFileAccess(t *testing.T) {
+	cases := []struct {
+		name   string
+		mode   os.FileMode
+		status Status
+	}{
+		{name: "0640 root:dovecot", mode: 0o640, status: OK},
+		{name: "0440, group-readable without the write bit", mode: 0o440, status: OK},
+		{name: "0600 root:root, which is what this used to be", mode: 0o600, status: Warn},
+		{name: "0644, which shows every hash to every user", mode: 0o644, status: Warn},
+		{name: "0666, which is what a Windows checkout reports", mode: 0o666, status: Warn},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := passwdFileAccess("/etc/dovecot/users", tc.mode)
+
+			if got.Name != "dovecot passwd file" {
+				t.Errorf("name = %q, want it named", got.Name)
+			}
+			if got.Status != tc.status {
+				t.Errorf("status = %q (%s), want %q", got.Status, got.Detail, tc.status)
+			}
+			if tc.status == Warn && got.Hint == "" {
+				t.Error("a warning with no hint is one the operator cannot act on")
+			}
+			if tc.status == OK && got.Command != "" {
+				t.Errorf("command = %q on a healthy file, want none", got.Command)
+			}
+		})
+	}
+}
+
+// TestPasswdFileCheckWithNothingToCheck — a panel with no mailboxes yet has no
+// passwd-file, and that is not something to report as a problem: the sync writes
+// it as soon as there is a mailbox to render.
+func TestPasswdFileCheckWithNothingToCheck(t *testing.T) {
+	opts := Options{Config: &config.Config{
+		Mail: config.MailConfig{DovecotConfDir: t.TempDir()},
+	}}
+
+	if got := passwdFileCheck(opts); got.Name != "dovecot passwd file" || got.Status != Info {
+		t.Errorf("passwdFileCheck with no file = %+v, want an info check", got)
+	}
+
+	// With no config at all there is no path to look at, and a guess would be
+	// worse than saying nothing.
+	if got := passwdFileCheck(Options{}); got.Name != "" {
+		t.Errorf("passwdFileCheck with no config = %+v, want no check", got)
 	}
 }

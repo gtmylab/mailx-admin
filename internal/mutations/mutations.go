@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/gtmylab/mailx-admin/internal/audit"
+	"github.com/gtmylab/mailx-admin/internal/dovecot"
 	"github.com/gtmylab/mailx-admin/internal/models"
 	"github.com/gtmylab/mailx-admin/internal/reconciler"
 	"github.com/gtmylab/mailx-admin/internal/roundcube"
@@ -45,6 +46,21 @@ type Service struct {
 	// back to syncing inline, which is what the CLI-style callers want.
 	sync SyncQueuer
 
+	// authTest proves a login the way Dovecot will, and is how a mailbox that
+	// cannot log in is caught while the operator is still setting its password
+	// (see ensureLoginUsable). Nil means "this caller cannot probe" and the
+	// verification is skipped; New wires dovecot.AuthTest, and the test suite
+	// wires a fake.
+	authTest dovecot.AuthTester
+
+	// supportsArgon2id answers whether this Dovecot can verify ARGON2ID at all,
+	// which decides whether re-hashing a rejected password into it is worth
+	// writing. A field for the same reason authTest is one: both answers decide
+	// what an operator is told, and both have to be testable on a machine with
+	// no Dovecot installed. Nil means "cannot verify it", which is the safe
+	// answer — see dovecot.SupportsArgon2id.
+	supportsArgon2id func(ctx context.Context) bool
+
 	// syncMu serialises an inline sync. Two concurrent mutations would
 	// otherwise rewrite the same config files and rebuild the same `postmap`
 	// hash maps from two different states, with the slowest write winning.
@@ -77,6 +93,10 @@ func New(db *sql.DB, st *store.Store, rec *reconciler.Reconciler, aud *audit.Log
 		hostname:  hostname,
 		sync:      queue,
 		roundcube: roundcube,
+		authTest:  dovecot.AuthTest,
+		supportsArgon2id: func(ctx context.Context) bool {
+			return dovecot.SupportsArgon2id(ctx, dovecot.ProbeCached)
+		},
 	}
 }
 
@@ -111,6 +131,13 @@ type Result struct {
 	// reports it there. `mailbox add` reconciles inline precisely so that it can
 	// tell the operator the mailbox is deliverable, not merely recorded.
 	Maildirs []string
+
+	// Reconciled reports whether Apply wrote and reloaded the mail
+	// configuration during this call, rather than handing the work to the
+	// background syncer. It is what tells a caller that the files on disk — and
+	// so a login probe that reads them — describe the change it just made (see
+	// ensureLoginUsable).
+	Reconciled bool
 }
 
 // Preview runs a mutation in "what-if" mode: it validates, renders the configs
@@ -213,6 +240,7 @@ func (s *Service) Apply(ctx context.Context, actor Actor, action string, detail 
 		res.ReloadedSvcs = recRes.ReloadedSvcs
 		res.Maildirs = recRes.Maildirs
 		res.Warnings = append(res.Warnings, recRes.Warnings...)
+		res.Reconciled = true
 		_ = s.auditor.Log(ctx, audit.Entry{
 			Actor:    actor.Name,
 			Action:   action,

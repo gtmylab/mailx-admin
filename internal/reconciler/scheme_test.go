@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -244,5 +245,47 @@ func TestReconcileWithAutoSchemeStillWritesThePasswdFile(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(string(auth)), "scheme=auto") {
 		t.Errorf("the passdb drop-in carries scheme=auto:\n%s", auth)
+	}
+}
+
+// TestReconcileWritesThePasswdFileWhereDovecotCanReadIt — the one managed file
+// with an owner, and its mode has to go with it. Dovecot's auth process drops to
+// the unprivileged `dovecot` user (default_internal_user) before it opens a
+// passdb file, so the 0600 root:root this used to be written as is a file it
+// cannot read at all: the passdb does not load, and the login is refused with
+// nothing that names the file. 0640 root:dovecot (see dovecotPasswdOwner) is
+// readable by root and by that process, and by nobody else — the file holds a
+// password hash per mailbox, so 0644 would be the other bug.
+//
+// Windows does not keep Unix file modes, so there is nothing to assert there.
+func TestReconcileWritesThePasswdFileWhereDovecotCanReadIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not keep Unix file modes")
+	}
+
+	dir := t.TempDir()
+	rec := New(Config{
+		PostfixConfDir:    filepath.Join(dir, "postfix"),
+		DovecotConfDir:    filepath.Join(dir, "dovecot"),
+		OpenDKIMDir:       filepath.Join(dir, "opendkim"),
+		Hostname:          "mail.example.com",
+		SkipServiceReload: true,
+		SkipValidation:    true,
+		SkipMaildirs:      true,
+		BackupDir:         filepath.Join(dir, "backups"),
+	}, nil)
+
+	if _, err := rec.Reconcile(context.Background(), fixtureSnapshotForDrift()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	path := filepath.Join(dir, "dovecot", "users")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != 0o640 {
+		t.Errorf("%s is %04o, want 0640: a file only root can read is a passdb Dovecot's auth "+
+			"process cannot open", path, got)
 	}
 }

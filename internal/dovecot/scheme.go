@@ -115,6 +115,26 @@ func Probed() bool {
 	return probeWorked
 }
 
+// SupportsArgon2id reports whether the local Dovecot was built with libsodium,
+// and can therefore verify a hash in the panel's preferred scheme.
+//
+// It is the question the mutation service asks before it re-hashes a password
+// after a login failed (see mutations.Service.ensureLoginUsable): rewriting a
+// hash Dovecot cannot check into another hash Dovecot cannot check is worse than
+// leaving the first one alone, because it throws away the evidence. A probe that
+// could not run answers no, because "unknown" must not be read as "yes" — the
+// same rule resolveAuto follows.
+func SupportsArgon2id(ctx context.Context, probe ProbeFunc) bool {
+	if probe == nil {
+		return false
+	}
+	out, err := probe(ctx)
+	if err != nil {
+		return false
+	}
+	return ParseSchemes(out).Has(SchemeArgon2id)
+}
+
 // Schemes is the set of scheme names a Dovecot build reported.
 type Schemes map[string]bool
 
