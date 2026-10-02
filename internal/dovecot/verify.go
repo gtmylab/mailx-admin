@@ -65,6 +65,36 @@ func AuthTest(ctx context.Context, address, password string) error {
 	return nil
 }
 
+// hashTestTimeout bounds `doveadm pw -t`.
+const hashTestTimeout = 10 * time.Second
+
+// HashTester asks the local Dovecot whether it can verify password against hash.
+// It is a function rather than a hard-coded call so the mutation service can be
+// exercised without a running Dovecot — the same reason AuthTester is a
+// parameter.
+type HashTester func(ctx context.Context, password, hash string) error
+
+// VerifyHash asks the local Dovecot whether password verifies against hash, by
+// running `doveadm pw -t` with the password on stdin. It needs no passwd-file
+// entry, so it is the check a queued sync (the panel's web path) can run before
+// the file on disk holds the mailbox — the one place a hash this Dovecot cannot
+// check would otherwise be stored with nothing to say so.
+func VerifyHash(ctx context.Context, password, hash string) error {
+	if password == "" {
+		return errors.New("doveadm pw -t: refusing to test an empty password")
+	}
+	if strings.TrimSpace(hash) == "" {
+		return errors.New("doveadm pw -t: no hash to test")
+	}
+
+	out, err := execx.OutputStdin(ctx, hashTestTimeout, []byte(password+"\n"), "doveadm", "pw", "-t", hash)
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		return fmt.Errorf("doveadm pw -t: %w%s", err, outputSuffix(text))
+	}
+	return nil
+}
+
 // authTestPassed reports whether doveadm's output means the login worked.
 //
 // The markers are Dovecot's own words for the three ways a lookup fails: a wrong

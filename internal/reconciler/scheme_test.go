@@ -65,6 +65,23 @@ func TestRenderDovecotUsersConfNeverWritesAnUnverifiableScheme(t *testing.T) {
 	}
 }
 
+// TestRenderDovecotUsersConfAllowsPlaintextAuth — Roundcube logs in to Dovecot
+// over plain IMAP on localhost:143 (the installer writes default_host = localhost
+// and disable_plaintext_auth = no), so the drop-in must not flip that to "yes":
+// `disable_plaintext_auth = yes` together with `auth_mechanisms = plain login`
+// disables the only two mechanisms Roundcube offers, and every webmail login is
+// refused.
+func TestRenderDovecotUsersConfAllowsPlaintextAuth(t *testing.T) {
+	out := string(RenderDovecotUsersConf("/etc/dovecot/users", dovecot.SchemeSSHA512))
+
+	if strings.Contains(out, "disable_plaintext_auth = yes") {
+		t.Errorf("the drop-in disables plaintext auth, which Roundcube needs:\n%s", out)
+	}
+	if !strings.Contains(out, "disable_plaintext_auth = no") {
+		t.Errorf("the drop-in does not keep plaintext auth allowed:\n%s", out)
+	}
+}
+
 // TestResolveSchemeAutoNeverAbortsTheReconcile — the v1.0.9 regression.
 //
 // Reconcile resolves the scheme before it renders anything and returns the error

@@ -145,6 +145,10 @@ userdb {
 }
 
 auth_mechanisms = plain login
-disable_plaintext_auth = yes
+# Plaintext auth has to stay allowed: Roundcube logs in to Dovecot over plain
+# IMAP on localhost:143 (default_host = localhost, no TLS), which is why the
+# installer writes disable_plaintext_auth = no. "yes" here would disable the only
+# two mechanisms Roundcube offers and refuse every webmail login.
+disable_plaintext_auth = no
 `, dovecot.DefaultPassdbScheme, passdbArgs, passwdFilePath))
 }

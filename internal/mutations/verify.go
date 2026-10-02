@@ -20,26 +20,41 @@ import (
 // shadow hash, adopted from /etc/shadow, is the one that reached users, and
 // neither the panel nor the sync output could see it.
 //
-// It runs only when the caller has the plaintext password *and* the config was
-// written during this call (res.Reconciled): the probe asks the running Dovecot
-// about the passwd-file that is on disk right now, so running it after a queued
-// sync would test the state from before the mailbox was written and report a
-// failure that is not real. The panel's web paths always queue (see Apply); they
-// are covered by `mailx-admin doctor` instead, which reports what it cannot
-// vouch for (see doctor.schemeCheck). The CLI — `mailbox add`, and through it the
-// installer — reconciles inline, and that is exactly where a password is known
-// and a mailbox is born.
+// It runs only while the caller still holds the plaintext password. The inline
+// path (res.Reconciled — `mailbox add`, and through it the installer) proves the
+// whole login with `doveadm auth test` against the passwd-file it just wrote.
+// The panel's web paths queue their sync (res.Reconciled is false), so the file
+// on disk does not hold the mailbox yet and a login probe would test a stale
+// state; they instead ask whether the freshly-stored hash itself is one this
+// Dovecot can verify (`doveadm pw -t`).
 //
 // Failures are warnings, never errors. The mailbox exists, the database row is
 // right and the configuration landed; failing the mutation would leave the
 // operator with a half-created mailbox. What must not happen is that they find
 // out from the mailbox' owner.
 func (s *Service) ensureLoginUsable(ctx context.Context, actor Actor, res *Result, address, password, hash string) {
-	if s.authTest == nil || password == "" || res == nil || !res.Reconciled {
+	if password == "" || res == nil {
 		return
 	}
 
-	firstErr := s.authTest(ctx, address, password)
+	// The inline path has just written the passwd-file, so the running Dovecot
+	// can be asked to authenticate the address — the same lookup an IMAP login
+	// walks. The panel's web paths queue their sync (res.Reconciled is false):
+	// the file on disk does not hold the mailbox yet, so a login probe would
+	// test a stale state, and the only thing that can be checked is whether the
+	// freshly-stored hash itself is one this Dovecot can verify (doveadm pw -t).
+	var firstErr error
+	if res.Reconciled {
+		if s.authTest == nil {
+			return
+		}
+		firstErr = s.authTest(ctx, address, password)
+	} else {
+		if s.hashTest == nil {
+			return
+		}
+		firstErr = s.hashTest(ctx, password, hash)
+	}
 	if firstErr == nil {
 		return
 	}

@@ -64,6 +64,18 @@ func Run(ctx context.Context, timeout time.Duration, name string, args ...string
 // Output executes name with args and returns the combined stdout+stderr of the
 // command, truncated to maxOutput bytes.
 func Output(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+	return output(ctx, timeout, nil, name, args...)
+}
+
+// OutputStdin is Output, but it pipes data to the command's standard input
+// first. It exists for the one helper that reads a secret from stdin rather than
+// from argv — `doveadm pw -t`, which tests a password against a hash — so the
+// secret never shows up in `ps`.
+func OutputStdin(ctx context.Context, timeout time.Duration, stdin []byte, name string, args ...string) ([]byte, error) {
+	return output(ctx, timeout, stdin, name, args...)
+}
+
+func output(ctx context.Context, timeout time.Duration, stdin []byte, name string, args ...string) ([]byte, error) {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
@@ -78,6 +90,10 @@ func Output(ctx context.Context, timeout time.Duration, name string, args ...str
 	// postmap's child surviving to hold the postmap.db lock.
 	cmd.Cancel = func() error { return killGroup(cmd) }
 	cmd.WaitDelay = waitDelay
+
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	var buf boundedBuffer
 	cmd.Stdout = &buf

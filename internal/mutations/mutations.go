@@ -53,6 +53,12 @@ type Service struct {
 	// wires a fake.
 	authTest dovecot.AuthTester
 
+	// hashTest proves that a single password hash is one this Dovecot can
+	// verify, without needing the mailbox in the passwd-file. It is what the
+	// panel's queued-sync path uses, because a full login cannot be probed
+	// there (see ensureLoginUsable). New wires dovecot.VerifyHash.
+	hashTest dovecot.HashTester
+
 	// supportsArgon2id answers whether this Dovecot can verify ARGON2ID at all,
 	// which decides whether re-hashing a rejected password into it is worth
 	// writing. A field for the same reason authTest is one: both answers decide
@@ -94,6 +100,7 @@ func New(db *sql.DB, st *store.Store, rec *reconciler.Reconciler, aud *audit.Log
 		sync:      queue,
 		roundcube: roundcube,
 		authTest:  dovecot.AuthTest,
+		hashTest:  dovecot.VerifyHash,
 		supportsArgon2id: func(ctx context.Context) bool {
 			return dovecot.SupportsArgon2id(ctx, dovecot.ProbeCached)
 		},

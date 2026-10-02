@@ -32,6 +32,27 @@ func (f *fakeTester) count() int {
 	return len(f.calls)
 }
 
+// fakeHashTester records how often the panel asked Dovecot to verify a hash, and
+// answers with the error it was built with. A nil error is a verifiable hash.
+type fakeHashTester struct {
+	mu       sync.Mutex
+	calls    int
+	failWith error
+}
+
+func (f *fakeHashTester) test(_ context.Context, _, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	return f.failWith
+}
+
+func (f *fakeHashTester) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 // TestRepairScheme is the decision that decides whether a rejected password gets
 // a second hash written at all. SSHA512 is tried first because it is the one
 // scheme every Dovecot build can verify, and the hash that gets rejected is
@@ -206,6 +227,54 @@ func TestEnsureLoginUsableRepairsARejectedHash(t *testing.T) {
 
 	if got := tester.count(); got != 1 {
 		t.Fatalf("probe calls = %d, want 1: a queued rewrite cannot be probed yet", got)
+	}
+
+	found := false
+	for _, e := range fakeRegistry.snapshot() {
+		if e.kind == "exec" && strings.Contains(e.query, "UPDATE users SET password_hash") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the repaired hash was never stored: no UPDATE users SET password_hash ran")
+	}
+	if got := queue.requests(); len(got) != 1 || got[0] != "user.repair_password_hash" {
+		t.Errorf("queued sync requests = %v, want exactly [user.repair_password_hash]", got)
+	}
+
+	joined := strings.Join(res.Warnings, "\n")
+	if !strings.Contains(joined, "not one this Dovecot accepts") {
+		t.Errorf("warnings = %q, want the hash reported as rejected", res.Warnings)
+	}
+	if !strings.Contains(joined, "not proven until that run finishes") {
+		t.Errorf("warnings = %q, want the login reported as not proven yet", res.Warnings)
+	}
+}
+
+// TestEnsureLoginUsableRepairsARejectedHashOnTheQueuedPath — the panel's web path
+// queues its sync, so a full login cannot be probed: the passwd-file on disk does
+// not hold the mailbox yet. The hash itself can be checked, though, so a {CRYPT}
+// yescrypt hash adopted from /etc/shadow is caught by `doveadm pw -t` and
+// re-hashed with SSHA512 through the same queued rewrite the inline path uses.
+func TestEnsureLoginUsableRepairsARejectedHashOnTheQueuedPath(t *testing.T) {
+	pool := openFakeDB(t)
+	queue := &recordingQueue{}
+	hashTester := &fakeHashTester{failWith: errors.New("doveadm pw -t: Password mismatch")}
+
+	svc := &Service{
+		db:               pool,
+		auditor:          audit.New(pool),
+		sync:             queue,
+		hashTest:         hashTester.test,
+		supportsArgon2id: func(context.Context) bool { return false },
+	}
+	res := &Result{Reconciled: false}
+
+	svc.ensureLoginUsable(context.Background(), Actor{Name: "admin:test"},
+		res, "alice@example.com", "longenough", "{CRYPT}$y$j9T$abcdefghijklmnop$0123456789")
+
+	if got := hashTester.count(); got != 1 {
+		t.Fatalf("hash probe calls = %d, want 1", got)
 	}
 
 	found := false
