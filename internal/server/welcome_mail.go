@@ -16,9 +16,13 @@ import (
 // before the vmailbox entry exists. It runs off the request path and is
 // best-effort.
 func (s *Server) sendWelcomeEmailAfterSync(email string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// A short fixed delay is used instead of polling the syncer: its queue and
+	// running flag are not updated atomically, so a poller can observe "idle" in
+	// the instant between draining the queue and marking the run as running and
+	// send too early. The reconcile finishes well within this window.
+	time.Sleep(15 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_ = s.syncer.Wait(ctx)
 	s.sendWelcomeEmail(ctx, email)
 }
 

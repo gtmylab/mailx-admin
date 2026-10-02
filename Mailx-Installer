@@ -3221,10 +3221,10 @@ passwd_scheme       = "auto"
 # here is what makes "does webmail know about this mailbox?" answerable.
 enabled   = true
 database  = "roundcubemail"
-# The MySQL client, on the local socket as root — the same way the installer
-# creates these rows. If root needs a password on this server, add the file that
-# holds it: args = ["--defaults-file=/root/.my.cnf"]
+# The MySQL client reads the Roundcube DB credentials from this defaults file,
+# which lives outside /root because the panel's systemd unit sets ProtectHome=yes.
 binary    = "mysql"
+args      = ["--defaults-file=/etc/mailx/roundcube.my.cnf"]
 # Has to match Roundcube's imap_host/default_host, or the row written here is
 # not the one a login looks up.
 mail_host = "localhost"
@@ -3279,10 +3279,10 @@ passwd_scheme       = "auto"
 # here is what makes "does webmail know about this mailbox?" answerable.
 enabled   = true
 database  = "roundcubemail"
-# The MySQL client, on the local socket as root — the same way the installer
-# creates these rows. If root needs a password on this server, add the file that
-# holds it: args = ["--defaults-file=/root/.my.cnf"]
+# The MySQL client reads the Roundcube DB credentials from this defaults file,
+# which lives outside /root because the panel's systemd unit sets ProtectHome=yes.
 binary    = "mysql"
+args      = ["--defaults-file=/etc/mailx/roundcube.my.cnf"]
 # Has to match Roundcube's imap_host/default_host, or the row written here is
 # not the one a login looks up.
 mail_host = "localhost"
@@ -3858,6 +3858,20 @@ user=root
 password=$MYSQL_ROOT_PASSWORD
 EOF
         chmod 600 ~/.my.cnf
+
+        # The panel reads its MySQL credentials from here, not ~/.my.cnf: the
+        # panel's systemd unit sets ProtectHome=yes, which hides /root, so
+        # ~/.my.cnf is invisible to it and mysql falls back to "root with no
+        # password" (access denied). Use the Roundcube user — the account that
+        # only has rights to roundcubemail.* — and a path ProtectHome leaves
+        # readable.
+        mkdir -p /etc/mailx
+        cat <<EOF > /etc/mailx/roundcube.my.cnf
+[client]
+user=$ROUNDCUBE_DB_USER
+password=$ROUNDCUBE_DB_PASSWORD
+EOF
+        chmod 600 /etc/mailx/roundcube.my.cnf
 
         mysql -e "CREATE DATABASE IF NOT EXISTS $ROUNDCUBE_DB_NAME;" 2>/dev/null
         mysql -e "CREATE USER IF NOT EXISTS '$ROUNDCUBE_DB_USER'@'localhost' IDENTIFIED BY '$ROUNDCUBE_DB_PASSWORD';" 2>/dev/null
