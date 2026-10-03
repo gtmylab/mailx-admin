@@ -118,6 +118,8 @@ func Run(ctx context.Context, opts Options) *Report {
 	report.checks(passwdFileCheck(opts))
 	report.checks(lastSyncCheck(ctx, opts))
 	report.checks(roundcubeCheck(ctx, opts))
+	report.checks(blocklistCheck(ctx, opts))
+	report.checks(ptrCheck(ctx, opts))
 
 	return report
 }

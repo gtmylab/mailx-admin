@@ -1,0 +1,39 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Blocklists</h1>
+    <p class="page-sub">Latest DNS blocklist status for each outbound IP.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Current status <span class="badge">{{len .Data.Checks}}</span></h2>
+  </div>
+  {{if .Data.Checks}}
+  <table class="table">
+    <thead>
+      <tr><th>IP</th><th>List</th><th>Status</th><th>Detail</th><th>Checked</th></tr>
+    </thead>
+    <tbody>
+      {{range .Data.Checks}}
+      <tr>
+        <td class="mono">{{.IP}}</td>
+        <td>{{.List}}</td>
+        <td>
+          {{if eq .Status "listed"}}<span class="badge err">listed</span>
+          {{else if eq .Status "clean"}}<span class="badge ok">clean</span>
+          {{else if eq .Status "error"}}<span class="badge warn">error</span>
+          {{else}}<span class="badge">{{.Status}}</span>{{end}}
+        </td>
+        <td class="dim">{{.Detail}}</td>
+        <td class="dim">{{.CheckedAt.Format "2006-01-02 15:04"}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">No blocklist checks have run yet. They are scheduled hourly by the background jobs.</div>
+  {{end}}
+</div>
+{{end}}

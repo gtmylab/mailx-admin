@@ -413,11 +413,23 @@ func (s *Store) SnapshotTx(ctx context.Context, tx *sql.Tx) (*models.Snapshot, e
 		return nil, err
 	}
 
+	outboundIPs, err := s.listOutboundIPsTx(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+
+	suppressions, err := s.listSuppressionsTx(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+
 	return &models.Snapshot{
-		Domains:    domains,
-		Users:      users,
-		Aliases:    aliases,
-		Ports:      ports,
-		SieveRules: sieveRules,
+		Domains:      domains,
+		Users:        users,
+		Aliases:      aliases,
+		Ports:        ports,
+		SieveRules:   sieveRules,
+		OutboundIPs:  outboundIPs,
+		Suppressions: suppressions,
 	}, nil
 }

@@ -14,11 +14,13 @@ import (
 	"github.com/gtmylab/mailx-admin/internal/audit"
 	"github.com/gtmylab/mailx-admin/internal/config"
 	"github.com/gtmylab/mailx-admin/internal/db"
+	"github.com/gtmylab/mailx-admin/internal/jobs"
 	"github.com/gtmylab/mailx-admin/internal/logs"
 	"github.com/gtmylab/mailx-admin/internal/reconciler"
 	"github.com/gtmylab/mailx-admin/internal/server"
 	"github.com/gtmylab/mailx-admin/internal/store"
 	"github.com/gtmylab/mailx-admin/internal/version"
+	"github.com/gtmylab/mailx-admin/internal/webhooks"
 )
 
 func cmdServe() *cobra.Command {
@@ -106,6 +108,12 @@ func cmdServe() *cobra.Command {
 					}
 				}
 			}()
+
+			// Scheduled monitoring jobs: hourly blocklist check, nightly quota
+			// sample, daily PTR + outbound-IP discovery.
+			jm := jobs.New(st, cfg.DNS.Resolver, logger)
+			jm.SetWebhooks(webhooks.New(st, logger))
+			jm.Start(ctx)
 
 			// ---- Seed gate ----
 			snap, err := st.Snapshot(ctx)

@@ -26,6 +26,9 @@
     <div class="nav-group">
       <div class="nav-label">Delivery</div>
       {{template "nav-item" (dict "Href" "/queue" "Label" "Queue" "Icon" "queue" "Active" (eq .ActiveNav "queue"))}}
+      {{template "nav-item" (dict "Href" "/deliverability" "Label" "Deliverability" "Icon" "deliverability" "Active" (eq .ActiveNav "deliverability"))}}
+      {{template "nav-item" (dict "Href" "/blocklists" "Label" "Blocklists" "Icon" "blocklists" "Active" (eq .ActiveNav "blocklists"))}}
+      {{template "nav-item" (dict "Href" "/suppressions" "Label" "Suppressions" "Icon" "suppressions" "Active" (eq .ActiveNav "suppressions"))}}
       {{template "nav-item" (dict "Href" "/logs" "Label" "Logs" "Icon" "logs" "Active" (eq .ActiveNav "logs"))}}
       {{template "nav-item" (dict "Href" "/tools/test-send" "Label" "Test send" "Icon" "testsend" "Active" (eq .ActiveNav "testsend"))}}
     </div>
@@ -39,6 +42,8 @@
 
     <div class="nav-group">
       <div class="nav-label">System</div>
+      {{template "nav-item" (dict "Href" "/system/outbound-ips" "Label" "Outbound IPs" "Icon" "server" "Active" (eq .ActiveNav "outbound-ips"))}}
+      {{template "nav-item" (dict "Href" "/settings/api" "Label" "API & Webhooks" "Icon" "api" "Active" (eq .ActiveNav "api"))}}
       {{template "nav-item" (dict "Href" "/backup" "Label" "Backups" "Icon" "backup" "Active" (eq .ActiveNav "backup"))}}
     </div>
   </nav>

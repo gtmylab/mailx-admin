@@ -1,0 +1,79 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Outbound IPs</h1>
+    <p class="page-sub">Control which server address mail is sent from, per sender.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h2>Add an outbound IP</h2></div>
+  <form class="form-row" hx-post="/system/outbound-ips" hx-target="#form-error" hx-swap="innerHTML">
+    <input class="input" name="ip" list="available-ips" placeholder="203.0.113.10" required>
+    <datalist id="available-ips">
+      {{range .Data.Available}}<option value="{{.}}">{{end}}
+    </datalist>
+    <select class="select" name="mode">
+      <option value="disabled">Disabled</option>
+      <option value="always">Always</option>
+      <option value="rules">Rules</option>
+    </select>
+    <button class="btn btn-primary" type="submit">Add</button>
+  </form>
+</div>
+
+{{range .Data.IPs}}
+<div class="card">
+  <div class="card-header">
+    <h2 class="mono">{{.IP}} <span class="badge">{{.Mode}}</span></h2>
+    <div class="page-actions">
+      <button class="btn btn-sm btn-danger" hx-delete="/system/outbound-ips/{{.ID}}" hx-target="#form-error" hx-swap="innerHTML"
+              hx-confirm="Remove {{.IP}} from the registry?">Remove</button>
+    </div>
+  </div>
+
+  <form class="form-row" hx-patch="/system/outbound-ips/{{.ID}}" hx-target="#form-error" hx-swap="innerHTML">
+    <select class="select" name="mode">
+      <option value="disabled" {{if eq .Mode "disabled"}}selected{{end}}>Disabled</option>
+      <option value="always" {{if eq .Mode "always"}}selected{{end}}>Always</option>
+      <option value="rules" {{if eq .Mode "rules"}}selected{{end}}>Rules</option>
+    </select>
+    <input class="input" type="number" name="priority" value="{{.Priority}}" title="Priority (higher wins)">
+    <label class="check-row"><input class="checkbox" type="checkbox" name="active" {{if .Active}}checked{{end}}> Active</label>
+    <button class="btn btn-sm" type="submit">Save</button>
+  </form>
+
+  {{if eq .Mode "rules"}}
+  <form class="form-row" hx-post="/system/outbound-ips/{{.ID}}/rules" hx-target="#form-error" hx-swap="innerHTML">
+    <select class="select" name="match_type">
+      <option value="domain">Domain</option>
+      <option value="user">User</option>
+      <option value="email">Email</option>
+    </select>
+    <input class="input" name="match_value" placeholder="example.com / alice / alice@example.com">
+    <button class="btn btn-sm" type="submit">Add rule</button>
+  </form>
+  {{if .Rules}}
+  <table class="table">
+    <thead><tr><th>Match type</th><th>Value</th><th></th></tr></thead>
+    <tbody>
+      {{range .Rules}}
+      <tr>
+        <td>{{.MatchType}}</td>
+        <td class="mono">{{.MatchValue}}</td>
+        <td class="text-right">
+          <button class="btn btn-sm btn-danger" hx-delete="/system/outbound-ips/{{.IPID}}/rules/{{.ID}}" hx-target="#form-error" hx-swap="innerHTML">Remove</button>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{end}}
+  {{end}}
+</div>
+{{end}}
+
+{{if not .Data.IPs}}
+<div class="card"><div class="empty">No outbound IPs configured. The server uses its default address.</div></div>
+{{end}}
+{{end}}

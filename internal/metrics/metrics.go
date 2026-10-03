@@ -166,6 +166,34 @@ func (c *Collector) write(ctx context.Context, w http.ResponseWriter) {
 		fmt.Fprintf(w, "# HELP mailx_queue_messages Messages in Postfix queue\n")
 		fmt.Fprintf(w, "# TYPE mailx_queue_messages gauge\n")
 		fmt.Fprintf(w, "mailx_queue_messages %d\n", queueSize)
+
+		// Monitoring & reputation gauges
+		var suppressions, activeIPs, apiKeys, webhooks, listed24h int
+		_ = c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM suppressions`).Scan(&suppressions)
+		_ = c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM outbound_ips WHERE active = 1`).Scan(&activeIPs)
+		_ = c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_keys WHERE active = 1`).Scan(&apiKeys)
+		_ = c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM webhooks WHERE active = 1`).Scan(&webhooks)
+		_ = c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM blocklist_checks WHERE status = 'listed' AND checked_at > datetime('now', '-1 day')`).Scan(&listed24h)
+
+		fmt.Fprintf(w, "# HELP mailx_suppressions_total Suppressed recipients\n")
+		fmt.Fprintf(w, "# TYPE mailx_suppressions_total gauge\n")
+		fmt.Fprintf(w, "mailx_suppressions_total %d\n", suppressions)
+
+		fmt.Fprintf(w, "# HELP mailx_outbound_ips_active Active outbound IPs\n")
+		fmt.Fprintf(w, "# TYPE mailx_outbound_ips_active gauge\n")
+		fmt.Fprintf(w, "mailx_outbound_ips_active %d\n", activeIPs)
+
+		fmt.Fprintf(w, "# HELP mailx_api_keys_active Active API keys\n")
+		fmt.Fprintf(w, "# TYPE mailx_api_keys_active gauge\n")
+		fmt.Fprintf(w, "mailx_api_keys_active %d\n", apiKeys)
+
+		fmt.Fprintf(w, "# HELP mailx_webhooks_active Active webhooks\n")
+		fmt.Fprintf(w, "# TYPE mailx_webhooks_active gauge\n")
+		fmt.Fprintf(w, "mailx_webhooks_active %d\n", webhooks)
+
+		fmt.Fprintf(w, "# HELP mailx_blocklist_listed_24h Blocklist listings in the last 24h\n")
+		fmt.Fprintf(w, "# TYPE mailx_blocklist_listed_24h gauge\n")
+		fmt.Fprintf(w, "mailx_blocklist_listed_24h %d\n", listed24h)
 	}
 
 	// SSL cert expiry

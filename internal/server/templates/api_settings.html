@@ -1,0 +1,68 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>API & Webhooks</h1>
+    <p class="page-sub">Machine access to the panel and outbound event notifications.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h2>API keys</h2></div>
+  <form class="form-row" hx-post="/settings/api/keys" hx-target="#key-reveal" hx-swap="innerHTML">
+    <input class="input" name="name" placeholder="Key name (e.g. billing)" required>
+    <button class="btn btn-primary" type="submit">Create key</button>
+  </form>
+  <div id="key-reveal" class="form-error-slot" role="status" aria-live="polite"></div>
+
+  {{if .Data.Keys}}
+  <table class="table">
+    <thead><tr><th>Name</th><th>Prefix</th><th>Scopes</th><th>Created</th><th></th></tr></thead>
+    <tbody>
+      {{range .Data.Keys}}
+      <tr>
+        <td>{{.Name}}</td>
+        <td class="mono">{{.Prefix}}…</td>
+        <td><span class="badge">{{.Scopes}}</span></td>
+        <td class="dim">{{.CreatedAt.Format "2006-01-02"}}</td>
+        <td class="text-right">
+          <button class="btn btn-sm btn-danger" hx-delete="/settings/api/keys/{{.ID}}" hx-target="#form-error" hx-swap="innerHTML"
+                  hx-confirm="Delete API key {{.Name}}?">Delete</button>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">No API keys yet.</div>
+  {{end}}
+</div>
+
+<div class="card">
+  <div class="card-header"><h2>Webhooks</h2></div>
+  <form class="form-row" hx-post="/settings/api/webhooks" hx-target="#form-error" hx-swap="innerHTML">
+    <input class="input" name="url" placeholder="https://example.com/hook" required>
+    <input class="input" name="events" placeholder="user.created,blocklist.listed">
+    <input class="input" name="secret" placeholder="signing secret (optional)">
+    <button class="btn btn-primary" type="submit">Add</button>
+  </form>
+
+  {{if .Data.Webhooks}}
+  <table class="table">
+    <thead><tr><th>URL</th><th>Events</th><th></th></tr></thead>
+    <tbody>
+      {{range .Data.Webhooks}}
+      <tr>
+        <td class="mono">{{.URL}}</td>
+        <td>{{range .Events}}<span class="badge">{{.}}</span> {{end}}</td>
+        <td class="text-right">
+          <button class="btn btn-sm btn-danger" hx-delete="/settings/api/webhooks/{{.ID}}" hx-target="#form-error" hx-swap="innerHTML">Delete</button>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">No webhooks yet.</div>
+  {{end}}
+</div>
+{{end}}

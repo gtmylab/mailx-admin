@@ -323,7 +323,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 		},
 		{
 			path:    filepath.Join(r.cfg.PostfixConfDir, "master.cf"),
-			content: RenderMasterCF(ports.Render, snap.Ports, filepath.Join(r.cfg.PostfixConfDir, "master.cf")),
+			content: RenderMasterCF(ports.Render, snap.Ports, filepath.Join(r.cfg.PostfixConfDir, "master.cf"), RenderOutboundTransports(snap.OutboundIPs)),
+			mode:    0o644,
+			service: "postfix",
+		},
+		{
+			path:    filepath.Join(r.cfg.PostfixConfDir, "sender_transport"),
+			content: RenderSenderTransport(snap.OutboundIPs),
+			mode:    0o644,
+			service: "postfix",
+		},
+		{
+			path:    filepath.Join(r.cfg.PostfixConfDir, "suppressions"),
+			content: RenderSuppressions(snap.Suppressions),
 			mode:    0o644,
 			service: "postfix",
 		},
@@ -500,7 +512,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
-		for _, name := range []string{"virtual", "vmailbox", "vuidmaps", "vgidmaps", "helo_access"} {
+		for _, name := range []string{"virtual", "vmailbox", "vuidmaps", "vgidmaps", "helo_access", "sender_transport", "suppressions"} {
 			path := filepath.Join(r.cfg.PostfixConfDir, name)
 			if fileChanged(res.Changes, path) {
 				if err := runCmd(ctx, commandTimeout, "postmap", path); err != nil {

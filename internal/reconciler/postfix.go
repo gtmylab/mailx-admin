@@ -6,6 +6,7 @@ import (
 	"github.com/gtmylab/mailx-admin/internal/models"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -70,6 +71,13 @@ func RenderPostfixMainCF(snap *models.Snapshot, hostname string) []byte {
 	// recipient instead of silently dropping the mail.
 	b.WriteString("virtual_uid_maps = hash:/etc/postfix/vuidmaps\n")
 	b.WriteString("virtual_gid_maps = hash:/etc/postfix/vgidmaps\n")
+
+	// Outbound IP routing. sender_dependent_default_transport_maps picks the
+	// per-IP transport (see RenderSenderTransport/RenderOutboundTransports);
+	// default_transport is the highest-priority "always" IP, or the stock smtp
+	// when no outbound IP is configured.
+	b.WriteString("\nsender_dependent_default_transport_maps = hash:/etc/postfix/sender_transport\n")
+	fmt.Fprintf(&b, "default_transport = %s\n", DefaultOutboundTransport(snap.OutboundIPs))
 
 	b.WriteString("\n# DKIM milter\n")
 	b.WriteString("milter_default_action = accept\n")
@@ -262,7 +270,97 @@ func RenderHeaderChecks(hostname string) []byte {
 	return b.Bytes()
 }
 
-func RenderMasterCF(renderFn func([]byte, []models.PortListener) []byte, listeners []models.PortListener, currentPath string) []byte {
+func RenderMasterCF(renderFn func([]byte, []models.PortListener) []byte, listeners []models.PortListener, currentPath string, transports []byte) []byte {
 	original, _ := os.ReadFile(currentPath)
-	return renderFn(original, listeners)
+	return append(renderFn(original, listeners), transports...)
+}
+
+// transportName is the master.cf transport a given outbound IP gets. It is
+// keyed on the database id so renaming an IP never rewrites its transport.
+func transportName(id int64) string { return "smtpip" + strconv.FormatInt(id, 10) }
+
+// RenderSenderTransport produces /etc/postfix/sender_transport: which transport
+// (and so which smtp_bind_address) a sender is routed through. It is read by
+// sender_dependent_default_transport_maps.
+func RenderSenderTransport(ips []models.OutboundIP) []byte {
+	var b bytes.Buffer
+	b.WriteString("# Managed by mailx-admin — DO NOT EDIT\n\n")
+
+	lines := make([]string, 0)
+	for _, ip := range ips {
+		if !ip.Active || ip.Mode != models.IPModeRules {
+			continue
+		}
+		tr := transportName(ip.ID)
+		for _, r := range ip.Rules {
+			lines = append(lines, fmt.Sprintf("%s\t%s", senderPattern(r), tr))
+		}
+	}
+	sort.Strings(lines)
+	for _, l := range lines {
+		b.WriteString(l)
+		b.WriteString("\n")
+	}
+	return b.Bytes()
+}
+
+// senderPattern maps an outbound rule to the sender_dependent_transport key:
+// @domain for a domain rule, user@ for a bare user, and the full address for an
+// email rule.
+func senderPattern(r models.OutboundRule) string {
+	switch r.MatchType {
+	case models.RuleMatchDomain:
+		return "@" + r.MatchValue
+	case models.RuleMatchUser:
+		return r.MatchValue + "@"
+	default:
+		return r.MatchValue
+	}
+}
+
+// RenderOutboundTransports produces the master.cf stanzas that bind each
+// outbound IP to its own transport (smtp_bind_address). The caller appends this
+// to master.cf.
+func RenderOutboundTransports(ips []models.OutboundIP) []byte {
+	var b bytes.Buffer
+	for _, ip := range ips {
+		if !ip.Active || ip.Mode == models.IPModeDisabled {
+			continue
+		}
+		fmt.Fprintf(&b, "%s unix - - n - - smtp\n", transportName(ip.ID))
+		fmt.Fprintf(&b, "  -o smtp_bind_address=%s\n", ip.IP)
+	}
+	return b.Bytes()
+}
+
+// DefaultOutboundTransport is the transport used when no sender rule matches:
+// the highest-priority "always" IP, or the stock "smtp" transport when none is
+// configured.
+func DefaultOutboundTransport(ips []models.OutboundIP) string {
+	best := ""
+	bestPriority := -1
+	for _, ip := range ips {
+		if !ip.Active || ip.Mode != models.IPModeAlways {
+			continue
+		}
+		if ip.Priority > bestPriority {
+			bestPriority = ip.Priority
+			best = transportName(ip.ID)
+		}
+	}
+	if best == "" {
+		return "smtp"
+	}
+	return best
+}
+
+// RenderSuppressions produces /etc/postfix/suppressions: a recipient access map
+// the submission service consults via check_recipient_access.
+func RenderSuppressions(sups []models.Suppression) []byte {
+	var b bytes.Buffer
+	b.WriteString("# Managed by mailx-admin — DO NOT EDIT\n\n")
+	for _, s := range sups {
+		fmt.Fprintf(&b, "%s\t550 5.7.1 recipient suppressed by policy\n", s.Email)
+	}
+	return b.Bytes()
 }

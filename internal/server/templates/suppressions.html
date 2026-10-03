@@ -1,0 +1,53 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Suppressions</h1>
+    <p class="page-sub">Recipients the server will not deliver to. A recipient on this list is dropped before sending.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Add suppression</h2>
+  </div>
+  <form class="form-row" hx-post="/suppressions" hx-target="#form-error" hx-swap="innerHTML">
+    <input class="input" type="email" name="email" placeholder="user@example.com" required>
+    <select class="select" name="reason">
+      <option value="manual">Manual</option>
+      <option value="complaint">Complaint</option>
+      <option value="bounce_hard">Hard bounce</option>
+      <option value="bounce_transient">Transient bounce</option>
+    </select>
+    <button class="btn btn-primary" type="submit">Add</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Suppressed recipients <span class="badge">{{len .Data.Suppressions}}</span></h2>
+  </div>
+  {{if .Data.Suppressions}}
+  <table class="table">
+    <thead>
+      <tr><th>Email</th><th>Reason</th><th>Source</th><th>Added</th><th></th></tr>
+    </thead>
+    <tbody>
+      {{range .Data.Suppressions}}
+      <tr>
+        <td class="mono">{{.Email}}</td>
+        <td>{{.Reason}}</td>
+        <td>{{.Source}}</td>
+        <td class="dim">{{.CreatedAt.Format "2006-01-02"}}</td>
+        <td class="text-right">
+          <button class="btn btn-sm btn-danger" hx-delete="/suppressions/{{.ID}}" hx-target="#form-error" hx-swap="innerHTML"
+                  hx-confirm="Remove {{.Email}} from suppressions?">Remove</button>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">No recipients are suppressed.</div>
+  {{end}}
+</div>
+{{end}}

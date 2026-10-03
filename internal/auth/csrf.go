@@ -188,6 +188,14 @@ func constantTimeEqual(a, b string) bool {
 // Unsafe: everything else
 func (m *CSRFManager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The /api/ subtree authenticates with a bearer token, not the session
+		// cookie, so the double-submit-cookie check below does not apply to it
+		// and would only reject every legitimate API client.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		switch r.Method {
 		case "GET", "HEAD", "OPTIONS":
 			next.ServeHTTP(w, r)

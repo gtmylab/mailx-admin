@@ -163,6 +163,11 @@ type Snapshot struct {
 	Aliases    []Alias
 	Ports      []PortListener
 	SieveRules map[int64][]SieveRule
+
+	// OutboundIPs is the outbound address registry, used to route senders to
+	// per-IP Postfix transports. Suppressions is the recipient suppression list.
+	OutboundIPs  []OutboundIP
+	Suppressions []Suppression
 }
 
 // PrimaryDomain returns the primary domain, or the first one if none is marked.

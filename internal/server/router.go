@@ -136,6 +136,37 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("DELETE /backup/{name}", s.handleBackupDelete)
 	protected.HandleFunc("POST /backup/restore/{name}", s.handleBackupRestore)
 
+	// Deliverability & reputation
+	protected.HandleFunc("GET /deliverability", s.handleDeliverabilityPage)
+	protected.HandleFunc("GET /blocklists", s.handleBlocklistsPage)
+	protected.HandleFunc("GET /suppressions", s.handleSuppressionsPage)
+	protected.HandleFunc("POST /suppressions", s.handleSuppressionCreate)
+	protected.HandleFunc("DELETE /suppressions/{id}", s.handleSuppressionDelete)
+
+	// Outbound IP registry
+	protected.HandleFunc("GET /system/outbound-ips", s.handleOutboundIPsPage)
+	protected.HandleFunc("POST /system/outbound-ips", s.handleOutboundIPCreate)
+	protected.HandleFunc("PATCH /system/outbound-ips/{id}", s.handleOutboundIPUpdate)
+	protected.HandleFunc("DELETE /system/outbound-ips/{id}", s.handleOutboundIPDelete)
+	protected.HandleFunc("POST /system/outbound-ips/{id}/rules", s.handleOutboundRuleCreate)
+	protected.HandleFunc("DELETE /system/outbound-ips/{id}/rules/{rid}", s.handleOutboundRuleDelete)
+
+	// API keys & webhooks
+	protected.HandleFunc("GET /settings/api", s.handleAPISettingsPage)
+	protected.HandleFunc("POST /settings/api/keys", s.handleAPIKeyCreate)
+	protected.HandleFunc("DELETE /settings/api/keys/{id}", s.handleAPIKeyDelete)
+	protected.HandleFunc("POST /settings/api/webhooks", s.handleWebhookCreate)
+	protected.HandleFunc("DELETE /settings/api/webhooks/{id}", s.handleWebhookDelete)
+
+	// Public API. Authenticated by bearer key, not the session cookie, so it
+	// sits under /api/ which the CSRF middleware skips (see auth/csrf.go).
+	api := http.NewServeMux()
+	api.HandleFunc("GET /api/v1/suppressions", s.handleAPISuppressionsList)
+	api.HandleFunc("POST /api/v1/suppressions", s.handleAPISuppressionCreate)
+	api.HandleFunc("DELETE /api/v1/suppressions/{email}", s.handleAPISuppressionDelete)
+	api.HandleFunc("POST /api/v1/messages", s.handleAPIMessages)
+	mux.Handle("/api/v1/", s.requireAPIKey(s.requestTimeout(api)))
+
 	// Every protected request gets a deadline *and* a guaranteed answer (see
 	// timeout.go). The budget wraps the auth check on purpose: the session
 	// lookup is itself a database query, and with it outside the budget a
