@@ -2134,7 +2134,7 @@ install_roundcube_application() {
     fi
 
     log_info "Downloading Roundcube..."
-    local RC_VERSION="1.5.0"
+    local RC_VERSION="1.6.11"
     local RC_FILE="roundcubemail-${RC_VERSION}-complete.tar.gz"
     local RC_URL="https://github.com/roundcube/roundcubemail/releases/download/${RC_VERSION}/${RC_FILE}"
 
