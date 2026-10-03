@@ -9,6 +9,8 @@ import (
 	"net/textproto"
 	"strings"
 	"time"
+
+	"github.com/gtmylab/mailx-admin/internal/execx"
 )
 
 // sendWelcomeEmailAfterSync sends the welcome mail once the queued config sync
@@ -35,11 +37,15 @@ func (s *Server) sendWelcomeEmail(ctx context.Context, email string) {
 	webmailURL := "https://" + s.cfg.Server.Hostname + ":8080"
 
 	msg := buildWelcomeEmail(email, username, webmailURL, fromDomain)
-	// The envelope sender must be a bare address; the display name lives only in
-	// the From: header built by buildWelcomeEmail.
-	if err := smtpSendLocal(ctx, "admin@"+fromDomain, email, msg); err != nil {
+	// Route through Postfix's sendmail, the same path the installer's `mail`
+	// command funnels through; -t reads the recipient from the To: header. This
+	// avoids an SMTP handshake from the panel and works with the local queue.
+	// -f sets the envelope sender so bounces reach the admin account, not root.
+	if _, err := execx.OutputStdin(ctx, 30*time.Second, msg, "sendmail", "-f", "admin@"+fromDomain, "-t", "-i"); err != nil {
 		s.logger.Warn("welcome email failed", "email", email, "err", err)
+		return
 	}
+	s.logger.Info("welcome email queued", "email", email)
 }
 
 // primaryDomain returns the domain the panel sends its own mail from, falling
