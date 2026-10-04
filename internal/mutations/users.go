@@ -19,6 +19,11 @@ type CreateUserInput struct {
 	QuotaMB  int
 	IsAdmin  bool
 
+	// DisplayName is the mailbox owner's display name ("Alice Cooper"). Empty
+	// means "derive from the local part". It is the name webmail shows in the
+	// From: header of a composed message.
+	DisplayName string
+
 	// Kind is models.KindVirtual (the default when empty) or
 	// models.KindSystem.
 	//
@@ -198,10 +203,10 @@ func applyCreateUserTx(ctx context.Context, tx *sql.Tx, in CreateUserInput, emai
 	}
 	_, err = tx.ExecContext(ctx, `
         INSERT INTO users (domain_id, username, email, password_hash, quota_mb, active, is_admin,
-                           kind, sys_uid, sys_gid, home)
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?, NULLIF(?, 0), NULLIF(?, 0), NULLIF(?, ''))
+                           kind, sys_uid, sys_gid, home, display_name)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?, NULLIF(?, 0), NULLIF(?, 0), NULLIF(?, ''), ?)
     `, in.DomainID, in.Username, email, hash, in.QuotaMB, boolInt(in.IsAdmin),
-		in.Kind, in.SysUID, in.SysGID, in.Home)
+		in.Kind, in.SysUID, in.SysGID, in.Home, strings.TrimSpace(in.DisplayName))
 	return err
 }
 
@@ -228,10 +233,11 @@ func (s *Service) ApplyCreateUserToTx(ctx context.Context, tx *sql.Tx, in Create
 }
 
 type UpdateUserInput struct {
-	UserID  int64
-	QuotaMB *int
-	IsAdmin *bool
-	Active  *bool
+	UserID      int64
+	QuotaMB     *int
+	IsAdmin     *bool
+	Active      *bool
+	DisplayName *string
 }
 
 func (s *Service) UpdateUser(ctx context.Context, actor Actor, in UpdateUserInput) (*Result, error) {
@@ -270,6 +276,14 @@ func (s *Service) UpdateUser(ctx context.Context, actor Actor, in UpdateUserInpu
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE users SET active = ?, updated_at = ? WHERE id = ?`,
 				boolInt(*in.Active), time.Now(), in.UserID,
+			); err != nil {
+				return err
+			}
+		}
+		if in.DisplayName != nil {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?`,
+				strings.TrimSpace(*in.DisplayName), time.Now(), in.UserID,
 			); err != nil {
 				return err
 			}

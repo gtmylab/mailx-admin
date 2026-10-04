@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/gtmylab/mailx-admin/internal/auth"
-	"github.com/gtmylab/mailx-admin/internal/models"
-	"github.com/gtmylab/mailx-admin/internal/mutations"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/gtmylab/mailx-admin/internal/auth"
+	"github.com/gtmylab/mailx-admin/internal/models"
+	"github.com/gtmylab/mailx-admin/internal/mutations"
 )
 
 func (s *Server) handleUserSieve(w http.ResponseWriter, r *http.Request) {
@@ -136,6 +138,94 @@ func (s *Server) handleSieveRuleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("HX-Redirect", "/users/"+strconv.FormatInt(userID, 10)+"/sieve?flash="+encodeFlash("Rule removed"))
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleSieveRuleToggle flips a rule's enabled flag without deleting it, so an
+// operator can temporarily switch a rule off and back on.
+func (s *Server) handleSieveRuleToggle(w http.ResponseWriter, r *http.Request) {
+	userID, _ := strconv.ParseInt(r.PathValue("uid"), 10, 64)
+	ruleID, err := strconv.ParseInt(r.PathValue("rid"), 10, 64)
+	if err != nil {
+		s.renderError(w, 400, "Invalid rule ID")
+		return
+	}
+
+	actor := mutations.Actor{
+		Name:     "admin:" + auth.SessionFromContext(r.Context()).Username,
+		RemoteIP: clientIP(r),
+	}
+
+	_, err = s.mutations.Apply(r.Context(), actor, "sieve.toggle", map[string]any{"rule_id": ruleID}, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(r.Context(),
+			`UPDATE sieve_rules SET enabled = CASE enabled WHEN 1 THEN 0 ELSE 1 END, updated_at = ? WHERE id = ? AND user_id = ?`,
+			time.Now(), ruleID, userID)
+		return err
+	})
+	if err != nil {
+		s.renderFormError(w, err.Error())
+		return
+	}
+
+	w.Header().Set("HX-Redirect", "/users/"+strconv.FormatInt(userID, 10)+"/sieve?flash="+encodeFlash("Rule toggled"))
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleSieveRuleMove swaps a rule with its neighbour so its position reflects
+// the evaluation order (rules run top to bottom).
+func (s *Server) handleSieveRuleMove(w http.ResponseWriter, r *http.Request) {
+	userID, _ := strconv.ParseInt(r.PathValue("uid"), 10, 64)
+	ruleID, err := strconv.ParseInt(r.PathValue("rid"), 10, 64)
+	if err != nil {
+		s.renderError(w, 400, "Invalid rule ID")
+		return
+	}
+	dir := r.FormValue("dir")
+	if dir != "up" && dir != "down" {
+		s.renderFormError(w, "dir must be up or down")
+		return
+	}
+
+	actor := mutations.Actor{
+		Name:     "admin:" + auth.SessionFromContext(r.Context()).Username,
+		RemoteIP: clientIP(r),
+	}
+
+	_, err = s.mutations.Apply(r.Context(), actor, "sieve.move", map[string]any{"rule_id": ruleID, "dir": dir}, func(tx *sql.Tx) error {
+		var pos int
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT position FROM sieve_rules WHERE id = ? AND user_id = ?`, ruleID, userID).Scan(&pos); err != nil {
+			return err
+		}
+
+		op, order := "<", "DESC"
+		if dir == "down" {
+			op, order = ">", "ASC"
+		}
+
+		var otherID, otherPos int
+		err := tx.QueryRowContext(r.Context(),
+			fmt.Sprintf(`SELECT id, position FROM sieve_rules WHERE user_id = ? AND position %s ? ORDER BY position %s LIMIT 1`, op, order),
+			userID, pos).Scan(&otherID, &otherPos)
+		if err == sql.ErrNoRows {
+			return nil // already at the edge
+		}
+		if err != nil {
+			return err
+		}
+
+		if _, err := tx.ExecContext(r.Context(), `UPDATE sieve_rules SET position = ? WHERE id = ?`, otherPos, ruleID); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(r.Context(), `UPDATE sieve_rules SET position = ? WHERE id = ?`, pos, otherID)
+		return err
+	})
+	if err != nil {
+		s.renderFormError(w, err.Error())
+		return
+	}
+
+	w.Header().Set("HX-Redirect", "/users/"+strconv.FormatInt(userID, 10)+"/sieve?flash="+encodeFlash("Rule reordered"))
 	w.WriteHeader(http.StatusOK)
 }
 

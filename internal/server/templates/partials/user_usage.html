@@ -1,0 +1,37 @@
+{{define "user_usage"}}
+{{if .Error}}
+<div class="empty">
+  <span class="empty-title">Usage unavailable</span>
+  <span class="empty-hint">{{.Error}}</span>
+</div>
+{{else}}
+<div class="form-row mb-1">
+  <span class="strong">{{humanBytes .BytesUsed}}</span>
+  <span class="dim text-sm">of {{.QuotaMB}} MB ({{printf "%.0f" .Percent}}%)</span>
+  <span class="dim text-sm">· {{.Messages}} messages</span>
+</div>
+<div style="height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden;margin-bottom:8px;">
+  <div style="height:100%;width:{{printf "%.1f" .Percent}}%;background:var(--brand);"></div>
+</div>
+
+<p class="dim text-sm mb-2">At the current rate this mailbox hits its quota {{.Projection}}.</p>
+
+{{.Sparkline}}
+
+{{if .Folders}}
+<h4 class="strong text-sm mt-3 mb-1">Largest folders</h4>
+<table class="table table-compact">
+  <thead><tr><th>Folder</th><th class="text-right">Size</th><th class="text-right">Messages</th></tr></thead>
+  <tbody>
+    {{range .Folders}}
+    <tr>
+      <td class="mono">{{.Name}}</td>
+      <td class="text-right">{{humanBytes .Bytes}}</td>
+      <td class="text-right">{{.Messages}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}
+{{end}}
+{{end}}

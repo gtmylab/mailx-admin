@@ -23,6 +23,12 @@
       </div>
 
       <label class="field">
+        <span class="field-label">Display name</span>
+        <input class="input" type="text" name="display_name" value="{{.User.DisplayName}}" placeholder="Alice Cooper">
+        <span class="field-hint">Shown in webmail's From: header. Empty uses the local part.</span>
+      </label>
+
+      <label class="field">
         <span class="field-label">Quota (MB)</span>
         <input class="input" type="number" name="quota_mb" min="1" value="{{.User.QuotaMB}}">
       </label>
@@ -61,6 +67,12 @@
         <input class="input" type="text" name="username" required spellcheck="false"
                pattern="[a-zA-Z0-9._-]+" placeholder="alice">
         <span class="field-hint">Local part only. Letters, digits, <span class="mono">. _ -</span></span>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Display name</span>
+        <input class="input" type="text" name="display_name" placeholder="Alice Cooper">
+        <span class="field-hint">Optional. Shown in webmail's From: header.</span>
       </label>
 
       <div class="field">

@@ -52,6 +52,8 @@
     <div class="card-body kv">
       <span class="kv-label">Address</span>
       <span class="kv-value mono">{{$u.Email}}</span>
+      <span class="kv-label mt-3">Display name</span>
+      <span class="kv-value">{{if $u.DisplayName}}{{$u.DisplayName}}{{else}}<span class="dim">{{$u.Username}}</span>{{end}}</span>
       <span class="kv-label mt-3">Username</span>
       <span class="kv-value mono">{{$u.Username}}</span>
       <span class="kv-label mt-3">Domain</span>
@@ -73,4 +75,14 @@
     </div>
   </div>
 </div>
+
+<section class="card mt-4">
+  <div class="card-header">
+    <h2>Mailbox usage</h2>
+    <a class="btn btn-sm" href="/users/{{$u.ID}}/logs">Message audit</a>
+  </div>
+  <div class="card-body" hx-get="/users/{{$u.ID}}/usage" hx-trigger="load" hx-swap="innerHTML">
+    <div class="dim text-sm">Loading…</div>
+  </div>
+</section>
 {{end}}

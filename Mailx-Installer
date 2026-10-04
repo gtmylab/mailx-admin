@@ -2134,7 +2134,7 @@ install_roundcube_application() {
     fi
 
     log_info "Downloading Roundcube..."
-    local RC_VERSION="1.5.0"
+    local RC_VERSION="1.6.11"
     local RC_FILE="roundcubemail-${RC_VERSION}-complete.tar.gz"
     local RC_URL="https://github.com/roundcube/roundcubemail/releases/download/${RC_VERSION}/${RC_FILE}"
 
@@ -3611,6 +3611,71 @@ EOF
     return 0
 }
 
+# In-place upgrade: fetch the newest release binary (checksum-verified), back up
+# the current one, run migrations and reconcile, then restart the service. This
+# is the update path for an *already installed* server — it never runs the
+# fresh-install stages (packages, Postfix/Dovecot config, Roundcube, SSL), so it
+# is fast and leaves the existing config and data untouched.
+update_mailx_admin() {
+    log_info "=== Updating mailx-admin to the latest release ==="
+
+    if [ ! -x "$ADMIN_BINARY_PATH" ] || [ ! -f "$ADMIN_CONFIG_FILE" ]; then
+        log_error "mailx-admin is not installed ($ADMIN_BINARY_PATH or $ADMIN_CONFIG_FILE missing)."
+        log_error "Run option 1 (Install MailX) first."
+        return 1
+    fi
+
+    local old_version
+    old_version=$("$ADMIN_BINARY_PATH" --version 2>/dev/null | head -n1 || echo unknown)
+
+    mkdir -p "$ADMIN_BACKUP_DIR"
+    rm -f "$ADMIN_BACKUP_DIR/mailx-admin.previous"
+    if ! cp "$ADMIN_BINARY_PATH" "$ADMIN_BACKUP_DIR/mailx-admin.previous"; then
+        log_error "Could not back up the current binary — refusing to update."
+        return 1
+    fi
+
+    # A leftover /tmp/mailx-admin from an earlier offline install would otherwise
+    # be preferred over a fresh download, pinning the "update" to a stale build.
+    # Clear the *default* local path unless the operator explicitly supplied
+    # their own build via MAILX_ADMIN_BINARY_LOCAL.
+    if [ -z "$MAILX_ADMIN_BINARY_LOCAL" ]; then
+        rm -f "$ADMIN_BINARY_LOCAL"
+    fi
+
+    # Fetch and verify the newest build. On failure the previous binary is still
+    # at $ADMIN_BINARY_PATH, so the server keeps running the old release.
+    if ! install_binary_from_url "$ADMIN_BINARY_URL" "$ADMIN_BINARY_LOCAL" "$ADMIN_BINARY_PATH" "$ADMIN_BINARY_ASSET" "$ADMIN_BINARY_SHA_URL"; then
+        log_error "Could not download the new binary — the previous build is still in place."
+        rm -f "$ADMIN_BACKUP_DIR/mailx-admin.previous"
+        return 1
+    fi
+    chmod 0755 "$ADMIN_BINARY_PATH"
+
+    local new_version
+    new_version=$("$ADMIN_BINARY_PATH" --version 2>/dev/null | head -n1 || echo unknown)
+
+    log_info "Running database migrations..."
+    if ! "$ADMIN_BINARY_PATH" migrate --config "$ADMIN_CONFIG_FILE"; then
+        log_error "Migration failed — restoring the previous binary."
+        cp "$ADMIN_BACKUP_DIR/mailx-admin.previous" "$ADMIN_BINARY_PATH"
+        chmod 0755 "$ADMIN_BINARY_PATH"
+        return 1
+    fi
+
+    # Re-render Postfix/Dovecot config so it matches the new release's templates.
+    "$ADMIN_BINARY_PATH" reconcile --config "$ADMIN_CONFIG_FILE" 2>&1 | tee -a "$LOG_FILE" || \
+        log_warning "reconcile reported issues — run 'mailx-admin reconcile' manually later"
+
+    systemctl restart "$ADMIN_SERVICE_NAME" || {
+        log_error "mailx-admin failed to start after update. Check: journalctl -u ${ADMIN_SERVICE_NAME} -n 40"
+        return 1
+    }
+
+    log_info "mailx-admin updated: $old_version -> $new_version"
+    "$ADMIN_BINARY_PATH" --version
+}
+
 # Stage 13 body — extracted so it can be called from the main stage runner.
 install_mailx_admin_panel() {
     local EMAIL_DOMAIN=$1
@@ -4194,6 +4259,13 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
+# Non-interactive update shortcut: `./Mailx-Installer update` (or --update)
+# upgrades an existing install without printing the menu.
+if [ "$1" = "update" ] || [ "$1" = "--update" ]; then
+    update_mailx_admin
+    exit $?
+fi
+
 echo "Select an option:"
 echo "1. Install MailX"
 echo "2. Add MailX User"
@@ -4216,8 +4288,9 @@ echo "18. Show Admin Panel URL & Credentials"
 echo "19. Restart Admin Panel"
 echo "20. Exit"
 echo "21. Repair Admin Panel Web Access"
+echo "22. Update mailx-admin to latest release"
 
-read -p "Enter your choice (1-21): " choice
+read -p "Enter your choice (1-22): " choice
 
 case $choice in
     1)
@@ -4384,6 +4457,10 @@ case $choice in
 
     21)
         repair_admin_panel_web
+        ;;
+
+    22)
+        update_mailx_admin
         ;;
 
     *)

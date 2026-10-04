@@ -46,10 +46,20 @@
         </div>
         <div class="text-sm mt-1">{{sieveRuleSummary .}}</div>
       </div>
-      <button class="btn btn-sm btn-danger" hx-delete="/users/{{$u.ID}}/sieve/{{.ID}}"
-              hx-target="#form-error" hx-swap="innerHTML" hx-confirm="Remove this rule?">
-        Remove
-      </button>
+      <div class="page-actions">
+        <button class="btn btn-sm" hx-post="/users/{{$u.ID}}/sieve/{{.ID}}/move" hx-vals='{"dir":"up"}'
+                hx-target="#form-error" hx-swap="innerHTML" title="Move up">↑</button>
+        <button class="btn btn-sm" hx-post="/users/{{$u.ID}}/sieve/{{.ID}}/move" hx-vals='{"dir":"down"}'
+                hx-target="#form-error" hx-swap="innerHTML" title="Move down">↓</button>
+        <button class="btn btn-sm" hx-post="/users/{{$u.ID}}/sieve/{{.ID}}/toggle"
+                hx-target="#form-error" hx-swap="innerHTML">
+          {{if .Enabled}}Disable{{else}}Enable{{end}}
+        </button>
+        <button class="btn btn-sm btn-danger" hx-delete="/users/{{$u.ID}}/sieve/{{.ID}}"
+                hx-target="#form-error" hx-swap="innerHTML" hx-confirm="Remove this rule?">
+          Remove
+        </button>
+      </div>
     </div>
     {{end}}
   </div>

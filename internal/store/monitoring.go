@@ -505,3 +505,96 @@ func (s *Store) Deliverability(ctx context.Context, since time.Time) ([]Delivera
 	}
 	return out, rows.Err()
 }
+
+// DayVolume is one day of mail traffic, split by outcome.
+type DayVolume struct {
+	Day      time.Time
+	Sent     int64 // outbound (postfix/smtp) deliveries that completed
+	Received int64 // local deliveries (virtual/dovecot/lmtp) that completed
+	Bounced  int64
+	Deferred int64
+}
+
+// MailVolumeByDay returns per-day traffic counts from since (inclusive, truncated
+// to midnight) through today, filling days with no traffic with zeroes so the
+// chart axis is continuous. Days are UTC, matching the mail_events timestamps.
+func (s *Store) MailVolumeByDay(ctx context.Context, since time.Time) ([]DayVolume, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT strftime('%Y-%m-%d', ts) AS day,
+		       COALESCE(SUM(CASE WHEN service = 'postfix/smtp' AND action = 'delivery' AND status = 'sent' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN action = 'delivery' AND status = 'sent' AND service <> 'postfix/smtp' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN status = 'bounced' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN status = 'deferred' THEN 1 ELSE 0 END), 0)
+		FROM mail_events
+		WHERE ts >= ?
+		GROUP BY day
+		ORDER BY day ASC`, since)
+	if err != nil {
+		return nil, fmt.Errorf("mail volume by day: %w", err)
+	}
+	defer rows.Close()
+
+	byDay := map[string]DayVolume{}
+	for rows.Next() {
+		var day string
+		var v DayVolume
+		if err := rows.Scan(&day, &v.Sent, &v.Received, &v.Bounced, &v.Deferred); err != nil {
+			return nil, fmt.Errorf("scan mail volume: %w", err)
+		}
+		if t, err := time.Parse("2006-01-02", day); err == nil {
+			v.Day = t
+			byDay[day] = v
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	start := since.UTC().Truncate(24 * time.Hour)
+	end := time.Now().UTC().Truncate(24 * time.Hour)
+	var out []DayVolume
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		key := d.Format("2006-01-02")
+		if v, ok := byDay[key]; ok {
+			out = append(out, v)
+		} else {
+			out = append(out, DayVolume{Day: d})
+		}
+	}
+	return out, nil
+}
+
+// DomainCount is one recipient domain's traffic count.
+type DomainCount struct {
+	Domain string
+	Count  int64
+}
+
+// TopOutboundDomains returns the recipient domains the server has sent the most
+// mail to since the given time, up to n.
+func (s *Store) TopOutboundDomains(ctx context.Context, since time.Time, n int) ([]DomainCount, error) {
+	if n <= 0 {
+		n = 5
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT COALESCE(domain, ''), COUNT(*)
+		FROM mail_events
+		WHERE ts >= ? AND service = 'postfix/smtp' AND action = 'delivery' AND status = 'sent'
+		GROUP BY COALESCE(domain, '')
+		ORDER BY COUNT(*) DESC
+		LIMIT ?`, since, n)
+	if err != nil {
+		return nil, fmt.Errorf("top outbound domains: %w", err)
+	}
+	defer rows.Close()
+
+	var out []DomainCount
+	for rows.Next() {
+		var d DomainCount
+		if err := rows.Scan(&d.Domain, &d.Count); err != nil {
+			return nil, fmt.Errorf("scan top domain: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}

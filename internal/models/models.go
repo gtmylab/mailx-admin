@@ -48,6 +48,7 @@ type User struct {
 	DomainID     int64
 	Username     string
 	Email        string
+	DisplayName  string // owner's display name; empty = derive from the local part
 	PasswordHash string
 	QuotaMB      int
 	Active       bool

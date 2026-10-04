@@ -42,11 +42,12 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	isAdmin := r.FormValue("is_admin") == "on"
 
 	input := mutations.CreateUserInput{
-		DomainID: domainID,
-		Username: r.FormValue("username"),
-		Password: r.FormValue("password"),
-		QuotaMB:  quota,
-		IsAdmin:  isAdmin,
+		DomainID:    domainID,
+		Username:    r.FormValue("username"),
+		Password:    r.FormValue("password"),
+		QuotaMB:     quota,
+		IsAdmin:     isAdmin,
+		DisplayName: r.FormValue("display_name"),
 	}
 
 	actor := mutations.Actor{
@@ -144,6 +145,9 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 	if v := r.FormValue("is_admin"); v != "" {
 		b := v == "on" || v == "true" || v == "1"
 		in.IsAdmin = &b
+	}
+	if v := r.FormValue("display_name"); v != "" {
+		in.DisplayName = &v
 	}
 
 	actor := mutations.Actor{

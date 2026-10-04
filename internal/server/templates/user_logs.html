@@ -1,0 +1,72 @@
+{{define "content"}}
+{{$u := .Data.User}}
+<div class="page-header">
+  <div>
+    <a href="/users/{{$u.ID}}" class="dim text-xs">← {{$u.Email}}</a>
+    <h1 class="mt-1">Message audit</h1>
+    <p class="page-sub">Messages sent and received by {{$u.Email}} — retained up to 365 days.</p>
+  </div>
+</div>
+
+<form class="form-row mb-3" hx-get="/users/{{$u.ID}}/logs" hx-target="#user-log-rows" hx-swap="innerHTML" hx-push-url="true">
+  <select class="select" name="status">
+    <option value="">All statuses</option>
+    <option value="sent" {{if eq .Data.Status "sent"}}selected{{end}}>Sent</option>
+    <option value="deferred" {{if eq .Data.Status "deferred"}}selected{{end}}>Deferred</option>
+    <option value="bounced" {{if eq .Data.Status "bounced"}}selected{{end}}>Bounced</option>
+    <option value="rejected" {{if eq .Data.Status "rejected"}}selected{{end}}>Rejected</option>
+  </select>
+  <input class="input" type="text" name="q" value="{{.Data.Search}}" placeholder="Search message text">
+  <button class="btn btn-primary" type="submit">Filter</button>
+</form>
+
+<div id="user-log-rows">
+  {{template "user_log_rows" .}}
+</div>
+{{end}}
+
+{{define "user_log_rows"}}
+{{$u := .User}}
+<div class="card">
+  <div class="card-header">
+    <h2>Events <span class="badge">{{.Total}}</span></h2>
+  </div>
+
+  {{if .Events}}
+  <table class="table table-stack">
+    <thead>
+      <tr><th>Time</th><th>Service</th><th>From</th><th>To</th><th>Status</th><th>Message</th></tr>
+    </thead>
+    <tbody>
+      {{range .Events}}
+      <tr>
+        <td data-label="Time" class="nowrap dim">{{.Ts.Format "2006-01-02 15:04"}}</td>
+        <td data-label="Service" class="mono">{{.Service}}</td>
+        <td data-label="From" class="mono">{{if .FromAddr}}{{.FromAddr}}{{else}}—{{end}}</td>
+        <td data-label="To" class="mono">{{if .ToAddr}}{{.ToAddr}}{{else}}—{{end}}</td>
+        <td data-label="Status">{{if .Status}}<span class="badge {{statusClass .Status}}">{{.Status}}</span>{{end}}</td>
+        <td data-label="Message" class="dim text-sm">{{.Message}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+
+  <div class="card-footer form-row">
+    {{if gt .First 1}}
+    <a class="btn btn-sm" hx-get="/users/{{$u.ID}}/logs?offset={{.PrevOffset}}&status={{.Status}}&q={{.Search}}"
+       hx-target="#user-log-rows" hx-swap="innerHTML" hx-push-url="true">Previous</a>
+    {{end}}
+    <span class="dim text-sm">{{.First}}–{{.Last}} of {{.Total}}</span>
+    {{if .HasMore}}
+    <a class="btn btn-sm" hx-get="/users/{{$u.ID}}/logs?offset={{.NextOffset}}&status={{.Status}}&q={{.Search}}"
+       hx-target="#user-log-rows" hx-swap="innerHTML" hx-push-url="true">Next</a>
+    {{end}}
+  </div>
+  {{else}}
+  <div class="empty">
+    <span class="empty-title">No messages</span>
+    <span class="empty-hint">Nothing has been sent or received by this mailbox in the selected window.</span>
+  </div>
+  {{end}}
+</div>
+{{end}}

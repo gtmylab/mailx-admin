@@ -36,6 +36,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"Aliases":  len(snap.Aliases),
 		"Counts":   counts,
 		"Services": checkServices(ctx),
+		"Traffic":  s.buildTraffic(ctx),
 	}))
 }
 

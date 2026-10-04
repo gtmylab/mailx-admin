@@ -6,6 +6,43 @@
   {{template "stat" (dict "Label" "Services" "Value" (len .Data.Services) "Href" "/ports")}}
 </div>
 
+{{with .Data.Traffic}}
+<section class="card mb-4">
+  <div class="card-header">
+    <h2>Email traffic</h2>
+    <div class="page-actions">
+      <button class="btn btn-sm" hx-get="/dashboard/traffic?days=7" hx-target="#traffic-chart" hx-swap="innerHTML">7 days</button>
+      <button class="btn btn-sm" hx-get="/dashboard/traffic?days=30" hx-target="#traffic-chart" hx-swap="innerHTML">30 days</button>
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="grid grid-cols-4 gap-4 mb-4">
+      <div class="stat"><span class="stat-label">Sent today</span><span class="stat-value">{{.SentToday}}</span></div>
+      <div class="stat"><span class="stat-label">Sent this week</span><span class="stat-value">{{.SentWeek}}</span></div>
+      <div class="stat"><span class="stat-label">Sent this month</span><span class="stat-value">{{.SentMonth}}</span></div>
+      <div class="stat"><span class="stat-label">Received this month</span><span class="stat-value">{{.ReceivedMonth}}</span></div>
+    </div>
+
+    <div id="traffic-chart">{{.Chart}}</div>
+
+    {{if .TopDomains}}
+    <h3 class="strong text-sm mt-4 mb-2">Top outbound destinations (30 days)</h3>
+    <table class="table table-compact">
+      <thead><tr><th>Domain</th><th class="text-right">Sent</th></tr></thead>
+      <tbody>
+        {{range .TopDomains}}
+        <tr>
+          <td class="mono">{{if .Domain}}{{.Domain}}{{else}}<span class="dim">(unknown)</span>{{end}}</td>
+          <td class="text-right">{{.Count}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{end}}
+  </div>
+</section>
+{{end}}
+
 <div class="grid grid-cols-2 gap-4">
   <section class="card">
     <div class="card-header">
@@ -91,4 +128,8 @@
   <span class="stat-label">{{.Label}}</span>
   <span class="stat-value">{{.Value}}</span>
 </a>
+{{end}}
+
+{{define "traffic_chart"}}
+{{.Chart}}
 {{end}}

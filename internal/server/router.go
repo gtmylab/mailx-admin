@@ -35,6 +35,7 @@ func (s *Server) buildRouter() http.Handler {
 	// Protected routes
 	protected := http.NewServeMux()
 	protected.HandleFunc("GET /", s.handleDashboard)
+	protected.HandleFunc("GET /dashboard/traffic", s.handleDashboardTraffic)
 	protected.HandleFunc("GET /events", s.handleSSE)
 
 	// Service health (HTMX partial refreshed by the dashboard)
@@ -54,6 +55,8 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("POST /users/{id}/reset-password", s.handleUserResetPassword)
 	protected.HandleFunc("GET /users/{id}/reset-password-form", s.handleUserResetPasswordForm)
 	protected.HandleFunc("GET /users/{id}/edit", s.handleUserEdit)
+	protected.HandleFunc("GET /users/{id}/usage", s.handleUserUsage)
+	protected.HandleFunc("GET /users/{id}/logs", s.handleUserLogs)
 
 	// Domains
 	protected.HandleFunc("GET /domains", s.handleDomainsList)
@@ -129,6 +132,8 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("GET /users/{id}/sieve/new", s.handleSieveRuleNew)
 	protected.HandleFunc("POST /users/{id}/sieve", s.handleSieveRuleCreate)
 	protected.HandleFunc("DELETE /users/{uid}/sieve/{rid}", s.handleSieveRuleDelete)
+	protected.HandleFunc("POST /users/{uid}/sieve/{rid}/toggle", s.handleSieveRuleToggle)
+	protected.HandleFunc("POST /users/{uid}/sieve/{rid}/move", s.handleSieveRuleMove)
 
 	protected.HandleFunc("GET /backup", s.handleBackupPage)
 	protected.HandleFunc("POST /backup", s.handleBackupCreate)

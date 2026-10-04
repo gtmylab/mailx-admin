@@ -6,13 +6,12 @@ package jobs
 
 import (
 	"context"
-	"io/fs"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gtmylab/mailx-admin/internal/dns"
+	"github.com/gtmylab/mailx-admin/internal/maildir"
 	"github.com/gtmylab/mailx-admin/internal/models"
 	"github.com/gtmylab/mailx-admin/internal/store"
 	"github.com/gtmylab/mailx-admin/internal/webhooks"
@@ -115,7 +114,7 @@ func (m *Manager) SampleQuotas(ctx context.Context) error {
 	}
 
 	for _, u := range users {
-		bytesUsed, messages, err := maildirUsage(u.MaildirPath())
+		bytesUsed, messages, err := maildir.Total(u.MaildirPath())
 		if err != nil {
 			m.logger.Debug("skip quota sample", "user", u.Email, "err", err)
 			continue
@@ -210,35 +209,4 @@ func nextDelayAt(now time.Time, hour, minute int) time.Duration {
 		next = next.AddDate(0, 0, 1)
 	}
 	return next.Sub(now)
-}
-
-// maildirUsage sums the sizes of the delivered messages under a Maildir and
-// counts them. Only cur/ and new/ hold delivered mail — tmp/ is in-flight — and
-// dot-folders such as .Sent are Maildirs too, so the walk counts them the same
-// way. The Maildir/ root itself is excluded, which is what a caller measuring
-// usage wants.
-func maildirUsage(root string) (bytes int64, messages int, err error) {
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		parent := filepath.Base(filepath.Dir(path))
-		if parent != "cur" && parent != "new" {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		messages++
-		bytes += info.Size()
-		return nil
-	})
-	return bytes, messages, err
 }

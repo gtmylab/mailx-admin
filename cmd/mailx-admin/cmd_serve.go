@@ -91,7 +91,10 @@ func cmdServe() *cobra.Command {
 				}
 			}()
 
-			// Daily prune (30-day retention)
+			// Periodic prune of old mail events. Retention follows the configured
+			// logs.retention_days (default 365) so per-user message audit stays
+			// available for a full year.
+			retention := time.Duration(cfg.Logs.RetentionDays) * 24 * time.Hour
 			go func() {
 				ticker := time.NewTicker(6 * time.Hour)
 				defer ticker.Stop()
@@ -100,7 +103,7 @@ func cmdServe() *cobra.Command {
 					case <-ctx.Done():
 						return
 					case <-ticker.C:
-						if n, err := ing.PruneOld(ctx, 30*24*time.Hour); err != nil {
+						if n, err := ing.PruneOld(ctx, retention); err != nil {
 							logger.Warn("prune failed", "err", err)
 						} else if n > 0 {
 							logger.Info("pruned old events", "count", n)

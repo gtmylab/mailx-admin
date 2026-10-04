@@ -60,7 +60,7 @@ func (s *Store) listDomains(ctx context.Context, tx *sql.Tx) ([]models.Domain, e
 // only one query is updated, the panel quietly renders one shape of mailbox as
 // another — which is exactly how system mailboxes used to be written into
 // /var/mail/vhosts instead of /home.
-const userColumns = `u.id, u.domain_id, u.username, u.email, u.password_hash,
+const userColumns = `u.id, u.domain_id, u.username, u.email, u.display_name, u.password_hash,
                u.quota_mb, u.active, u.is_admin, u.last_login,
                u.created_at, u.updated_at, d.name,
                u.kind, COALESCE(u.sys_uid, 0), COALESCE(u.sys_gid, 0), COALESCE(u.home, '')`
@@ -75,7 +75,7 @@ func scanUsers(rows *sql.Rows) ([]models.User, error) {
 		var lastLogin sql.NullTime
 
 		if err := rows.Scan(
-			&u.ID, &u.DomainID, &u.Username, &u.Email, &u.PasswordHash,
+			&u.ID, &u.DomainID, &u.Username, &u.Email, &u.DisplayName, &u.PasswordHash,
 			&u.QuotaMB, &active, &isAdmin, &lastLogin,
 			&u.CreatedAt, &u.UpdatedAt, &u.DomainName,
 			&u.Kind, &u.SysUID, &u.SysGID, &u.Home,

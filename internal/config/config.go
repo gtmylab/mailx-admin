@@ -142,7 +142,7 @@ func Load(path string) (*Config, error) {
 		cfg.Logs.MailLogPath = "/var/log/mail.log"
 	}
 	if cfg.Logs.RetentionDays == 0 {
-		cfg.Logs.RetentionDays = 30
+		cfg.Logs.RetentionDays = 365
 	}
 
 	// Roundcube's defaults are filled in even when the section is disabled:
