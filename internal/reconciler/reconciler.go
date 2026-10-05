@@ -340,6 +340,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 			service: "postfix",
 		},
 		{
+			// smarthost credentials. 0600 root:root: this file holds the relay
+			// password in plaintext and must not be world-readable.
+			path:    filepath.Join(r.cfg.PostfixConfDir, "sasl_passwd"),
+			content: RenderSaslPasswd(snap.Relay),
+			mode:    0o600,
+			service: "postfix",
+		},
+		{
 			// 0640 root:dovecot, not 0600 root:root as this used to be written.
 			// Dovecot's auth process drops to the unprivileged `dovecot` user
 			// (default_internal_user) and is the process that opens this file:
@@ -512,7 +520,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
-		for _, name := range []string{"virtual", "vmailbox", "vuidmaps", "vgidmaps", "helo_access", "sender_transport", "suppressions"} {
+		for _, name := range []string{"virtual", "vmailbox", "vuidmaps", "vgidmaps", "helo_access", "sender_transport", "suppressions", "sasl_passwd"} {
 			path := filepath.Join(r.cfg.PostfixConfDir, name)
 			if fileChanged(res.Changes, path) {
 				if err := runCmd(ctx, commandTimeout, "postmap", path); err != nil {

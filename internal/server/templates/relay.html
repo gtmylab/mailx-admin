@@ -1,0 +1,62 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Outbound relay</h1>
+    <p class="page-sub">Route outbound mail through a smarthost, or deliver directly.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Delivery mode</h2>
+  </div>
+  <div class="card-body">
+    <form class="form" hx-post="/system/relay" hx-target="#form-error" hx-swap="innerHTML">
+      <div class="form-error-slot" data-modal-error></div>
+
+      <label class="check-row">
+        <input class="checkbox" type="checkbox" name="enabled" {{if .Data.Relay.Enabled}}checked{{end}}>
+        <span>Relay through a smarthost (ISP that blocks outbound SMTP)</span>
+      </label>
+
+      <div class="grid grid-cols-2 gap-4">
+        <label class="field">
+          <span class="field-label">Relay host</span>
+          <input class="input" type="text" name="host" value="{{.Data.Relay.Host}}" placeholder="smtp.example.net">
+          <span class="field-hint">e.g. smtp.mailgun.org, smtp-relay.gmail.com</span>
+        </label>
+        <label class="field">
+          <span class="field-label">Port</span>
+          <input class="input" type="number" name="port" value="{{.Data.Relay.Port}}" placeholder="587">
+          <span class="field-hint">587 (STARTTLS) or 465 (SMTPS)</span>
+        </label>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <label class="field">
+          <span class="field-label">Username</span>
+          <input class="input" type="text" name="username" value="{{.Data.Relay.Username}}" autocomplete="off">
+        </label>
+        <label class="field">
+          <span class="field-label">Password</span>
+          <input class="input" type="password" name="password" placeholder="leave blank to keep" autocomplete="new-password">
+          <span class="field-hint">Stored in /etc/postfix/sasl_passwd (0600).</span>
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Encryption</span>
+        <select class="select" name="tls">
+          <option value="" {{if eq .Data.Relay.TLSMode ""}}selected{{end}}>None</option>
+          <option value="starttls" {{if eq .Data.Relay.TLSMode "starttls"}}selected{{end}}>STARTTLS</option>
+          <option value="smtps" {{if eq .Data.Relay.TLSMode "smtps"}}selected{{end}}>SMTPS (implicit TLS)</option>
+        </select>
+      </label>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Save relay settings</button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}

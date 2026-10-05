@@ -43,6 +43,8 @@
     <div class="nav-group">
       <div class="nav-label">System</div>
       {{template "nav-item" (dict "Href" "/system/outbound-ips" "Label" "Outbound IPs" "Icon" "server" "Active" (eq .ActiveNav "outbound-ips"))}}
+      {{template "nav-item" (dict "Href" "/system/relay" "Label" "Outbound relay" "Icon" "relay" "Active" (eq .ActiveNav "relay"))}}
+      {{template "nav-item" (dict "Href" "/system/postfix" "Label" "Postfix config" "Icon" "postfix" "Active" (eq .ActiveNav "postfix"))}}
       {{template "nav-item" (dict "Href" "/settings/api" "Label" "API & Webhooks" "Icon" "api" "Active" (eq .ActiveNav "api"))}}
       {{template "nav-item" (dict "Href" "/backup" "Label" "Backups" "Icon" "backup" "Active" (eq .ActiveNav "backup"))}}
     </div>

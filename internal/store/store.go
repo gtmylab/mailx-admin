@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 
 	"github.com/gtmylab/mailx-admin/internal/db"
 	"github.com/gtmylab/mailx-admin/internal/models"
@@ -423,6 +424,11 @@ func (s *Store) SnapshotTx(ctx context.Context, tx *sql.Tx) (*models.Snapshot, e
 		return nil, err
 	}
 
+	relay, err := s.loadRelayTx(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+
 	return &models.Snapshot{
 		Domains:      domains,
 		Users:        users,
@@ -431,5 +437,52 @@ func (s *Store) SnapshotTx(ctx context.Context, tx *sql.Tx) (*models.Snapshot, e
 		SieveRules:   sieveRules,
 		OutboundIPs:  outboundIPs,
 		Suppressions: suppressions,
+		Relay:        relay,
+	}, nil
+}
+
+// settingTx reads one settings value inside a transaction, returning "" when the
+// key is absent.
+func (s *Store) settingTx(ctx context.Context, tx *sql.Tx, key string) (string, error) {
+	var v string
+	err := tx.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return v, err
+}
+
+// loadRelayTx reads the outbound smarthost settings. A disabled relay (or one
+// with no host) returns an empty config, which means "deliver directly".
+func (s *Store) loadRelayTx(ctx context.Context, tx *sql.Tx) (*models.RelayConfig, error) {
+	enabled, err := s.settingTx(ctx, tx, "relay_enabled")
+	if err != nil {
+		return nil, err
+	}
+	if enabled != "1" && enabled != "true" {
+		return &models.RelayConfig{}, nil
+	}
+
+	host, err := s.settingTx(ctx, tx, "relay_host")
+	if err != nil {
+		return nil, err
+	}
+	if host == "" {
+		return &models.RelayConfig{}, nil
+	}
+
+	portStr, _ := s.settingTx(ctx, tx, "relay_port")
+	username, _ := s.settingTx(ctx, tx, "relay_username")
+	password, _ := s.settingTx(ctx, tx, "relay_password")
+	tlsMode, _ := s.settingTx(ctx, tx, "relay_tls")
+
+	port, _ := strconv.Atoi(portStr)
+	return &models.RelayConfig{
+		Enabled:  true,
+		Host:     host,
+		Port:     port,
+		Username: username,
+		Password: password,
+		TLSMode:  tlsMode,
 	}, nil
 }

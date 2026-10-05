@@ -1,0 +1,53 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Postfix config</h1>
+    <p class="page-sub">
+      Edit <span class="mono">{{.Data.ConfDir}}/main.cf</span> and
+      <span class="mono">master.cf</span>. Validate and reload after saving.
+    </p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-sm" hx-post="/system/postfix/check" hx-target="#postfix-result" hx-swap="innerHTML">Check config</button>
+    <button class="btn btn-sm" hx-post="/system/postfix/reload" hx-target="#postfix-result" hx-swap="innerHTML"
+            hx-confirm="Reload Postfix with the current config?">Reload</button>
+    <button class="btn btn-sm btn-danger" hx-post="/system/postfix/restart" hx-target="#postfix-result" hx-swap="innerHTML"
+            hx-confirm="Restart Postfix? Mail flow pauses briefly.">Restart</button>
+  </div>
+</div>
+
+<div id="postfix-result" class="form-error-slot" role="status" aria-live="polite"></div>
+
+<div class="alert alert-warn">
+  Settings inside the <span class="mono"># BEGIN/END mailx-admin managed block</span> are rendered from
+  the database and will be overwritten on the next sync. Put unmanaged settings outside that block.
+</div>
+
+<div class="card mb-4">
+  <div class="card-header"><h2 class="mono">main.cf</h2></div>
+  <form class="card-body" hx-post="/system/postfix/file/main.cf" hx-target="#postfix-result" hx-swap="innerHTML">
+    <textarea class="input mono" name="content" rows="18" spellcheck="false" style="width:100%;font-family:var(--font-mono);">{{.Data.MainCF}}</textarea>
+    <div class="form-actions mt-2">
+      <button type="submit" class="btn btn-primary">Save main.cf</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-header"><h2 class="mono">master.cf</h2></div>
+  <form class="card-body" hx-post="/system/postfix/file/master.cf" hx-target="#postfix-result" hx-swap="innerHTML">
+    <textarea class="input mono" name="content" rows="18" spellcheck="false" style="width:100%;font-family:var(--font-mono);">{{.Data.MasterCF}}</textarea>
+    <div class="form-actions mt-2">
+      <button type="submit" class="btn btn-primary">Save master.cf</button>
+    </div>
+  </form>
+</div>
+{{end}}
+
+{{define "postfix_result"}}
+{{if .Error}}
+<div class="alert alert-err"><pre class="mono text-sm" style="white-space:pre-wrap;margin:0;">{{.Result}}</pre></div>
+{{else}}
+<div class="alert alert-ok"><pre class="mono text-sm" style="white-space:pre-wrap;margin:0;">{{.Result}}</pre></div>
+{{end}}
+{{end}}

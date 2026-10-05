@@ -41,6 +41,10 @@
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="7" rx="2"/><rect x="3.5" y="13" width="17" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01M11 7.5h6M11 16.5h6"/></svg>
 {{- else if eq . "api"}}
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="12" r="3.2"/><path d="M10.3 10.3 20 20M13 5.5l1.5-1.5 2 2L15 7.5M18 7l1.8-1.8 1 1L19 8"/></svg>
+{{- else if eq . "relay"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h13M13 6l6 6-6 6"/><path d="M20 3v3M20 18v3"/></svg>
+{{- else if eq . "postfix"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8l4.5 4.5V20.5H6z"/><path d="M13.5 3.5V8H18"/><path d="m9.5 15.5 3-3 2 2"/><path d="M10 18h5"/></svg>
 {{- end}}
 {{- else}}
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="7.5"/></svg>

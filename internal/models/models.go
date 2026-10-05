@@ -157,6 +157,18 @@ type Policy struct {
 	CreatedAt time.Time
 }
 
+// RelayConfig is the outbound smarthost settings. Enabled=false means Postfix
+// delivers directly (no relayhost). TLSMode is "", "starttls" (port 587) or
+// "smtps" (port 465).
+type RelayConfig struct {
+	Enabled  bool
+	Host     string
+	Port     int
+	Username string
+	Password string
+	TLSMode  string
+}
+
 // Snapshot is what the reconciler consumes. Immutable, rendered from DB.
 type Snapshot struct {
 	Domains    []Domain
@@ -169,6 +181,9 @@ type Snapshot struct {
 	// per-IP Postfix transports. Suppressions is the recipient suppression list.
 	OutboundIPs  []OutboundIP
 	Suppressions []Suppression
+
+	// Relay is the outbound smarthost, nil or disabled when delivering directly.
+	Relay *RelayConfig
 }
 
 // PrimaryDomain returns the primary domain, or the first one if none is marked.

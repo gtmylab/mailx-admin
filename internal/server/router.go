@@ -156,6 +156,17 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("POST /system/outbound-ips/{id}/rules", s.handleOutboundRuleCreate)
 	protected.HandleFunc("DELETE /system/outbound-ips/{id}/rules/{rid}", s.handleOutboundRuleDelete)
 
+	// Outbound relay (smarthost)
+	protected.HandleFunc("GET /system/relay", s.handleRelayPage)
+	protected.HandleFunc("POST /system/relay", s.handleRelaySave)
+
+	// Postfix config editor
+	protected.HandleFunc("GET /system/postfix", s.handlePostfixPage)
+	protected.HandleFunc("POST /system/postfix/file/{name}", s.handlePostfixFileSave)
+	protected.HandleFunc("POST /system/postfix/check", s.handlePostfixCheck)
+	protected.HandleFunc("POST /system/postfix/reload", s.handlePostfixReload)
+	protected.HandleFunc("POST /system/postfix/restart", s.handlePostfixRestart)
+
 	// API keys & webhooks
 	protected.HandleFunc("GET /settings/api", s.handleAPISettingsPage)
 	protected.HandleFunc("POST /settings/api/keys", s.handleAPIKeyCreate)

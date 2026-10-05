@@ -3676,6 +3676,60 @@ update_mailx_admin() {
     "$ADMIN_BINARY_PATH" --version
 }
 
+# Roundcube webmail vhost with SSL on 8080. Uses the Let's Encrypt certificate
+# for the mail hostname when it exists (after Stage 8), otherwise a self-signed
+# one so the vhost still starts before certbot has run.
+write_roundcube_ssl_vhost() {
+    local hostname=$1
+    local cert_file key_file
+
+    if [ -f "/etc/letsencrypt/live/${hostname}/fullchain.pem" ]; then
+        cert_file="/etc/letsencrypt/live/${hostname}/fullchain.pem"
+        key_file="/etc/letsencrypt/live/${hostname}/privkey.pem"
+        log_info "Roundcube SSL: using Let's Encrypt certificate for ${hostname}"
+    else
+        mkdir -p /etc/ssl/roundcube
+        if [ ! -f "/etc/ssl/roundcube/roundcube.crt" ]; then
+            log_info "Generating a self-signed certificate for Roundcube (replaced by Let's Encrypt in Stage 8)..."
+            openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+                -keyout /etc/ssl/roundcube/roundcube.key \
+                -out /etc/ssl/roundcube/roundcube.crt \
+                -subj "/CN=${hostname}" 2>/dev/null
+        fi
+        cert_file="/etc/ssl/roundcube/roundcube.crt"
+        key_file="/etc/ssl/roundcube/roundcube.key"
+        log_info "Roundcube SSL: using self-signed certificate for ${hostname}"
+    fi
+
+    cat <<EOF > /etc/apache2/sites-available/roundcube.conf
+<VirtualHost *:8080>
+    ServerName ${hostname}
+    DocumentRoot /var/www/html/roundcube
+
+    SSLEngine on
+    SSLCertificateFile ${cert_file}
+    SSLCertificateKeyFile ${key_file}
+
+    <Directory /var/www/html/roundcube/>
+        Options +FollowSymlinks
+        AllowOverride All
+        <IfModule mod_dir.c>
+            DirectoryIndex index.php
+        </IfModule>
+    </Directory>
+    <FilesMatch \.php\$>
+        SetHandler "proxy:unix:/run/php/php8.1-fpm.sock|fcgi://localhost"
+    </FilesMatch>
+    ErrorLog \${APACHE_LOG_DIR}/roundcube_error.log
+    CustomLog \${APACHE_LOG_DIR}/roundcube_access.log combined
+</VirtualHost>
+EOF
+
+    a2enmod ssl > /dev/null 2>&1 || true
+    a2ensite roundcube.conf > /dev/null 2>&1 || true
+    systemctl reload apache2 2>/dev/null || true
+}
+
 # Stage 13 body — extracted so it can be called from the main stage runner.
 install_mailx_admin_panel() {
     local EMAIL_DOMAIN=$1
@@ -4027,24 +4081,9 @@ EOF
         mkdir -p /var/www/html/{roundcube,mailx,adminportal,phpmyadmin,.well-known/acme-challenge}
         chown -R www-data:www-data /var/www/html
 
-        cat <<EOF > /etc/apache2/sites-available/roundcube.conf
-<VirtualHost *:8080>
-    ServerName $HOSTNAME
-    DocumentRoot /var/www/html/roundcube
-    <Directory /var/www/html/roundcube/>
-        Options +FollowSymlinks
-        AllowOverride All
-        <IfModule mod_dir.c>
-            DirectoryIndex index.php
-        </IfModule>
-    </Directory>
-    <FilesMatch \.php\$>
-        SetHandler "proxy:unix:/run/php/php8.1-fpm.sock|fcgi://localhost"
-    </FilesMatch>
-    ErrorLog \${APACHE_LOG_DIR}/roundcube_error.log
-    CustomLog \${APACHE_LOG_DIR}/roundcube_access.log combined
-</VirtualHost>
-EOF
+        # Roundcube on 8080 with SSL (Let's Encrypt when available, self-signed
+        # before Stage 8 runs certbot).
+        write_roundcube_ssl_vhost "$HOSTNAME"
 
         cat <<EOF > /etc/apache2/sites-available/adminportal.conf
 <VirtualHost *:9090>
@@ -4122,6 +4161,9 @@ EOF
 
         if manage_ssl_certificates install "$HOSTNAME"; then
             mark_stage_complete "ssl_installation"
+            # Roundcube's 8080 vhost can now use the Let's Encrypt cert instead
+            # of the self-signed placeholder from Stage 6.
+            write_roundcube_ssl_vhost "$HOSTNAME"
         else
             log_warning "SSL certificate installation failed. Will retry on next run."
         fi
@@ -4232,7 +4274,7 @@ EOF
             DKIM_RECORD=$(cat /tmp/dkim_txt_record.txt)
         fi
 
-        send_notification_email "$ADMIN_MAILX_EMAIL" "http://$HOSTNAME:8080" "roundcube" \
+        send_notification_email "$ADMIN_MAILX_EMAIL" "https://$HOSTNAME:8080" "roundcube" \
             "$(cat /usr/local/roundcube_db_pwd.txt)" \
             "http://$EMAIL_DOMAIN:8081" "$DKIM_RECORD" "default" "http://$HOSTNAME:8082"
 
@@ -4289,8 +4331,9 @@ echo "19. Restart Admin Panel"
 echo "20. Exit"
 echo "21. Repair Admin Panel Web Access"
 echo "22. Update mailx-admin to latest release"
+echo "23. Enable SSL on webmail (Roundcube)"
 
-read -p "Enter your choice (1-22): " choice
+read -p "Enter your choice (1-23): " choice
 
 case $choice in
     1)
@@ -4461,6 +4504,13 @@ case $choice in
 
     22)
         update_mailx_admin
+        ;;
+
+    23)
+        web_host=$(cat /etc/mailname 2>/dev/null | tr -d '[:space:]')
+        web_host="${web_host:-$(hostname -f 2>/dev/null || hostname)}"
+        write_roundcube_ssl_vhost "$web_host"
+        log_info "Roundcube webmail now serves HTTPS on 8080 (https://${web_host}:8080)"
         ;;
 
     *)

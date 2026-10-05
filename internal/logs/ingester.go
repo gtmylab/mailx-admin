@@ -142,6 +142,16 @@ func (ing *Ingester) ingestOnce(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("insert event: %w", err)
 		}
+
+		// A Dovecot login (webmail/IMAP/POP3) is the moment the mailbox owner
+		// really used the account. Mirror it onto users.last_login so the user
+		// page's "Last login" reflects actual usage, not just panel activity.
+		if ev.Action == "login" && ev.FromAddr != "" {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE users SET last_login = ? WHERE LOWER(email) = LOWER(?)`, ev.Ts, ev.FromAddr); err != nil {
+				return fmt.Errorf("update last login: %w", err)
+			}
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

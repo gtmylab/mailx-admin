@@ -88,8 +88,46 @@ func RenderPostfixMainCF(snap *models.Snapshot, hostname string) []byte {
 	b.WriteString("\n# Header checks\n")
 	b.WriteString("header_checks = regexp:/etc/postfix/header_checks\n")
 
+	// Outbound smarthost. When configured, every outbound message goes through
+	// the relay instead of direct delivery — the escape hatch for hosts whose
+	// provider/ISP blocks outbound SMTP.
+	if snap.Relay != nil && snap.Relay.Enabled {
+		relayHost := snap.Relay.Host
+		if snap.Relay.Port > 0 {
+			relayHost = fmt.Sprintf("[%s]:%d", snap.Relay.Host, snap.Relay.Port)
+		}
+		b.WriteString("\n# Outbound relay\n")
+		fmt.Fprintf(&b, "relayhost = %s\n", relayHost)
+		if snap.Relay.Username != "" {
+			b.WriteString("smtp_sasl_auth_enable = yes\n")
+			b.WriteString("smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd\n")
+			b.WriteString("smtp_sasl_security_options = noanonymous\n")
+		}
+		switch snap.Relay.TLSMode {
+		case "smtps":
+			b.WriteString("smtp_use_tls = yes\n")
+			b.WriteString("smtp_tls_wrappermode = yes\n")
+		case "starttls":
+			b.WriteString("smtp_tls_security_level = encrypt\n")
+		}
+	}
+
 	b.WriteString("\n# END mailx-admin managed block\n")
 	return b.Bytes()
+}
+
+// RenderSaslPasswd produces /etc/postfix/sasl_passwd: the smarthost credentials
+// Postfix reads via smtp_sasl_password_maps. The file is 0600 root:root because
+// it holds the relay password in plaintext.
+func RenderSaslPasswd(relay *models.RelayConfig) []byte {
+	if relay == nil || !relay.Enabled || relay.Username == "" {
+		return []byte("# Managed by mailx-admin — no relay credentials\n")
+	}
+	host := relay.Host
+	if relay.Port > 0 {
+		host = fmt.Sprintf("[%s]:%d", relay.Host, relay.Port)
+	}
+	return []byte(fmt.Sprintf("# Managed by mailx-admin — DO NOT EDIT\n%s %s:%s\n", host, relay.Username, relay.Password))
 }
 
 // mergeMainCF injects the freshly-rendered managed block into an existing
