@@ -69,9 +69,14 @@ func (w *Writer) Put(folder string, msg []byte, flags Flags, date time.Time) err
 		return err
 	}
 	for _, sub := range []string{"cur", "new", "tmp"} {
-		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
+		subDir := filepath.Join(dir, sub)
+		if err := os.MkdirAll(subDir, 0o700); err != nil {
 			return err
 		}
+		// MkdirAll creates missing directories as the panel's user (root); the
+		// subdirectory must be chowned too, or Dovecot (vmail) cannot traverse
+		// it and every access to the folder fails with "Internal error".
+		_ = os.Chown(subDir, w.uid, w.gid)
 	}
 	_ = os.Chown(dir, w.uid, w.gid)
 
