@@ -2,6 +2,7 @@ package importer
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -21,6 +22,11 @@ type IMAPConfig struct {
 	TLSMode  string // "", "starttls" or "tls"
 	Username string
 	Password string
+
+	// Insecure skips TLS certificate verification. It is for one-off migrations
+	// where the server presents a certificate that does not match its hostname;
+	// the connection is still encrypted, but the identity is not checked.
+	Insecure bool
 }
 
 // ImportIMAP connects to the server, lists every folder and fetches each
@@ -43,7 +49,10 @@ func ImportIMAP(ctx context.Context, cfg IMAPConfig, w *Writer, report func(Prog
 	}
 
 	emit(Progress{Log: "Connecting to " + addr + " (" + tlsLabel(cfg.TLSMode) + ")..."})
-	c, err := dialIMAP(cfg.TLSMode, addr)
+	if cfg.Insecure {
+		emit(Progress{Log: "TLS certificate verification disabled (insecure)."})
+	}
+	c, err := dialIMAP(cfg.TLSMode, addr, cfg.Insecure)
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
@@ -120,17 +129,23 @@ func tlsLabel(mode string) string {
 	}
 }
 
-// dialIMAP opens the connection with the requested encryption.
-func dialIMAP(mode, addr string) (*client.Client, error) {
+// dialIMAP opens the connection with the requested encryption. When insecure is
+// true, TLS certificate verification is skipped (the connection is still
+// encrypted, but the certificate is not checked against the hostname).
+func dialIMAP(mode, addr string, insecure bool) (*client.Client, error) {
+	var tlsCfg *tls.Config
+	if insecure {
+		tlsCfg = &tls.Config{InsecureSkipVerify: true}
+	}
 	switch mode {
 	case "tls":
-		return client.DialTLS(addr, nil)
+		return client.DialTLS(addr, tlsCfg)
 	case "starttls":
 		c, err := client.Dial(addr)
 		if err != nil {
 			return nil, err
 		}
-		if err := c.StartTLS(nil); err != nil {
+		if err := c.StartTLS(tlsCfg); err != nil {
 			c.Close()
 			return nil, err
 		}

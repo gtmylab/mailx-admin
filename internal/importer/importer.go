@@ -17,7 +17,11 @@ type Source struct {
 func (s Source) Summary() string {
 	switch {
 	case s.IMAP != nil:
-		return "IMAP " + s.IMAP.Username + "@" + s.IMAP.Host
+		sum := "IMAP " + s.IMAP.Username + "@" + s.IMAP.Host
+		if s.IMAP.Insecure {
+			sum += " (insecure)"
+		}
+		return sum
 	case s.MboxPath != "":
 		return "mbox " + s.MboxPath
 	case s.MaildirPath != "":

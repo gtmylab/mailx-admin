@@ -32,6 +32,14 @@
       </select>
     </label>
     <label class="field">
+      <span class="field-label">TLS certificate</span>
+      <select class="select" name="verify_tls">
+        <option value="on" selected>Verify (secure)</option>
+        <option value="off">Allow insecure (skip verification)</option>
+      </select>
+      <span class="field-hint">If the certificate doesn't match the hostname, connect using the hostname on the certificate instead — or choose "Allow insecure".</span>
+    </label>
+    <label class="field">
       <span class="field-label">Path (mbox / Maildir)</span>
       <input class="input" type="text" name="path" placeholder="/path/to/mailbox.mbox or /path/to/Maildir">
     </label>

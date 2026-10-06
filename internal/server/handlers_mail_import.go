@@ -125,6 +125,7 @@ func (s *Server) parseImportEntry(r *http.Request, i int) (importer.Source, int6
 			TLSMode:  fieldAt(r, "tls_mode", i),
 			Username: fieldAt(r, "username", i),
 			Password: fieldAt(r, "password", i),
+			Insecure: fieldAt(r, "verify_tls", i) == "off",
 		}
 		if src.IMAP.Host == "" || src.IMAP.Username == "" {
 			return src, 0, "IMAP host and username are required"
