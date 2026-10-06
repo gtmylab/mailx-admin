@@ -1,11 +1,14 @@
 package importer
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/emersion/go-imap"
 )
 
 func TestSplitMbox(t *testing.T) {
@@ -96,5 +99,33 @@ func TestFlagsFromName(t *testing.T) {
 	f := flagsFromName("1234.M1.mailx:2,FRST")
 	if !f.Flagged || !f.Answered || !f.Seen || !f.Deleted {
 		t.Errorf("flags parsed wrong: %+v", f)
+	}
+}
+
+// literalReader adapts a bytes.Reader to imap.Literal (io.Reader + Len).
+type literalReader struct{ *bytes.Reader }
+
+func (l *literalReader) Len() int { return l.Reader.Len() }
+
+// TestMessageBody guards the IMAP body-fetch fix: Message.Body is keyed by
+// *BodySectionName pointer identity, so a direct msg.Body[section] lookup never
+// matches the key parsed from the server response and silently writes empty
+// messages. messageBody must use GetBody, which matches by value.
+func TestMessageBody(t *testing.T) {
+	raw := []byte("Subject: hello\r\n\r\nbody here\r\n")
+	msg := &imap.Message{}
+	if err := msg.Parse([]interface{}{"BODY[]", &literalReader{bytes.NewReader(raw)}}); err != nil {
+		t.Fatal(err)
+	}
+
+	section := &imap.BodySectionName{}
+	got := messageBody(msg, section)
+	if !bytes.Equal(got, raw) {
+		t.Fatalf("messageBody = %q, want %q", got, raw)
+	}
+
+	// Lock in why the naive lookup was wrong: pointer identity must miss.
+	if lit, ok := msg.Body[section]; ok {
+		t.Errorf("msg.Body[section] matched by pointer identity: %v", lit)
 	}
 }

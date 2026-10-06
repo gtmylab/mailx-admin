@@ -208,10 +208,7 @@ func importFolder(ctx context.Context, c *client.Client, name string, w *Writer,
 		if !msg.InternalDate.IsZero() {
 			date = msg.InternalDate
 		}
-		var body []byte
-		if lit, ok := msg.Body[section]; ok {
-			body, _ = io.ReadAll(lit)
-		}
+		body := messageBody(msg, section)
 		if err := w.Put(name, body, flags, date); err != nil {
 			return n, err
 		}
@@ -219,6 +216,24 @@ func importFolder(ctx context.Context, c *client.Client, name string, w *Writer,
 		emit(Progress{Folder: name, Messages: base + n, Total: total})
 	}
 	return n, <-done
+}
+
+// messageBody returns the raw RFC822 message bytes fetched for section (the
+// full BODY[] section). It must use GetBody, which matches body sections by
+// value, and not the Body map directly: Body is keyed by *BodySectionName
+// pointer identity, and the keys are freshly parsed from each server response,
+// so a direct map lookup with the request-side section never matches and would
+// silently write empty messages.
+func messageBody(msg *imap.Message, section *imap.BodySectionName) []byte {
+	lit := msg.GetBody(section)
+	if lit == nil {
+		return nil
+	}
+	body, err := io.ReadAll(lit)
+	if err != nil {
+		return nil
+	}
+	return body
 }
 
 func hasFlag(flags []string, want string) bool {
