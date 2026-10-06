@@ -13,13 +13,17 @@
   <div class="card-body">
     <div class="grid grid-cols-4 gap-4">
       <div class="kv">
-        <span class="kv-label">Log file</span>
-        <span class="kv-value mono text-xs break-all">{{.Path}}</span>
+        <span class="kv-label">Log source</span>
+        <span class="kv-value mono text-xs break-all">
+          {{if eq .Source "journal"}}systemd journal{{else}}{{.Path}}{{end}}
+        </span>
       </div>
       <div class="kv">
         <span class="kv-label">File state</span>
         <span class="kv-value">
-          {{if .Exists}}
+          {{if eq .Source "journal"}}
+            <span class="badge brand">journald</span>
+          {{else if .Exists}}
             {{if .Readable}}<span class="badge ok">readable</span>{{else}}<span class="badge err">not readable</span>{{end}}
             <span class="dim text-xs">{{humanBytes .SizeBytes}}</span>
           {{else}}
@@ -29,7 +33,7 @@
       </div>
       <div class="kv">
         <span class="kv-label">File last written</span>
-        <span class="kv-value">{{if .Exists}}{{humanTime .Modified}}{{else}}—{{end}}</span>
+        <span class="kv-value">{{if and .Exists .Modified}}{{humanTime .Modified}}{{else}}—{{end}}</span>
       </div>
       <div class="kv">
         <span class="kv-label">Last stored event</span>
@@ -53,9 +57,10 @@
   </div>
 
   <div class="card-footer">
-    Events are parsed from this file by the background ingester; the panel only reads
-    the database. If the file is unreadable or the ingester is stopped, this page stays
-    empty even though mail is flowing.
+    Events are parsed by the background ingester; the panel only reads the database.
+    If the source is unreadable or the ingester is stopped, this page stays empty even
+    though mail is flowing.
   </div>
 </div>
 {{end}}
+

@@ -2,12 +2,17 @@ package logs
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -27,8 +32,35 @@ func NewIngester(db *sql.DB, logger *slog.Logger, path string) *Ingester {
 	}
 }
 
-// Run tails the log file forever, or until ctx is cancelled.
+// Source reports where mail events come from on this host: the configured log
+// file when it exists, otherwise the systemd journal when journalctl is
+// available. The ingester and the "Log source" panel both use it, so they can
+// never disagree.
+func Source(path string) string {
+	if path != "" {
+		if _, err := os.Stat(path); err == nil {
+			return "file"
+		}
+	}
+	if _, err := exec.LookPath("journalctl"); err == nil {
+		return "journal"
+	}
+	return "file"
+}
+
+// Run tails the mail log forever, or until ctx is cancelled. On a systemd host
+// with no log file (Postfix and Dovecot log to the journal), it follows
+// journalctl instead of waiting forever for a file that will never appear.
 func (ing *Ingester) Run(ctx context.Context) error {
+	if Source(ing.path) == "journal" {
+		return ing.runJournal(ctx)
+	}
+	return ing.runFile(ctx)
+}
+
+// runFile polls the configured file on a timer, the behaviour for rsyslog-style
+// setups where a mail log file does exist.
+func (ing *Ingester) runFile(ctx context.Context) error {
 	ticker := time.NewTicker(ing.interval)
 	defer ticker.Stop()
 
@@ -173,6 +205,155 @@ func (ing *Ingester) saveState(ctx context.Context, inode, offset int64, lastSee
             last_seen_ts = COALESCE(excluded.last_seen_ts, log_state.last_seen_ts)
     `, ing.path, inode, offset, time.Now(), lastSeen)
 	return err
+}
+
+// ---- systemd journal source ----
+
+// journalUnits are the systemd units whose mail entries we follow when there is
+// no mail log file. Postfix (delivery) and Dovecot (login) are what the events
+// page cares about; opendkim signing is deliberately left out.
+var journalUnits = []string{"postfix", "dovecot"}
+
+// runJournal follows journalctl for the mail units, reconnecting when the
+// process exits or errors. It stops only when ctx is cancelled.
+func (ing *Ingester) runJournal(ctx context.Context) error {
+	ing.logger.Info("log ingester following systemd journal", "units", strings.Join(journalUnits, ","))
+	for {
+		if err := ing.journalLoop(ctx); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			ing.logger.Warn("journal ingest failed; retrying", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+func (ing *Ingester) journalLoop(ctx context.Context) error {
+	args := []string{"-o", "json", "-f"}
+	for _, u := range journalUnits {
+		args = append(args, "-u", u)
+	}
+	cmd := exec.CommandContext(ctx, "journalctl", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	defer func() { _ = cmd.Wait() }()
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return nil
+		}
+		ev := eventFromJournal(scanner.Bytes())
+		if ev == nil {
+			continue
+		}
+		if err := ing.insertEvent(ctx, ev); err != nil {
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("scan journal: %w", err)
+	}
+	if stderr.Len() > 0 {
+		return fmt.Errorf("journalctl: %s", strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// eventFromJournal turns one journalctl JSON record into an Event, reusing the
+// same postfix/dovecot parsers the file ingester uses. It returns nil for
+// entries that are not mail, or that carry no message.
+func eventFromJournal(line []byte) *Event {
+	var rec map[string]any
+	if err := json.Unmarshal(line, &rec); err != nil {
+		return nil
+	}
+
+	service := journalService(rec)
+	msg, _ := rec["MESSAGE"].(string)
+	if service == "" || msg == "" {
+		return nil
+	}
+
+	ts := time.Now()
+	if rt, ok := rec["__REALTIME_TIMESTAMP"].(string); ok {
+		if us, err := strconv.ParseInt(rt, 10, 64); err == nil {
+			ts = time.Unix(us/1_000_000, (us%1_000_000)*1_000)
+		}
+	}
+
+	return ParseEvent(service, msg, ts)
+}
+
+// journalService maps a journal record to the service name the parser expects:
+// postfix/smtpd, postfix/qmgr, dovecot/imap-login, and so on.
+func journalService(rec map[string]any) string {
+	ident, _ := rec["SYSLOG_IDENTIFIER"].(string)
+	if ident = strings.TrimSpace(ident); ident != "" {
+		return normalizeJournalIdent(ident)
+	}
+	if unit, _ := rec["_SYSTEMD_UNIT"].(string); unit != "" {
+		return strings.TrimSuffix(unit, ".service")
+	}
+	return ""
+}
+
+// normalizeJournalIdent folds Dovecot's varying syslog identifiers ("dovecot",
+// "dovecot/imap-login", "imap-login", "pop3-login") under a "dovecot/..." prefix
+// so parseDovecot runs for all of them.
+func normalizeJournalIdent(ident string) string {
+	if strings.HasPrefix(ident, "dovecot") || strings.HasPrefix(ident, "imap") || strings.HasPrefix(ident, "pop3") {
+		if strings.HasPrefix(ident, "dovecot") {
+			return ident
+		}
+		return "dovecot/" + ident
+	}
+	return ident
+}
+
+// insertEvent writes one parsed event, mirroring Dovecot logins onto
+// users.last_login the same way the file ingester does.
+func (ing *Ingester) insertEvent(ctx context.Context, ev *Event) error {
+	tx, err := ing.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `
+        INSERT INTO mail_events
+          (ts, queue_id, service, action, status, from_addr, to_addr, domain,
+           client_ip, client_hostname, relay, size_bytes, delay_sec, dsn, message, raw)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, ev.Ts, nullStr(ev.QueueID), ev.Service, nullStr(ev.Action), nullStr(ev.Status),
+		nullStr(ev.FromAddr), nullStr(ev.ToAddr), nullStr(ev.Domain),
+		nullStr(ev.ClientIP), nullStr(ev.ClientHostname), nullStr(ev.Relay),
+		nullInt(ev.SizeBytes), nullFloat(ev.DelaySec), nullStr(ev.DSN),
+		ev.Message, ev.Raw); err != nil {
+		return fmt.Errorf("insert event: %w", err)
+	}
+
+	if ev.Action == "login" && ev.FromAddr != "" {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE users SET last_login = ? WHERE LOWER(email) = LOWER(?)`, ev.Ts, ev.FromAddr); err != nil {
+			return fmt.Errorf("update last login: %w", err)
+		}
+	}
+
+	return tx.Commit()
 }
 
 func nullStr(s string) any {

@@ -11,6 +11,7 @@ import (
 	"github.com/gtmylab/mailx-admin/internal/audit"
 	"github.com/gtmylab/mailx-admin/internal/auth"
 	"github.com/gtmylab/mailx-admin/internal/config"
+	"github.com/gtmylab/mailx-admin/internal/importer"
 	"github.com/gtmylab/mailx-admin/internal/metrics"
 	"github.com/gtmylab/mailx-admin/internal/models"
 	"github.com/gtmylab/mailx-admin/internal/mutations"
@@ -66,9 +67,10 @@ type Server struct {
 	dbMigrateTotal  int64
 	dbMigrateTables int
 
-	// mailImportMu guards the state of an in-flight mail import.
-	mailImportMu     sync.Mutex
-	mailImportResult mailImportResult
+	// importQueue runs background mail-import jobs, one at a time, and keeps
+	// their live status for the Mail import page. Jobs live in memory for the
+	// lifetime of the process.
+	importQueue *importer.Queue
 
 	// startedAt and timeouts feed /healthz and /healthz/stacks: how long this
 	// process has been serving, and the requests that ran out of budget (see
@@ -125,6 +127,7 @@ func New(cfg *config.Config, database *sql.DB, st *store.Store, rec *reconciler.
 		logger:     logger,
 		metrics:    metrics.New(database, cfg.Server.Hostname, version.Get()),
 		updater:    update.NewClient(),
+		importQueue: importer.NewQueue(),
 		startedAt:  time.Now(),
 		timeouts:   newTimeoutLog(timeoutHistory),
 	}, nil

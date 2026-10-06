@@ -24,8 +24,9 @@ type IMAPConfig struct {
 }
 
 // ImportIMAP connects to the server, lists every folder and fetches each
-// message with its flags and internal date, writing them into w.
-func ImportIMAP(ctx context.Context, cfg IMAPConfig, w *Writer) (*Result, error) {
+// message with its flags and internal date, writing them into w. report receives
+// progress events (may be nil).
+func ImportIMAP(ctx context.Context, cfg IMAPConfig, w *Writer, report func(Progress)) (*Result, error) {
 	if cfg.Port == 0 {
 		if cfg.TLSMode == "tls" {
 			cfg.Port = 993
@@ -35,18 +36,29 @@ func ImportIMAP(ctx context.Context, cfg IMAPConfig, w *Writer) (*Result, error)
 	}
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 
+	emit := func(p Progress) {
+		if report != nil {
+			report(p)
+		}
+	}
+
+	emit(Progress{Log: "Connecting to " + addr + " (" + tlsLabel(cfg.TLSMode) + ")..."})
 	c, err := dialIMAP(cfg.TLSMode, addr)
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
 	defer c.Logout()
+	emit(Progress{Log: "Connected."})
 
+	emit(Progress{Log: "Authenticating as " + cfg.Username + "..."})
 	if err := c.Login(cfg.Username, cfg.Password); err != nil {
 		return nil, fmt.Errorf("login: %w", err)
 	}
+	emit(Progress{Log: "Authenticated."})
 
 	res := &Result{Folders: map[string]int{}}
 
+	emit(Progress{Log: "Listing folders..."})
 	boxes := make(chan *imap.MailboxInfo, 32)
 	listDone := make(chan error, 1)
 	go func() { listDone <- c.List("", "*", boxes) }()
@@ -61,7 +73,20 @@ func ImportIMAP(ctx context.Context, cfg IMAPConfig, w *Writer) (*Result, error)
 	if err := <-listDone; err != nil {
 		return nil, fmt.Errorf("list: %w", err)
 	}
+	emit(Progress{Log: fmt.Sprintf("Found %d folders.", len(names))})
 
+	// Best-effort grand total across every folder, via STATUS (no SELECT needed).
+	total := 0
+	for _, name := range names {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if st, err := c.Status(name, []imap.StatusItem{imap.StatusMessages}); err == nil {
+			total += int(st.Messages)
+		}
+	}
+
+	cumulative := 0
 	for _, name := range names {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -70,13 +95,29 @@ func ImportIMAP(ctx context.Context, cfg IMAPConfig, w *Writer) (*Result, error)
 		if _, err := c.Select(name, true); err != nil {
 			continue
 		}
-		n, err := importFolder(ctx, c, name, w)
+		emit(Progress{Log: "Fetching " + name + "...", Folder: name, Messages: cumulative, Total: total})
+		n, err := importFolder(ctx, c, name, w, cumulative, total, emit)
 		if err != nil {
 			return nil, err
 		}
+		cumulative += n
 		res.Folders[name] += n
+		emit(Progress{Log: fmt.Sprintf("Imported %d messages from %s.", n, name), Folder: name, Messages: cumulative, Total: total})
 	}
+	emit(Progress{Log: fmt.Sprintf("Import complete: %d messages.", cumulative), Messages: cumulative, Total: total})
 	return res, nil
+}
+
+// tlsLabel names the encryption mode for log output.
+func tlsLabel(mode string) string {
+	switch mode {
+	case "tls":
+		return "SSL/TLS"
+	case "starttls":
+		return "STARTTLS"
+	default:
+		return "plain"
+	}
 }
 
 // dialIMAP opens the connection with the requested encryption.
@@ -100,7 +141,9 @@ func dialIMAP(mode, addr string) (*client.Client, error) {
 }
 
 // importFolder fetches every message in the selected folder and writes it.
-func importFolder(ctx context.Context, c *client.Client, name string, w *Writer) (int, error) {
+// base is the number of messages already imported from earlier folders, and
+// total is the best-effort grand total across all folders.
+func importFolder(ctx context.Context, c *client.Client, name string, w *Writer, base, total int, emit func(Progress)) (int, error) {
 	section := &imap.BodySectionName{}
 	items := []imap.FetchItem{section.FetchItem(), imap.FetchFlags, imap.FetchInternalDate}
 
@@ -135,6 +178,7 @@ func importFolder(ctx context.Context, c *client.Client, name string, w *Writer)
 			return n, err
 		}
 		n++
+		emit(Progress{Folder: name, Messages: base + n, Total: total})
 	}
 	return n, <-done
 }

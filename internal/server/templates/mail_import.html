@@ -2,78 +2,48 @@
 <div class="page-header">
   <div>
     <h1>Mail import</h1>
-    <p class="page-sub">Import mail from Google Workspace, Microsoft 365, cPanel or another server into a local mailbox, preserving folders, flags, read state and sent dates.</p>
+    <p class="page-sub">Import mail from Google Workspace, Microsoft 365, cPanel or another server into local mailboxes, preserving folders, flags, read state and sent dates. Imports run one at a time in the background.</p>
   </div>
 </div>
 
-<div class="card">
-  <div class="card-header"><h2>New import</h2></div>
+<div class="card mb-4">
+  <div class="card-header"><h2>Quick import</h2></div>
   <div class="card-body">
-    <form class="form" hx-post="/system/import" hx-target="#import-result" hx-swap="innerHTML"
-          hx-confirm="Import mail into the selected mailbox?">
-      <div class="grid grid-cols-2 gap-4">
-        <label class="field">
-          <span class="field-label">Destination mailbox</span>
-          <select class="select" name="user_id">
-            {{range .Data.Users}}
-            <option value="{{.ID}}">{{.Email}}</option>
-            {{end}}
-          </select>
-        </label>
-        <label class="field">
-          <span class="field-label">Source</span>
-          <select class="select" name="source">
-            <option value="imap" selected>IMAP (Google / Microsoft 365 / Mailcow / Mailu / iRedMail)</option>
-            <option value="mbox">mbox file or directory (cPanel)</option>
-            <option value="maildir">Maildir copy (filesystem access)</option>
-          </select>
-        </label>
-      </div>
-
-      <fieldset class="mt-4">
-        <legend class="strong text-sm">IMAP server</legend>
-        <div class="grid grid-cols-3 gap-4">
-          <label class="field">
-            <span class="field-label">Host</span>
-            <input class="input" type="text" name="host" placeholder="imap.gmail.com">
-          </label>
-          <label class="field">
-            <span class="field-label">Port</span>
-            <input class="input" type="number" name="port" value="993">
-          </label>
-          <label class="field">
-            <span class="field-label">Encryption</span>
-            <select class="select" name="tls_mode">
-              <option value="tls" selected>SSL/TLS</option>
-              <option value="starttls">STARTTLS</option>
-              <option value="">None</option>
-            </select>
-          </label>
-          <label class="field">
-            <span class="field-label">Username (email)</span>
-            <input class="input" type="text" name="username" autocomplete="off">
-          </label>
-          <label class="field">
-            <span class="field-label">Password (app password)</span>
-            <input class="input" type="password" name="password" autocomplete="new-password">
-          </label>
-        </div>
-      </fieldset>
-
-      <fieldset class="mt-4">
-        <legend class="strong text-sm">File source (mbox or Maildir)</legend>
-        <label class="field">
-          <span class="field-label">Path</span>
-          <input class="input" type="text" name="path" placeholder="/path/to/mailbox.mbox or /path/to/Maildir">
-          <span class="field-hint">mbox: a single .mbox file or a directory of .mbox files. Maildir: the source Maildir root.</span>
-        </label>
-      </fieldset>
-
+    <form class="form" hx-post="/system/import" hx-target="#import-add-result" hx-swap="innerHTML">
+      {{template "mail_import_entry" (dict "Users" .Data.Users "Bulk" false)}}
       <div class="form-actions">
         <button type="submit" class="btn btn-primary">Start import</button>
       </div>
     </form>
-    <div id="import-result"></div>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">
+    <h2>Bulk import</h2>
+    <button type="button" class="btn btn-sm" hx-get="/system/import/entry" hx-target="#import-entries" hx-swap="beforeend">Add entry</button>
+  </div>
+  <div class="card-body">
+    <form class="form" hx-post="/system/import" hx-target="#import-add-result" hx-swap="innerHTML">
+      <div id="import-entries">
+        {{template "mail_import_entry" (dict "Users" .Data.Users "Bulk" true)}}
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Start all imports</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="import-add-result"></div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Import queue</h2>
+    <span class="dim text-xs">Updates every 2 seconds</span>
+  </div>
+  <div id="jobs" hx-get="/system/import/jobs" hx-trigger="every 2s" hx-swap="innerHTML">
+    {{template "mail_import_jobs" (dict "Jobs" .Data.Jobs)}}
   </div>
 </div>
 {{end}}

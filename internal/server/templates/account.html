@@ -1,0 +1,46 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Account</h1>
+    <p class="page-sub">Your panel account and password.</p>
+  </div>
+</div>
+
+<div class="grid grid-cols-2 gap-4">
+  <div class="card">
+    <div class="card-header"><h2>Signed in as</h2></div>
+    <div class="card-body kv">
+      <span class="kv-label">Username</span>
+      <span class="kv-value mono">{{.Data.Account.Username}}</span>
+      <span class="kv-label">Role</span>
+      <span class="kv-value"><span class="badge brand">{{.Data.Account.Role}}</span></span>
+      <span class="kv-label">Two-factor</span>
+      <span class="kv-value">{{if .Data.Account.TotpEnabled}}<span class="badge ok">enabled</span>{{else}}<span class="badge">disabled</span>{{end}}</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h2>Change password</h2></div>
+    <div class="card-body">
+      <form class="form" hx-post="/account/password" hx-target="#account-result" hx-swap="innerHTML">
+        <label class="field">
+          <span class="field-label">Current password</span>
+          <input class="input" type="password" name="current_password" autocomplete="current-password" required>
+        </label>
+        <label class="field">
+          <span class="field-label">New password</span>
+          <input class="input" type="password" name="new_password" autocomplete="new-password" required>
+        </label>
+        <label class="field">
+          <span class="field-label">Confirm new password</span>
+          <input class="input" type="password" name="confirm_password" autocomplete="new-password" required>
+        </label>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Change password</button>
+        </div>
+      </form>
+      <div id="account-result"></div>
+    </div>
+  </div>
+</div>
+{{end}}

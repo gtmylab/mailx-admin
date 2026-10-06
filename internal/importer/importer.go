@@ -13,6 +13,29 @@ type Source struct {
 	MaildirPath string // a source maildir to copy
 }
 
+// Summary returns a short human-readable description of the source.
+func (s Source) Summary() string {
+	switch {
+	case s.IMAP != nil:
+		return "IMAP " + s.IMAP.Username + "@" + s.IMAP.Host
+	case s.MboxPath != "":
+		return "mbox " + s.MboxPath
+	case s.MaildirPath != "":
+		return "Maildir " + s.MaildirPath
+	default:
+		return "unknown"
+	}
+}
+
+// Progress is a live update from a running import: an optional log line, the
+// current folder and the cumulative message counts.
+type Progress struct {
+	Log      string // human-readable event ("" = no new event)
+	Folder   string // current folder ("" = unchanged)
+	Messages int    // cumulative messages written
+	Total    int    // cumulative total expected (0 = unknown)
+}
+
 // Result reports how many messages were imported per folder.
 type Result struct {
 	Folders map[string]int
@@ -54,17 +77,18 @@ func (r *Result) SortedFolders() []FolderCount {
 }
 
 // Import runs the import described by src into the maildir at dst, using uid/gid
-// for ownership. It dispatches on the source type.
-func Import(ctx context.Context, src Source, dst string, uid, gid int) (*Result, error) {
+// for ownership. report receives progress events and may be nil.
+func Import(ctx context.Context, src Source, dst string, uid, gid int, report func(Progress)) (*Result, error) {
 	w := NewWriter(dst, uid, gid)
 	switch {
 	case src.IMAP != nil:
-		return ImportIMAP(ctx, *src.IMAP, w)
+		return ImportIMAP(ctx, *src.IMAP, w, report)
 	case src.MboxPath != "":
-		return ImportMbox(ctx, src.MboxPath, w)
+		return ImportMbox(ctx, src.MboxPath, w, report)
 	case src.MaildirPath != "":
-		return ImportMaildir(ctx, src.MaildirPath, w)
+		return ImportMaildir(ctx, src.MaildirPath, w, report)
 	default:
 		return nil, fmt.Errorf("no import source configured")
 	}
 }
+

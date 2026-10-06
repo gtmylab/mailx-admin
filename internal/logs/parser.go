@@ -58,11 +58,25 @@ func ParseLine(line string, now time.Time) *Event {
 	if service == "" {
 		return nil
 	}
+	ev := ParseEvent(service, body, ts)
+	if ev != nil {
+		ev.Raw = line
+	}
+	return ev
+}
 
+// ParseEvent dispatches an already-separated (service, body, ts) triple into an
+// Event. The file ingester reaches it through ParseLine after splitting the
+// syslog prefix; the journald source calls it directly with the fields journald
+// has already separated for us.
+func ParseEvent(service, body string, ts time.Time) *Event {
+	if service == "" {
+		return nil
+	}
 	ev := &Event{
 		Ts:      ts,
 		Service: service,
-		Raw:     line,
+		Raw:     body,
 		Message: body,
 	}
 

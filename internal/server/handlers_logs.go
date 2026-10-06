@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gtmylab/mailx-admin/internal/logs"
 )
 
 type logFilter struct {
@@ -198,6 +200,7 @@ func statusBadgeClass(status string) string {
 // actually stored.
 type logSourceInfo struct {
 	Path       string
+	Source     string // "file" or "journal"
 	Exists     bool
 	Readable   bool
 	SizeBytes  int64
@@ -220,6 +223,7 @@ func (s *Server) logSourceInfo(ctx context.Context) logSourceInfo {
 	if info.Path == "" {
 		info.Path = "/var/log/mail.log"
 	}
+	info.Source = logs.Source(info.Path)
 
 	if st, err := os.Stat(info.Path); err == nil {
 		info.Exists = true
@@ -233,10 +237,13 @@ func (s *Server) logSourceInfo(ctx context.Context) logSourceInfo {
 				"The log file exists but the panel cannot read it. Run mailx-admin as a user in the "+
 					"adm (or systemd-journal) group, or make the file readable, then restart the service.")
 		}
+	} else if info.Source == "journal" {
+		info.Hints = append(info.Hints,
+			"No mail log file is present, so events are read from the systemd journal instead.")
 	} else {
 		info.Hints = append(info.Hints,
-			"The configured log file does not exist. On a systemd host Postfix and Dovecot log to the "+
-				"journal instead, so point logs.mail_log_path at a real file in the config.")
+			"The configured log file does not exist and the systemd journal is not available. "+
+				"Point logs.mail_log_path at a real file in the config, then restart the service.")
 	}
 
 	var lastEvent sql.NullTime

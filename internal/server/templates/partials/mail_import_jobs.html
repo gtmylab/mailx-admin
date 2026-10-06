@@ -1,0 +1,69 @@
+{{define "mail_import_jobs"}}
+{{if .Jobs}}
+<div class="table-wrap">
+  <table class="table table-stack">
+    <thead>
+      <tr>
+        <th>Destination</th>
+        <th>Source</th>
+        <th>Status</th>
+        <th>Progress</th>
+        <th class="text-right">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Jobs}}
+      <tr>
+        <td class="mono">{{.Label}}</td>
+        <td class="dim text-sm">{{.Source.Summary}}</td>
+        <td>
+          {{if eq .Status "queued"}}<span class="badge">queued</span>
+          {{else if eq .Status "running"}}<span class="badge brand">running</span>
+          {{else if eq .Status "done"}}<span class="badge ok">done</span>
+          {{else if eq .Status "error"}}<span class="badge err">error</span>
+          {{else if eq .Status "stopped"}}<span class="badge warn">stopped</span>
+          {{end}}
+        </td>
+        <td class="dim text-sm">
+          {{if eq .Status "queued"}}Waiting
+          {{else if eq .Status "running"}}
+            {{if .Folder}}{{.Folder}} · {{end}}{{.Messages}}{{if gt .Total 0}}/{{.Total}}{{end}} imported
+          {{else if eq .Status "done"}}{{.Messages}} imported
+          {{else if eq .Status "error"}}{{.Error}}
+          {{else if eq .Status "stopped"}}Stopped at {{.Messages}} imported
+          {{end}}
+        </td>
+        <td class="text-right">
+          {{if or (eq .Status "queued") (eq .Status "running")}}
+          <button class="btn btn-sm" hx-post="/system/import/{{.ID}}/stop" hx-target="#jobs" hx-swap="innerHTML">Stop</button>
+          {{end}}
+          {{if or (eq .Status "error") (eq .Status "stopped")}}
+          <button class="btn btn-sm" hx-post="/system/import/{{.ID}}/retry" hx-target="#jobs" hx-swap="innerHTML">Retry</button>
+          {{end}}
+          {{if ne .Status "running"}}
+          <button class="btn btn-sm btn-ghost" hx-delete="/system/import/{{.ID}}" hx-target="#jobs" hx-swap="innerHTML">Remove</button>
+          {{end}}
+        </td>
+      </tr>
+      {{if .Log}}
+      <tr class="dim">
+        <td colspan="5">
+          <details>
+            <summary class="text-xs">Log</summary>
+            <pre class="mono text-xs mt-2">{{range .Log}}{{.}}
+{{end}}</pre>
+          </details>
+        </td>
+      </tr>
+      {{end}}
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{else}}
+<div class="empty">
+  <span class="empty-title">No imports</span>
+  <span class="empty-hint">Queue an import above to start migrating mail.</span>
+</div>
+{{end}}
+{{end}}

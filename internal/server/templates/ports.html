@@ -11,6 +11,12 @@
     <h2>System listeners</h2>
     <span class="dim text-xs">Read-only — managed by the installer</span>
   </div>
+  {{if .Data.Duplicates}}
+  <div class="alert alert-warn" role="status">
+    <span class="dot" aria-hidden="true"></span>
+    <span>{{.Data.Duplicates}} duplicate listener line(s) ignored — master.cf contains repeated entries. Run the installer's port repair to clean them up.</span>
+  </div>
+  {{end}}
   <div class="table-wrap">
     <table class="table table-stack">
       <thead>

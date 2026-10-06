@@ -4,23 +4,17 @@ import (
 	"context"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/gtmylab/mailx-admin/internal/audit"
 	"github.com/gtmylab/mailx-admin/internal/importer"
 	"github.com/gtmylab/mailx-admin/internal/models"
 )
 
-// importBudget bounds a background mail import, which can take a long time on a
-// large mailbox. The HTTP handlers that start and poll it stay fast.
-const importBudget = 30 * time.Minute
-
-// mailImportResult is the template-facing state of a mail import.
-type mailImportResult struct {
-	Status  string // "running", "done", "error"
-	Error   string
-	Total   int
-	Folders []importer.FolderCount
+// importAddResult is the template-facing result of queueing one or more
+// imports: how many were queued, plus any per-entry validation errors.
+type importAddResult struct {
+	Queued int
+	Errors []string
 }
 
 func (s *Server) handleMailImportPage(w http.ResponseWriter, r *http.Request) {
@@ -31,103 +25,133 @@ func (s *Server) handleMailImportPage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, 200, "mail_import.html", s.newPageData(w, r, "Mail import", "mail-import", map[string]any{
 		"Users": snap.Users,
+		"Jobs":  s.importQueue.List(),
 	}))
 }
 
-// handleMailImportStart validates the form and starts the import in the
-// background, answering with the "running" fragment that polls the status.
-func (s *Server) handleMailImportStart(w http.ResponseWriter, r *http.Request) {
+// handleMailImportAdd queues one (quick form) or many (bulk form) import jobs.
+// Both forms post the same field names; the handler reads the repeated values
+// in order and queues a job per entry.
+func (s *Server) handleMailImportAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		s.renderFormError(w, "Invalid form data")
+		s.renderPartial(w, "mail_import_add_result", importAddResult{Errors: []string{"Invalid form data"}})
 		return
 	}
 
-	userID, err := strconv.ParseInt(r.FormValue("user_id"), 10, 64)
-	if err != nil || userID <= 0 {
-		s.renderPartial(w, "mail_import_result", mailImportResult{Status: "error", Error: "choose a destination mailbox"})
-		return
-	}
-	u, err := s.loadUser(r.Context(), userID)
-	if err != nil {
-		s.renderPartial(w, "mail_import_result", mailImportResult{Status: "error", Error: "destination mailbox not found"})
-		return
-	}
-
-	src := importer.Source{}
-	switch r.FormValue("source") {
-	case "imap":
-		port, _ := strconv.Atoi(r.FormValue("port"))
-		src.IMAP = &importer.IMAPConfig{
-			Host:     r.FormValue("host"),
-			Port:     port,
-			TLSMode:  r.FormValue("tls_mode"),
-			Username: r.FormValue("username"),
-			Password: r.FormValue("password"),
-		}
-		if src.IMAP.Host == "" || src.IMAP.Username == "" {
-			s.renderPartial(w, "mail_import_result", mailImportResult{Status: "error", Error: "IMAP host and username are required"})
-			return
-		}
-	case "mbox":
-		src.MboxPath = r.FormValue("path")
-		if src.MboxPath == "" {
-			s.renderPartial(w, "mail_import_result", mailImportResult{Status: "error", Error: "mbox path is required"})
-			return
-		}
-	case "maildir":
-		src.MaildirPath = r.FormValue("path")
-		if src.MaildirPath == "" {
-			s.renderPartial(w, "mail_import_result", mailImportResult{Status: "error", Error: "Maildir path is required"})
-			return
-		}
-	default:
-		s.renderPartial(w, "mail_import_result", mailImportResult{Status: "error", Error: "unknown source type"})
+	sources := r.Form["source"]
+	if len(sources) == 0 {
+		s.renderPartial(w, "mail_import_add_result", importAddResult{Errors: []string{"Add at least one import entry"}})
 		return
 	}
 
 	actor := s.actorName(r)
 	remoteIP := clientIP(r)
-	_ = s.auditor.Log(r.Context(), audit.Entry{
-		Actor: actor, Action: "mail.import", TargetType: "user", TargetID: u.Email,
-		Result: "ok", Detail: map[string]any{"phase": "started"}, RemoteIP: remoteIP,
-	})
-
-	s.mailImportMu.Lock()
-	s.mailImportResult = mailImportResult{Status: "running"}
-	s.mailImportMu.Unlock()
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), importBudget)
-		defer cancel()
-
-		res, err := importer.Import(ctx, src, u.MaildirPath(), u.DeliveryUID(), u.DeliveryGID())
-
-		s.mailImportMu.Lock()
-		defer s.mailImportMu.Unlock()
-		if err != nil {
-			s.mailImportResult = mailImportResult{Status: "error", Error: err.Error()}
-			_ = s.auditor.Log(context.Background(), audit.Entry{
-				Actor: actor, Action: "mail.import", TargetType: "user", TargetID: u.Email,
-				Result: "error", Detail: map[string]any{"error": err.Error()}, RemoteIP: remoteIP,
-			})
-			return
+	var out importAddResult
+	for i := range sources {
+		src, userID, errMsg := s.parseImportEntry(r, i)
+		if errMsg != "" {
+			out.Errors = append(out.Errors, errMsg)
+			continue
 		}
-		s.mailImportResult = mailImportResult{Status: "done", Total: res.Total(), Folders: res.SortedFolders()}
-		_ = s.auditor.Log(context.Background(), audit.Entry{
+		u, err := s.loadUser(r.Context(), userID)
+		if err != nil {
+			out.Errors = append(out.Errors, "destination mailbox not found")
+			continue
+		}
+		id := s.importQueue.Add(src, u.MaildirPath(), u.DeliveryUID(), u.DeliveryGID(), u.Email)
+		out.Queued++
+		_ = s.auditor.Log(r.Context(), audit.Entry{
 			Actor: actor, Action: "mail.import", TargetType: "user", TargetID: u.Email,
-			Result: "ok", Detail: map[string]any{"messages": res.Total()}, RemoteIP: remoteIP,
+			Result: "ok", Detail: map[string]any{"job": id, "phase": "queued"}, RemoteIP: remoteIP,
 		})
-	}()
-
-	s.renderPartial(w, "mail_import_result", mailImportResult{Status: "running"})
+	}
+	s.renderPartial(w, "mail_import_add_result", out)
 }
 
-// handleMailImportStatus reports the import state for the polling fragment.
-func (s *Server) handleMailImportStatus(w http.ResponseWriter, r *http.Request) {
-	s.mailImportMu.Lock()
-	res := s.mailImportResult
-	s.mailImportMu.Unlock()
-	s.renderPartial(w, "mail_import_result", res)
+// handleMailImportJobs renders the polling job-list fragment.
+func (s *Server) handleMailImportJobs(w http.ResponseWriter, r *http.Request) {
+	s.renderPartial(w, "mail_import_jobs", map[string]any{"Jobs": s.importQueue.List()})
+}
+
+// handleMailImportEntry renders one empty entry row for the bulk editor's
+// "Add entry" button.
+func (s *Server) handleMailImportEntry(w http.ResponseWriter, r *http.Request) {
+	snap, err := s.store.Snapshot(r.Context())
+	if err != nil {
+		s.renderError(w, 500, "Failed to load mailboxes: "+err.Error())
+		return
+	}
+	s.renderPartial(w, "mail_import_entry", map[string]any{"Users": snap.Users, "Bulk": true})
+}
+
+func (s *Server) handleMailImportStop(w http.ResponseWriter, r *http.Request) {
+	if id := r.PathValue("id"); id != "" {
+		s.importQueue.Stop(id)
+	}
+	s.renderPartial(w, "mail_import_jobs", map[string]any{"Jobs": s.importQueue.List()})
+}
+
+func (s *Server) handleMailImportRetry(w http.ResponseWriter, r *http.Request) {
+	if id := r.PathValue("id"); id != "" {
+		s.importQueue.Retry(id)
+	}
+	s.renderPartial(w, "mail_import_jobs", map[string]any{"Jobs": s.importQueue.List()})
+}
+
+func (s *Server) handleMailImportRemove(w http.ResponseWriter, r *http.Request) {
+	if id := r.PathValue("id"); id != "" {
+		s.importQueue.Remove(id)
+	}
+	s.renderPartial(w, "mail_import_jobs", map[string]any{"Jobs": s.importQueue.List()})
+}
+
+// parseImportEntry reads one import entry from the submitted form by index.
+// Repeated fields (source, user_id, host, ...) line up by position, so the bulk
+// form's rows and the quick form's single row share this parser. It returns the
+// source, the destination user id and a validation error ("" if valid).
+func (s *Server) parseImportEntry(r *http.Request, i int) (importer.Source, int64, string) {
+	var src importer.Source
+	userID, err := strconv.ParseInt(fieldAt(r, "user_id", i), 10, 64)
+	if err != nil || userID <= 0 {
+		return src, 0, "choose a destination mailbox"
+	}
+
+	switch fieldAt(r, "source", i) {
+	case "imap":
+		port, _ := strconv.Atoi(fieldAt(r, "port", i))
+		src.IMAP = &importer.IMAPConfig{
+			Host:     fieldAt(r, "host", i),
+			Port:     port,
+			TLSMode:  fieldAt(r, "tls_mode", i),
+			Username: fieldAt(r, "username", i),
+			Password: fieldAt(r, "password", i),
+		}
+		if src.IMAP.Host == "" || src.IMAP.Username == "" {
+			return src, 0, "IMAP host and username are required"
+		}
+	case "mbox":
+		src.MboxPath = fieldAt(r, "path", i)
+		if src.MboxPath == "" {
+			return src, 0, "mbox path is required"
+		}
+	case "maildir":
+		src.MaildirPath = fieldAt(r, "path", i)
+		if src.MaildirPath == "" {
+			return src, 0, "Maildir path is required"
+		}
+	default:
+		return src, 0, "unknown source type"
+	}
+	return src, userID, ""
+}
+
+// fieldAt returns the i-th value of a form field, or "" when it is absent.
+func fieldAt(r *http.Request, name string, i int) string {
+	vals := r.Form[name]
+	if i >= 0 && i < len(vals) {
+		return vals[i]
+	}
+	return ""
 }
 
 // loadUser loads one mailbox with its domain name, kind and ownership, so the

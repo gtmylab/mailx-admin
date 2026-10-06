@@ -2,6 +2,7 @@ package importer
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -12,10 +13,35 @@ import (
 // ImportMaildir copies a source maildir into dst, preserving flags (read from
 // each filename) and mtimes. It is the filesystem-access path for Mailcow,
 // Mailu and iRedMail migrations, where the source host is reachable and its
-// maildir can be mounted or copied locally.
-func ImportMaildir(ctx context.Context, srcRoot string, w *Writer) (*Result, error) {
+// maildir can be mounted or copied locally. report receives progress events
+// (may be nil).
+func ImportMaildir(ctx context.Context, srcRoot string, w *Writer, report func(Progress)) (*Result, error) {
+	emit := func(p Progress) {
+		if report != nil {
+			report(p)
+		}
+	}
 	res := &Result{Folders: map[string]int{}}
 
+	emit(Progress{Log: "Copying " + srcRoot + "..."})
+
+	// First pass: count messages so the progress bar has a total.
+	total := 0
+	_ = filepath.WalkDir(srcRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		parent := filepath.Base(filepath.Dir(path))
+		if parent == "cur" || parent == "new" {
+			total++
+		}
+		return nil
+	})
+
+	cumulative := 0
 	err := filepath.WalkDir(srcRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -47,12 +73,15 @@ func ImportMaildir(ctx context.Context, srcRoot string, w *Writer) (*Result, err
 		if err := w.Put(folder, b, flags, mt); err != nil {
 			return err
 		}
+		cumulative++
 		res.Folders[folder]++
+		emit(Progress{Folder: folder, Messages: cumulative, Total: total})
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	emit(Progress{Log: fmt.Sprintf("Import complete: %d messages.", cumulative), Messages: cumulative, Total: total})
 	return res, nil
 }
 

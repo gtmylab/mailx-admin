@@ -45,6 +45,10 @@
       {{template "nav-item" (dict "Href" "/system/outbound-ips" "Label" "Outbound IPs" "Icon" "server" "Active" (eq .ActiveNav "outbound-ips"))}}
       {{template "nav-item" (dict "Href" "/system/relay" "Label" "Outbound relay" "Icon" "relay" "Active" (eq .ActiveNav "relay"))}}
       {{template "nav-item" (dict "Href" "/system/postfix" "Label" "Postfix config" "Icon" "postfix" "Active" (eq .ActiveNav "postfix"))}}
+      {{template "nav-item" (dict "Href" "/system/services" "Label" "Services" "Icon" "services" "Active" (eq .ActiveNav "services"))}}
+      {{template "nav-item" (dict "Href" "/system/server" "Label" "Server" "Icon" "settings" "Active" (eq .ActiveNav "server"))}}
+      {{template "nav-item" (dict "Href" "/terminal" "Label" "Terminal" "Icon" "terminal" "Active" (eq .ActiveNav "terminal"))}}
+      {{template "nav-item" (dict "Href" "/account" "Label" "Account" "Icon" "account" "Active" (eq .ActiveNav "account"))}}
       {{template "nav-item" (dict "Href" "/system/updates" "Label" "Updates" "Icon" "update" "Active" (eq .ActiveNav "updates"))}}
       {{template "nav-item" (dict "Href" "/system/database" "Label" "Database" "Icon" "database" "Active" (eq .ActiveNav "database"))}}
       {{template "nav-item" (dict "Href" "/system/import" "Label" "Mail import" "Icon" "import" "Active" (eq .ActiveNav "mail-import"))}}

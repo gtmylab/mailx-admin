@@ -1,0 +1,11 @@
+{{define "mail_import_add_result"}}
+{{if .Queued}}
+<div class="alert alert-ok mt-3" role="status">
+  <strong>Queued {{.Queued}} import{{if gt .Queued 1}}s{{end}}.</strong>
+  <span class="text-sm dim">Running in the background — see the queue below.</span>
+</div>
+{{end}}
+{{range .Errors}}
+<div class="alert alert-err mt-3" role="alert">{{.}}</div>
+{{end}}
+{{end}}

@@ -45,6 +45,10 @@ func (s *Server) buildRouter() http.Handler {
 	// is waiting for it (see health.go).
 	protected.HandleFunc("GET /healthz/stacks", s.handleHealthStacks)
 
+	// Account (self-service for the signed-in admin)
+	protected.HandleFunc("GET /account", s.handleAccountPage)
+	protected.HandleFunc("POST /account/password", s.handleChangePassword)
+
 	// Users
 	protected.HandleFunc("GET /users", s.handleUsersList)
 	protected.HandleFunc("GET /users/{id}", s.handleUserDetail)
@@ -173,8 +177,24 @@ func (s *Server) buildRouter() http.Handler {
 
 	// Mail import
 	protected.HandleFunc("GET /system/import", s.handleMailImportPage)
-	protected.HandleFunc("POST /system/import", s.handleMailImportStart)
-	protected.HandleFunc("GET /system/import/status", s.handleMailImportStatus)
+	protected.HandleFunc("POST /system/import", s.handleMailImportAdd)
+	protected.HandleFunc("GET /system/import/jobs", s.handleMailImportJobs)
+	protected.HandleFunc("GET /system/import/entry", s.handleMailImportEntry)
+	protected.HandleFunc("POST /system/import/{id}/stop", s.handleMailImportStop)
+	protected.HandleFunc("POST /system/import/{id}/retry", s.handleMailImportRetry)
+	protected.HandleFunc("DELETE /system/import/{id}", s.handleMailImportRemove)
+
+	// Services (systemd unit control)
+	protected.HandleFunc("GET /system/services", s.handleServicesPage)
+	protected.HandleFunc("POST /system/services/{name}/{action}", s.handleServiceAction)
+
+	// Server configuration (hostname, resolver, webmail mail host)
+	protected.HandleFunc("GET /system/server", s.handleServerSettingsPage)
+	protected.HandleFunc("POST /system/server", s.handleServerSettingsSave)
+
+	// Terminal (interactive shell over WebSocket)
+	protected.HandleFunc("GET /terminal", s.handleTerminalPage)
+	protected.HandleFunc("GET /terminal/ws", s.handleTerminalWS)
 
 	// Postfix config editor
 	protected.HandleFunc("GET /system/postfix", s.handlePostfixPage)

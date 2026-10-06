@@ -1,0 +1,41 @@
+{{define "service_table"}}
+{{if .Action}}
+<div class="alert {{if .Error}}alert-err{{else}}alert-ok{{end}} mb-3" role="status">
+  {{if .Error}}<strong>{{.Name}} {{.Action}}</strong> failed: {{.Error}}
+  {{else}}<strong>{{.Name}}</strong> — {{.Action}} succeeded.{{end}}
+</div>
+{{end}}
+<div class="table-wrap">
+  <table class="table table-stack">
+    <thead>
+      <tr>
+        <th>Service</th>
+        <th>Status</th>
+        <th>Boot</th>
+        <th class="table-actions">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Services}}
+      <tr>
+        <td class="mono">{{.Name}}</td>
+        <td>
+          {{if eq .Status "active"}}<span class="badge ok">active</span>
+          {{else if eq .Status "failed"}}<span class="badge err">failed</span>
+          {{else if eq .Status "inactive"}}<span class="badge warn">inactive</span>
+          {{else}}<span class="badge">{{.Status}}</span>{{end}}
+        </td>
+        <td class="dim">{{.Enabled}}</td>
+        <td class="table-actions">
+          <button class="btn btn-sm" hx-post="/system/services/{{.Name}}/start" hx-target="#services-table" hx-swap="innerHTML">Start</button>
+          <button class="btn btn-sm" hx-post="/system/services/{{.Name}}/restart" hx-target="#services-table" hx-swap="innerHTML" hx-confirm="Restart {{.Name}}?">Restart</button>
+          <button class="btn btn-sm btn-danger" hx-post="/system/services/{{.Name}}/stop" hx-target="#services-table" hx-swap="innerHTML" hx-confirm="Stop {{.Name}}? Mail flow pauses.">Stop</button>
+          <button class="btn btn-sm btn-ghost" hx-post="/system/services/{{.Name}}/enable" hx-target="#services-table" hx-swap="innerHTML">Enable</button>
+          <button class="btn btn-sm btn-ghost" hx-post="/system/services/{{.Name}}/disable" hx-target="#services-table" hx-swap="innerHTML">Disable</button>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}

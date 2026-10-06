@@ -1,0 +1,93 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Terminal</h1>
+    <p class="page-sub">A shell on this server. Type <code>exit</code> or close the tab to end the session.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Shell</h2>
+    <span class="dim text-xs">Ctrl+Shift+C copy · Ctrl+Shift+V paste · Ctrl+Shift+F search</span>
+  </div>
+  <div class="card-body">
+    <div id="terminal" class="terminal-shell"></div>
+    <div id="terminal-status" class="dim text-xs mt-2">Connecting…</div>
+  </div>
+</div>
+
+<link rel="stylesheet" href="/static/vendor/xterm.css">
+<script src="/static/vendor/xterm.js"></script>
+<script src="/static/vendor/xterm-addon-fit.js"></script>
+<script src="/static/vendor/xterm-addon-search.js"></script>
+<script>
+(function () {
+  var host = document.getElementById('terminal');
+  var status = document.getElementById('terminal-status');
+  if (!window.Terminal || !window.FitAddon || !window.SearchAddon) {
+    status.textContent = 'Terminal assets failed to load.';
+    return;
+  }
+
+  var term = new Terminal({
+    cursorBlink: true,
+    fontSize: 13,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    theme: { background: '#0b0e14', foreground: '#d7dce5' },
+    scrollback: 8000
+  });
+  var fit = new FitAddon.FitAddon();
+  var search = new SearchAddon.SearchAddon();
+  term.loadAddon(fit);
+  term.loadAddon(search);
+  term.open(host);
+  fit.fit();
+
+  var ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/terminal/ws');
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = function () { status.textContent = 'Connected — shell running.'; sendResize(); };
+  ws.onmessage = function (ev) {
+    if (typeof ev.data === 'string') term.write(ev.data);
+    else term.write(new Uint8Array(ev.data));
+  };
+  ws.onclose = function () { status.textContent = 'Session closed.'; term.write('\r\n\x1b[31m[session closed]\x1b[0m\r\n'); };
+  ws.onerror = function () { status.textContent = 'Connection error.'; };
+
+  term.onData(function (data) { if (ws.readyState === 1) ws.send(data); });
+
+  function sendResize() {
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+  }
+  term.onResize(sendResize);
+  window.addEventListener('resize', function () { fit.fit(); });
+
+  term.attachCustomKeyEventHandler(function (ev) {
+    if (ev.type !== 'keydown') return true;
+    if (ev.ctrlKey && ev.shiftKey && ev.code === 'KeyC') { copySelection(); return false; }
+    if (ev.ctrlKey && ev.shiftKey && ev.code === 'KeyV') { pasteClipboard(); return false; }
+    if (ev.ctrlKey && ev.code === 'KeyC' && term.hasSelection()) { copySelection(); return false; }
+    if (ev.ctrlKey && ev.code === 'KeyV') { pasteClipboard(); return false; }
+    if (ev.ctrlKey && ev.shiftKey && ev.code === 'KeyF') { openSearch(); return false; }
+    return true;
+  });
+
+  function copySelection() {
+    var s = term.getSelection();
+    if (s && navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(s);
+  }
+  function pasteClipboard() {
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText().then(function (t) { if (t) term.paste(t); });
+    }
+  }
+  function openSearch() {
+    try {
+      if (search.findNext.length >= 2) search.findNext(term, '');
+      else search.findNext('');
+    } catch (e) { /* search is best-effort */ }
+  }
+})();
+</script>
+{{end}}

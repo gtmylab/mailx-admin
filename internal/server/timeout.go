@@ -50,8 +50,9 @@ const (
 
 // streamingPaths never get a request budget: they are long-lived by design.
 var streamingPaths = map[string]bool{
-	"/events":    true, // dashboard SSE
-	"/logs/live": true, // log live tail SSE
+	"/events":      true, // dashboard SSE
+	"/logs/live":   true, // log live tail SSE
+	"/terminal/ws": true, // interactive shell WebSocket
 }
 
 // isStreamingPath reports whether the path is a long-lived stream or download

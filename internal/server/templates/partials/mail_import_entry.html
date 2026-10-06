@@ -1,0 +1,51 @@
+{{define "mail_import_entry"}}
+<div class="import-entry">
+  <div class="grid grid-cols-2 gap-4">
+    <label class="field">
+      <span class="field-label">Source</span>
+      <select class="select" name="source">
+        <option value="imap" selected>IMAP (Google / Microsoft 365 / Mailcow / Mailu / iRedMail)</option>
+        <option value="mbox">mbox file or directory (cPanel)</option>
+        <option value="maildir">Maildir copy (filesystem access)</option>
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Destination mailbox</span>
+      <select class="select" name="user_id">
+        {{range .Users}}<option value="{{.ID}}">{{.Email}}</option>{{end}}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">IMAP host</span>
+      <input class="input" type="text" name="host" placeholder="imap.gmail.com" autocomplete="off">
+    </label>
+    <label class="field">
+      <span class="field-label">IMAP port</span>
+      <input class="input" type="number" name="port" value="993">
+    </label>
+    <label class="field">
+      <span class="field-label">Encryption</span>
+      <select class="select" name="tls_mode">
+        <option value="tls" selected>SSL/TLS</option>
+        <option value="starttls">STARTTLS</option>
+        <option value="">None</option>
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Path (mbox / Maildir)</span>
+      <input class="input" type="text" name="path" placeholder="/path/to/mailbox.mbox or /path/to/Maildir">
+    </label>
+    <label class="field">
+      <span class="field-label">Username (email)</span>
+      <input class="input" type="text" name="username" autocomplete="off">
+    </label>
+    <label class="field">
+      <span class="field-label">Password (app password)</span>
+      <input class="input" type="password" name="password" autocomplete="new-password">
+    </label>
+  </div>
+  {{if .Bulk}}
+  <button type="button" class="btn btn-sm btn-ghost mt-2" hx-on:click="this.closest('.import-entry').remove()">Remove</button>
+  {{end}}
+</div>
+{{end}}

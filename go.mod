@@ -4,7 +4,9 @@ go 1.25.0
 
 require (
 	github.com/BurntSushi/toml v1.3.2
+	github.com/creack/pty v1.1.24
 	github.com/emersion/go-imap v1.2.1
+	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.5.5
 	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/miekg/dns v1.1.73

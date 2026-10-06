@@ -1,0 +1,7 @@
+{{define "server_settings_result"}}
+<div class="alert alert-ok mt-3" role="status">
+  <strong>Settings saved.</strong>
+  {{if .HostnameChanged}}A config sync is applying the new hostname.{{else}}No restart needed.{{end}}
+  <span class="dim text-xs">DNS resolver changes take effect after the panel restarts.</span>
+</div>
+{{end}}

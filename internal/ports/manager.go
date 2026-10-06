@@ -273,4 +273,22 @@ func CheckPortAvailable(port int) error {
 	return nil
 }
 
+// Dedupe collapses identical listeners — same port, type, chroot and command —
+// into one entry, and reports how many duplicate lines were dropped. master.cf
+// can accumulate repeats when the installer's "add SMTP port" step runs more
+// than once; the panel shows each listener once instead of once per copy.
+func Dedupe(listeners []Listener) (unique []Listener, dropped int) {
+	seen := map[string]bool{}
+	for _, l := range listeners {
+		key := fmt.Sprintf("%d|%s|%s|%s", l.Port, l.Type, l.Chroot, l.Command)
+		if seen[key] {
+			dropped++
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, l)
+	}
+	return unique, dropped
+}
+
 var portLineRe = regexp.MustCompile(`^(\d+)\s+inet\b`)

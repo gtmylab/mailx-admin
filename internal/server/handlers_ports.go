@@ -41,18 +41,21 @@ func (s *Server) handlePortsPage(w http.ResponseWriter, r *http.Request) {
 	// Parse master.cf to show what's currently listening
 	listeners, _, _ := ports.Parse(s.cfg.Mail.PostfixConfDir + "/master.cf")
 
-	// Filter out managed ones from the "system" list
+	// Filter out managed ones from the "system" list, then collapse duplicate
+	// lines so a port the installer wrote several times is shown once.
 	var systemListeners []ports.Listener
 	for _, l := range listeners {
 		if !l.Managed {
 			systemListeners = append(systemListeners, l)
 		}
 	}
+	unique, duplicates := ports.Dedupe(systemListeners)
 
 	s.render(w, 200, "ports.html", s.newPageData(w, r, "Ports", "ports",
 		map[string]any{
-			"System": systemListeners,
-			"Custom": custom,
+			"System":     unique,
+			"Duplicates": duplicates,
+			"Custom":     custom,
 		},
 	))
 }

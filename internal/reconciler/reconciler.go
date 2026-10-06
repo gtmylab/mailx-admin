@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gtmylab/mailx-admin/internal/audit"
@@ -109,10 +110,31 @@ type Result struct {
 type Reconciler struct {
 	cfg     Config
 	auditor *audit.Logger
+
+	// hostMu guards cfg.Hostname, which the server-settings page updates while
+	// a reconcile may be running.
+	hostMu sync.RWMutex
 }
 
 func New(cfg Config, auditor *audit.Logger) *Reconciler {
 	return &Reconciler{cfg: cfg, auditor: auditor}
+}
+
+// SetHostname updates the hostname used when rendering Postfix configs. The
+// server-settings page calls it after the operator changes the hostname, so the
+// next reconcile uses the new value without restarting the panel.
+func (r *Reconciler) SetHostname(h string) {
+	r.hostMu.Lock()
+	r.cfg.Hostname = h
+	r.hostMu.Unlock()
+}
+
+// hostname is the mutex-guarded read of cfg.Hostname, used by Reconcile so a
+// concurrent SetHostname can never race a render.
+func (r *Reconciler) hostname() string {
+	r.hostMu.RLock()
+	defer r.hostMu.RUnlock()
+	return r.cfg.Hostname
 }
 
 // Config returns the configuration this reconciler was built with.
@@ -120,7 +142,11 @@ func New(cfg Config, auditor *audit.Logger) *Reconciler {
 // It exists so the mutation service can build a second reconciler that shares
 // the paths but runs in DryRun mode: a preview must never write a file or reload
 // a service, which is what v1.0.4 did by borrowing the live reconciler.
-func (r *Reconciler) Config() Config { return r.cfg }
+func (r *Reconciler) Config() Config {
+	c := r.cfg
+	c.Hostname = r.hostname()
+	return c
+}
 
 // managedFile is a single file the reconciler owns.
 // Extracted as a named type so we can append dynamic entries
@@ -254,6 +280,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 	res := &Result{StartedAt: time.Now()}
 	defer func() { res.FinishedAt = time.Now() }()
 
+	// Snapshot the hostname once: the server-settings page may change it while
+	// this reconcile runs, and every rendered file must agree on the same value.
+	hostname := r.hostname()
+
 	// ------------------------------------------------------------------
 	// Password scheme.
 	//
@@ -276,7 +306,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 	files := []managedFile{
 		{
 			path:    filepath.Join(r.cfg.PostfixConfDir, "main.cf"),
-			content: RenderPostfixMainCF(snap, r.cfg.Hostname),
+			content: RenderPostfixMainCF(snap, hostname),
 			mode:    0o644,
 			service: "postfix",
 			merge:   true,
@@ -311,13 +341,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 		},
 		{
 			path:    filepath.Join(r.cfg.PostfixConfDir, "helo_access"),
-			content: RenderHeloAccess(snap, r.cfg.Hostname),
+			content: RenderHeloAccess(snap, hostname),
 			mode:    0o644,
 			service: "postfix",
 		},
 		{
 			path:    filepath.Join(r.cfg.PostfixConfDir, "header_checks"),
-			content: RenderHeaderChecks(r.cfg.Hostname),
+			content: RenderHeaderChecks(hostname),
 			mode:    0o644,
 			service: "postfix",
 		},
@@ -386,7 +416,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 		},
 		{
 			path:    filepath.Join(r.cfg.OpenDKIMDir, "TrustedHosts"),
-			content: RenderTrustedHosts(snap, r.cfg.Hostname),
+			content: RenderTrustedHosts(snap, hostname),
 			mode:    0o644,
 			service: "opendkim",
 		},

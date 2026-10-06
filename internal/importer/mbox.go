@@ -3,6 +3,7 @@ package importer
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/mail"
 	"os"
 	"path/filepath"
@@ -74,8 +75,14 @@ func mboxMeta(msg []byte) (Flags, time.Time) {
 
 // ImportMbox reads an mbox file (or a directory of mbox files) and writes the
 // messages into dst. A single file goes into the inbox; a directory imports
-// each file as its own folder named after the file.
-func ImportMbox(ctx context.Context, path string, w *Writer) (*Result, error) {
+// each file as its own folder named after the file. report receives progress
+// events (may be nil).
+func ImportMbox(ctx context.Context, path string, w *Writer, report func(Progress)) (*Result, error) {
+	emit := func(p Progress) {
+		if report != nil {
+			report(p)
+		}
+	}
 	res := &Result{Folders: map[string]int{}}
 
 	info, err := os.Stat(path)
@@ -106,6 +113,17 @@ func ImportMbox(ctx context.Context, path string, w *Writer) (*Result, error) {
 		files = append(files, entry{folder: "", path: path})
 	}
 
+	emit(Progress{Log: "Reading " + path + "..."})
+
+	// First pass: count messages so the progress bar has a total.
+	total := 0
+	for _, f := range files {
+		if data, err := os.ReadFile(f.path); err == nil {
+			total += len(SplitMbox(data))
+		}
+	}
+
+	cumulative := 0
 	for _, f := range files {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -119,8 +137,11 @@ func ImportMbox(ctx context.Context, path string, w *Writer) (*Result, error) {
 			if err := w.Put(f.folder, msg, flags, date); err != nil {
 				return nil, err
 			}
+			cumulative++
 			res.Folders[f.folder]++
+			emit(Progress{Folder: f.folder, Messages: cumulative, Total: total})
 		}
 	}
+	emit(Progress{Log: fmt.Sprintf("Import complete: %d messages.", cumulative), Messages: cumulative, Total: total})
 	return res, nil
 }

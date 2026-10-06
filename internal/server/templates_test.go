@@ -39,6 +39,10 @@ var pageTemplateNames = []string{
 	"updates.html",
 	"database.html",
 	"mail_import.html",
+	"services.html",
+	"server_settings.html",
+	"account.html",
+	"terminal.html",
 	"user_sieve.html",
 }
 
@@ -71,7 +75,12 @@ var fragmentTemplateNames = []string{
 	"update_result",
 	"database_test_result",
 	"database_migrate_result",
-	"mail_import_result",
+	"mail_import_jobs",
+	"mail_import_entry",
+	"mail_import_add_result",
+	"service_table",
+	"server_settings_result",
+	"password_changed",
 }
 
 func newTestServer(t *testing.T, tmpl *templateSet) *Server {
