@@ -2345,6 +2345,7 @@ EOF
 # re-running it is safe on a live server.
 setup_composer_and_roundcube_user() {
     log_info "=== Composer & Roundcube user setup ==="
+    log_info "php: $(command -v php 2>/dev/null || echo missing), composer: $(command -v composer 2>/dev/null || echo missing)"
 
     if ! command -v php >/dev/null 2>&1; then
         log_error "php CLI not found; install a php*-cli package first"
@@ -2353,11 +2354,11 @@ setup_composer_and_roundcube_user() {
 
     # 1) Composer -> /usr/local/bin (idempotent), verified by SHA-384 hash.
     if ! command -v composer >/dev/null 2>&1; then
-        log_info "Installing Composer..."
+        log_info "Installing Composer (downloading installer, needs outbound network)..."
         cd /tmp || return 1
-        php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');" \
-            || { log_error "failed to download Composer installer"; return 1; }
-        php -r "copy('https://composer.github.io/installer.sig', 'composer-setup.sig');" \
+        wget -q --timeout=30 --tries=3 -O composer-setup.php https://getcomposer.org/installer \
+            || { log_error "failed to download Composer installer (check outbound network)"; return 1; }
+        wget -q --timeout=30 --tries=3 -O composer-setup.sig https://composer.github.io/installer.sig \
             || { log_error "failed to download Composer signature"; return 1; }
         local EXPECTED ACTUAL
         EXPECTED=$(php -r "echo trim(file_get_contents('composer-setup.sig'));")
@@ -2367,12 +2368,13 @@ setup_composer_and_roundcube_user() {
             rm -f composer-setup.php composer-setup.sig
             return 1
         fi
-        php composer-setup.php --install-dir=/usr/local/bin --filename=composer \
+        log_info "Installing Composer to /usr/local/bin/composer..."
+        php -d default_socket_timeout=30 composer-setup.php --install-dir=/usr/local/bin --filename=composer \
             || { log_error "Composer install failed"; rm -f composer-setup.php composer-setup.sig; return 1; }
         rm -f composer-setup.php composer-setup.sig
     fi
     command -v composer >/dev/null 2>&1 || { log_error "composer still unavailable"; return 1; }
-    log_info "Composer: $(composer --version 2>/dev/null || true)"
+    log_info "Composer: $(timeout 15 composer --version 2>/dev/null || echo 'unavailable')"
 
     # 2) The `roundcube` user (idempotent), with a login shell so `sudo -u`
     #    works, and the fixed password.
@@ -2393,10 +2395,12 @@ setup_composer_and_roundcube_user() {
         done
     fi
 
-    # 4) One-time Composer reconcile (idempotent, non-fatal).
+    # 4) One-time Composer reconcile (idempotent, non-fatal). Bounded with
+    #    `timeout` so a slow/blocked packagist can never hang the menu.
     if [ -f /var/www/html/roundcube/composer.json ]; then
         cd /var/www/html/roundcube || return 1
-        if ! sudo -H -u "$ROUNDCUBE_COMPOSER_USER" composer install --no-interaction --no-progress; then
+        log_info "Reconciling Composer (first run downloads packages, can take a few minutes)..."
+        if ! timeout 900 sudo -H -u "$ROUNDCUBE_COMPOSER_USER" composer install --no-interaction --no-progress --no-dev; then
             log_warning "composer install failed: plugins will not install until this succeeds"
         fi
     else
@@ -2404,7 +2408,7 @@ setup_composer_and_roundcube_user() {
     fi
 
     # 5) Sanity check, mirroring the manual step.
-    sudo -H -u "$ROUNDCUBE_COMPOSER_USER" composer --version 2>/dev/null || true
+    timeout 15 sudo -H -u "$ROUNDCUBE_COMPOSER_USER" composer --version 2>/dev/null || true
     log_info "Composer & Roundcube user setup complete"
 }
 
@@ -2489,7 +2493,7 @@ install_roundcube_plugins() {
         log_info "Installing $label ($pkg)..."
         before=$(ls "$RC_DIR/plugins" 2>/dev/null | sort)
         cd "$RC_DIR" || return 1
-        if sudo -H -u "$ROUNDCUBE_COMPOSER_USER" composer require "$pkg" --no-interaction --no-progress; then
+        if timeout 300 sudo -H -u "$ROUNDCUBE_COMPOSER_USER" composer require "$pkg" --no-interaction --no-progress --no-ansi; then
             after=$(ls "$RC_DIR/plugins" 2>/dev/null | sort)
             while IFS= read -r d; do
                 [ -n "$d" ] && rc_enable_plugin "$RC_DIR/config/config.inc.php" "$d"
