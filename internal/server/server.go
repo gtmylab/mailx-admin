@@ -18,6 +18,7 @@ import (
 	"github.com/gtmylab/mailx-admin/internal/reconciler"
 	"github.com/gtmylab/mailx-admin/internal/store"
 	"github.com/gtmylab/mailx-admin/internal/syncer"
+	"github.com/gtmylab/mailx-admin/internal/system"
 	"github.com/gtmylab/mailx-admin/internal/update"
 	"github.com/gtmylab/mailx-admin/internal/version"
 	"html/template"
@@ -72,6 +73,17 @@ type Server struct {
 	// lifetime of the process.
 	importQueue *importer.Queue
 
+	// system samples host metrics (CPU/memory/disk/load) for the dashboard's
+	// system-information panel.
+	system *system.Sampler
+
+	// packages caches the upgradable-package list and runs one apt update at a
+	// time for the Software updates page.
+	packages *packageUpdater
+
+	// terminals holds the interactive SSH terminal sessions, keyed by admin.
+	terminals *TerminalManager
+
 	// startedAt and timeouts feed /healthz and /healthz/stacks: how long this
 	// process has been serving, and the requests that ran out of budget (see
 	// timeout.go) — the two facts needed to tell "the service is down" apart
@@ -111,6 +123,9 @@ func New(cfg *config.Config, database *sql.DB, st *store.Store, rec *reconciler.
 	mut := mutations.New(database, st, rec, aud, cfg.Server.Hostname, sync,
 		mutations.NewRoundcubeSeeder(cfg.Roundcube))
 
+	sys := system.NewSampler()
+	sys.Start()
+
 	return &Server{
 		cfg:         cfg,
 		configPath:  configPath,
@@ -128,6 +143,9 @@ func New(cfg *config.Config, database *sql.DB, st *store.Store, rec *reconciler.
 		metrics:     metrics.New(database, cfg.Server.Hostname, version.Get()),
 		updater:     update.NewClient(),
 		importQueue: importer.NewQueue(),
+		system:      sys,
+		packages:    newPackageUpdater(),
+		terminals:   NewTerminalManager(),
 		startedAt:   time.Now(),
 		timeouts:    newTimeoutLog(timeoutHistory),
 	}, nil

@@ -1,0 +1,25 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Software updates</h1>
+    <p class="page-sub">Operating-system packages with available updates.</p>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">
+    <h2>Available updates</h2>
+    <button class="btn btn-sm" hx-post="/system/packages/refresh" hx-target="#package-list" hx-swap="innerHTML">Refresh</button>
+  </div>
+  <div id="package-list" hx-get="/system/packages/list" hx-trigger="load, every 10s" hx-swap="innerHTML">
+    {{template "package_list" .Data}}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h2>Update output</h2></div>
+  <div id="package-status" hx-get="/system/packages/status" hx-trigger="every 2s" hx-swap="innerHTML">
+    {{template "package_status" .Data}}
+  </div>
+</div>
+{{end}}

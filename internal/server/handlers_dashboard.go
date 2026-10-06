@@ -37,6 +37,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"Counts":   counts,
 		"Services": checkServices(ctx),
 		"Traffic":  s.buildTraffic(ctx),
+		"System":   s.buildSystem(),
 	}))
 }
 

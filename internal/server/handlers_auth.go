@@ -137,6 +137,10 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// Close any interactive terminal session this admin has open.
+	if sess := auth.SessionFromContext(r.Context()); sess != nil && s.terminals != nil {
+		s.terminals.Destroy(sess.AdminUserID)
+	}
 	if cookie, err := r.Cookie("mailx_session"); err == nil {
 		_ = s.sessions.Delete(r.Context(), cookie.Value)
 	}

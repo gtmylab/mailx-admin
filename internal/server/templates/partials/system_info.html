@@ -1,0 +1,57 @@
+{{define "system_info"}}
+<div class="card-header">
+  <h2>System information</h2>
+  <span class="dim text-xs">Updates every 15 seconds</span>
+</div>
+<div class="card-body">
+  <div class="grid grid-cols-3 gap-4 mb-4">
+    <div class="flex flex-col items-center gap-2">
+      {{.CPUgauge}}
+      <div class="w-full">{{.CPUSpark}}</div>
+    </div>
+    <div class="flex flex-col items-center gap-2">
+      {{.MemGauge}}
+      <div class="w-full">{{.MemSpark}}</div>
+    </div>
+    <div class="flex flex-col items-center gap-2">
+      {{.DiskGauge}}
+      <div class="w-full">{{.LoadSpark}}</div>
+    </div>
+  </div>
+
+  <div class="kv">
+    <span class="kv-label">System hostname</span>
+    <span class="kv-value mono">{{.Info.Hostname}}{{if .Info.IP}} <span class="dim">({{.Info.IP}})</span>{{end}}</span>
+
+    <span class="kv-label">Operating system</span>
+    <span class="kv-value">{{.Info.OS}}</span>
+
+    <span class="kv-label">Kernel and CPU</span>
+    <span class="kv-value">Linux {{.Info.Kernel}}{{if .Info.CPUModel}} · {{.Info.CPUModel}}{{end}}</span>
+
+    <span class="kv-label">System uptime</span>
+    <span class="kv-value">{{.Uptime}}</span>
+
+    <span class="kv-label">Processor information</span>
+    <span class="kv-value">{{.Info.CPUModel}}, {{.Info.CPUCores}} core{{if ne .Info.CPUCores 1}}s{{end}}</span>
+
+    <span class="kv-label">Running processes</span>
+    <span class="kv-value">{{.Info.Processes}}</span>
+
+    <span class="kv-label">CPU load averages</span>
+    <span class="kv-value mono">{{.LoadAvg}}</span>
+
+    <span class="kv-label">Real memory</span>
+    <span class="kv-value mono">{{humanBytes .Info.MemUsed}} used / {{humanBytes .Info.MemCached}} cached / {{humanBytes .Info.MemTotal}} total</span>
+
+    <span class="kv-label">Virtual memory</span>
+    <span class="kv-value mono">{{humanBytes .Info.SwapUsed}} used / {{humanBytes .Info.SwapTotal}} total</span>
+
+    <span class="kv-label">Local disk space</span>
+    <span class="kv-value mono">{{humanBytes .Info.DiskUsed}} used / {{humanBytes .Info.DiskFree}} free / {{humanBytes .Info.DiskTotal}} total</span>
+
+    <span class="kv-label">Package updates</span>
+    <span class="kv-value">{{if .PackageUpdates}}<a href="/system/packages" class="strong">{{.PackageUpdates}} available</a>{{else}}<span class="dim">up to date</span>{{end}}</span>
+  </div>
+</div>
+{{end}}

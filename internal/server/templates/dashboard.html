@@ -1,4 +1,8 @@
 {{define "content"}}
+<section class="card mb-4" hx-get="/dashboard/system" hx-trigger="every 15s" hx-swap="innerHTML">
+  {{template "system_info" .Data.System}}
+</section>
+
 <div class="grid grid-cols-4 gap-4 mb-4">
   {{template "stat" (dict "Label" "Domains" "Value" (len .Data.Domains) "Href" "/domains")}}
   {{template "stat" (dict "Label" "Mailboxes" "Value" .Data.Users "Href" "/users")}}

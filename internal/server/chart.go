@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"html/template"
+	"math"
 	"strings"
 )
 
@@ -85,4 +86,38 @@ func renderSparkline(points []chartPoint, width, height int) template.HTML {
 		`<svg class="chart" viewBox="0 0 %d %d" width="100%%" preserveAspectRatio="none" role="img" aria-label="trend chart" style="height:%dpx">`+
 			`<polyline points="%s" fill="none" stroke="var(--brand)" stroke-width="2" stroke-linejoin="round"/></svg>`,
 		width, height, height, strings.Join(coords, " ")))
+}
+
+// renderGauge returns an inline SVG radial gauge (donut) for a 0-100 value, with
+// the percentage in the middle. It is used by the dashboard's system-information
+// panel to show CPU, memory and disk utilisation at a glance.
+func renderGauge(value float64, label string) template.HTML {
+	v := value
+	if v < 0 {
+		v = 0
+	}
+	if v > 100 {
+		v = 100
+	}
+
+	const size = 120
+	const stroke = 9
+	const r = 44
+	cx := size / 2
+	cy := size / 2
+	circ := 2 * math.Pi * r
+	dash := v / 100 * circ
+
+	return template.HTML(fmt.Sprintf(
+		`<div class="gauge"><svg viewBox="0 0 %d %d" role="img" aria-label="%s: %.0f%%" style="width:%dpx;height:%dpx">`+
+			`<circle cx="%d" cy="%d" r="%d" fill="none" stroke="var(--border-soft)" stroke-width="%d"/>`+
+			`<circle cx="%d" cy="%d" r="%d" fill="none" stroke="var(--brand)" stroke-width="%d" stroke-linecap="round"`+
+			` stroke-dasharray="%.2f %.2f" transform="rotate(-90 %d %d)"/>`+
+			`<text x="%d" y="%d" text-anchor="middle" dominant-baseline="central" style="fill:var(--fg);font-size:20px;font-weight:600">%.0f%%</text>`+
+			`</svg><span class="gauge-label">%s</span></div>`,
+		size, size, label, v, size, size,
+		cx, cy, r, stroke,
+		cx, cy, r, stroke, dash, circ, cx, cy,
+		cx, cy, v,
+		label))
 }

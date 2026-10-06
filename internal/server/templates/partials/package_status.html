@@ -1,0 +1,15 @@
+{{define "package_status"}}
+{{if .Error}}
+<div class="alert alert-err mb-3" role="alert"><span class="dot" aria-hidden="true"></span><span><strong>Update failed.</strong> {{.Error}}</span></div>
+{{else if .Running}}
+<div class="alert alert-warn mb-3" role="status"><strong>Update running…</strong></div>
+{{else if .Done}}
+<div class="alert alert-ok mb-3" role="status"><strong>Update complete.</strong></div>
+{{else}}
+<div class="dim text-sm mb-3">No update in progress. Select packages above and choose “Update selected”.</div>
+{{end}}
+{{if .Log}}
+<pre class="terminal-output mono text-xs">{{range .Log}}{{.}}
+{{end}}</pre>
+{{end}}
+{{end}}

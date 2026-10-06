@@ -818,6 +818,13 @@ details[open] > summary { margin-bottom: 0.4rem; }
 
 .terminal-shell { height: 72vh; background: #0b0e14; border: 1px solid var(--border-soft); border-radius: 8px; padding: 0.5rem; overflow: hidden; }
 .terminal-shell .xterm { height: 100%; }
+.terminal-login { max-width: 560px; }
+
+.gauge { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; min-width: 0; }
+.gauge svg { display: block; }
+.gauge-label { font-size: 0.78rem; color: var(--fg-muted); }
+
+.terminal-output { background: #0b0e14; color: #d7dce5; padding: 0.75rem; border-radius: 8px; overflow: auto; max-height: 50vh; white-space: pre-wrap; }
 
 .input, .select, .textarea {
   width: 100%;

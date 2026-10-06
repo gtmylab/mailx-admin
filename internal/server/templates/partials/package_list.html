@@ -1,0 +1,42 @@
+{{define "package_list"}}
+{{if .Refreshing}}
+<div class="card-body dim text-sm">Refreshing package list…</div>
+{{else if .ListErr}}
+<div class="alert alert-err"><span class="dot" aria-hidden="true"></span><span>{{.ListErr}}</span></div>
+{{else if .List}}
+<form hx-post="/system/packages/update" hx-target="#package-status" hx-swap="innerHTML">
+  <div class="table-wrap">
+    <table class="table table-stack">
+      <thead>
+        <tr>
+          <th>Update</th>
+          <th>Package</th>
+          <th>Description</th>
+          <th>Status</th>
+          <th>Source</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .List}}
+        <tr>
+          <td><input type="checkbox" class="checkbox" name="packages" value="{{.Name}}" checked></td>
+          <td class="mono">{{.Name}}</td>
+          <td class="dim text-xs">{{.Description}}</td>
+          <td class="text-xs">{{.Installed}} → {{.Available}}</td>
+          <td class="dim text-xs">{{.Source}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">Update selected</button>
+  </div>
+</form>
+{{else}}
+<div class="empty">
+  <span class="empty-title">System up to date</span>
+  <span class="empty-hint">No package updates available.</span>
+</div>
+{{end}}
+{{end}}

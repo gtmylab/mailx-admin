@@ -36,6 +36,7 @@ func (s *Server) buildRouter() http.Handler {
 	protected := http.NewServeMux()
 	protected.HandleFunc("GET /", s.handleDashboard)
 	protected.HandleFunc("GET /dashboard/traffic", s.handleDashboardTraffic)
+	protected.HandleFunc("GET /dashboard/system", s.handleDashboardSystem)
 	protected.HandleFunc("GET /events", s.handleSSE)
 
 	// Service health (HTMX partial refreshed by the dashboard)
@@ -191,6 +192,13 @@ func (s *Server) buildRouter() http.Handler {
 	// Server configuration (hostname, resolver, webmail mail host)
 	protected.HandleFunc("GET /system/server", s.handleServerSettingsPage)
 	protected.HandleFunc("POST /system/server", s.handleServerSettingsSave)
+
+	// Software package updates (apt)
+	protected.HandleFunc("GET /system/packages", s.handlePackagesPage)
+	protected.HandleFunc("GET /system/packages/list", s.handlePackagesList)
+	protected.HandleFunc("POST /system/packages/refresh", s.handlePackagesRefresh)
+	protected.HandleFunc("POST /system/packages/update", s.handlePackagesUpdate)
+	protected.HandleFunc("GET /system/packages/status", s.handlePackagesStatus)
 
 	// Terminal (interactive shell over WebSocket)
 	protected.HandleFunc("GET /terminal", s.handleTerminalPage)

@@ -2,7 +2,7 @@
 <div class="page-header">
   <div>
     <h1>Terminal</h1>
-    <p class="page-sub">A shell on this server. Type <code>exit</code> or close the tab to end the session.</p>
+    <p class="page-sub">An SSH shell on this server. Sign in with a system account and a password or SSH key.</p>
   </div>
 </div>
 
@@ -12,8 +12,32 @@
     <span class="dim text-xs">Ctrl+Shift+C copy · Ctrl+Shift+V paste · Ctrl+Shift+F search</span>
   </div>
   <div class="card-body">
-    <div id="terminal" class="terminal-shell"></div>
-    <div id="terminal-status" class="dim text-xs mt-2">Connecting…</div>
+    <div id="terminal-login" class="terminal-login" hidden>
+      <form id="terminal-login-form" class="form" autocomplete="off">
+        <label class="field">
+          <span class="field-label">Username</span>
+          <input class="input" type="text" name="username" required>
+        </label>
+        <label class="field">
+          <span class="field-label">Password</span>
+          <input class="input" type="password" name="password" autocomplete="current-password">
+        </label>
+        <label class="field">
+          <span class="field-label">SSH private key (optional, instead of password)</span>
+          <textarea class="input mono" name="key" rows="6" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+        </label>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Connect</button>
+        </div>
+        <div id="terminal-login-error" class="alert alert-err" role="alert" hidden></div>
+      </form>
+      <p class="dim text-xs mt-3">Connects to this server over SSH (127.0.0.1). Use the account password, or paste a private key that is in the account's authorized_keys.</p>
+    </div>
+
+    <div id="terminal-shell">
+      <div id="terminal" class="terminal-shell"></div>
+      <div id="terminal-status" class="dim text-xs mt-2">Connecting…</div>
+    </div>
   </div>
 </div>
 
@@ -23,8 +47,12 @@
 <script src="/static/vendor/xterm-addon-search.js"></script>
 <script>
 (function () {
+  var loginEl = document.getElementById('terminal-login');
+  var form = document.getElementById('terminal-login-form');
+  var loginErr = document.getElementById('terminal-login-error');
   var host = document.getElementById('terminal');
   var status = document.getElementById('terminal-status');
+
   if (!window.Terminal || !window.FitAddon || !window.SearchAddon) {
     status.textContent = 'Terminal assets failed to load.';
     return;
@@ -47,12 +75,20 @@
   var ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/terminal/ws');
   ws.binaryType = 'arraybuffer';
 
-  ws.onopen = function () { status.textContent = 'Connected — shell running.'; sendResize(); };
   ws.onmessage = function (ev) {
+    if (typeof ev.data === 'string') {
+      try {
+        var msg = JSON.parse(ev.data);
+        if (msg.type === 'login-required') { showLogin(); return; }
+        if (msg.type === 'login-ok') { hideLogin(); return; }
+        if (msg.type === 'login-error') { showError(msg.message); return; }
+      } catch (e) { /* not JSON — fall through and write it */ }
+    }
+    hideLogin();
     if (typeof ev.data === 'string') term.write(ev.data);
     else term.write(new Uint8Array(ev.data));
   };
-  ws.onclose = function () { status.textContent = 'Session closed.'; term.write('\r\n\x1b[31m[session closed]\x1b[0m\r\n'); };
+  ws.onclose = function () { status.textContent = 'Session closed.'; };
   ws.onerror = function () { status.textContent = 'Connection error.'; };
 
   term.onData(function (data) { if (ws.readyState === 1) ws.send(data); });
@@ -63,6 +99,34 @@
   term.onResize(sendResize);
   window.addEventListener('resize', function () { fit.fit(); });
 
+  function showLogin() {
+    loginEl.hidden = false;
+    status.textContent = 'Sign in to open a shell.';
+  }
+  function hideLogin() {
+    loginEl.hidden = true;
+    loginErr.hidden = true;
+    status.textContent = 'Connected — shell running.';
+    fit.fit();
+  }
+  function showError(message) {
+    loginEl.hidden = false;
+    loginErr.hidden = false;
+    loginErr.textContent = message || 'Login failed.';
+  }
+
+  form.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var username = form.username.value.trim();
+    if (!username) return;
+    ws.send(JSON.stringify({
+      type: 'login',
+      username: username,
+      password: form.password.value,
+      key: form.key.value.trim()
+    }));
+  });
+
   term.attachCustomKeyEventHandler(function (ev) {
     if (ev.type !== 'keydown') return true;
     if (ev.ctrlKey && ev.shiftKey && ev.code === 'KeyC') { copySelection(); return false; }
@@ -72,7 +136,6 @@
     if (ev.ctrlKey && ev.shiftKey && ev.code === 'KeyF') { openSearch(); return false; }
     return true;
   });
-
   function copySelection() {
     var s = term.getSelection();
     if (s && navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(s);
@@ -86,7 +149,7 @@
     try {
       if (search.findNext.length >= 2) search.findNext(term, '');
       else search.findNext('');
-    } catch (e) { /* search is best-effort */ }
+    } catch (e) { /* best-effort */ }
   }
 })();
 </script>
