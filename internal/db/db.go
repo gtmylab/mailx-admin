@@ -16,7 +16,7 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-//go:embed migrations/*.sql
+//go:embed migrations/*.sql migrations_postgres/*.sql
 var migrationsFS embed.FS
 
 type Driver string
@@ -151,11 +151,18 @@ func Open(cfg Config) (*DB, error) {
 }
 
 func (d *DB) Migrate(ctx context.Context) error {
+	// SQLite and Postgres cannot share one schema file: SQLite's
+	// `INTEGER PRIMARY KEY AUTOINCREMENT` is not valid Postgres, so each driver
+	// reads its own migration directory. Both produce the same table shapes.
+	dir := "migrations"
+	if d.driver == DriverPostgres {
+		dir = "migrations_postgres"
+	}
 	goose.SetBaseFS(migrationsFS)
 	if err := goose.SetDialect(string(d.driver)); err != nil {
 		return fmt.Errorf("goose dialect: %w", err)
 	}
-	if err := goose.UpContext(ctx, d.DB, "migrations"); err != nil {
+	if err := goose.UpContext(ctx, d.DB, dir); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	return nil

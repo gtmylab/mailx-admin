@@ -1,0 +1,7 @@
+{{define "database_test_result"}}
+{{if .Ok}}
+<div class="alert alert-ok mt-3" role="status"><strong>Connection OK.</strong> The Postgres server is reachable.</div>
+{{else}}
+<div class="alert alert-err mt-3" role="alert"><strong>Connection failed.</strong> {{.Error}}</div>
+{{end}}
+{{end}}

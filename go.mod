@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/BurntSushi/toml v1.3.2
+	github.com/emersion/go-imap v1.2.1
 	github.com/jackc/pgx/v5 v5.5.5
 	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/miekg/dns v1.1.73
@@ -15,6 +16,7 @@ require (
 
 require (
 	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
+	github.com/emersion/go-sasl v0.0.0-20200509203442-7bfe0ed36a21 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20221227161230-091c0ba34f0a // indirect

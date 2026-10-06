@@ -17,6 +17,7 @@ import (
 	"github.com/gtmylab/mailx-admin/internal/reconciler"
 	"github.com/gtmylab/mailx-admin/internal/store"
 	"github.com/gtmylab/mailx-admin/internal/syncer"
+	"github.com/gtmylab/mailx-admin/internal/update"
 	"github.com/gtmylab/mailx-admin/internal/version"
 	"html/template"
 	"io"
@@ -27,6 +28,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,19 +36,39 @@ import (
 var assets embed.FS
 
 type Server struct {
-	cfg       *config.Config
-	db        *sql.DB
-	dbDriver  string
-	store     *store.Store
-	mutations *mutations.Service
-	rec       *reconciler.Reconciler
-	syncer    *syncer.Syncer
-	sessions  *auth.SessionStore
-	csrf      *auth.CSRFManager
-	auditor   *audit.Logger
-	templates *templateSet
-	logger    *slog.Logger
-	metrics   *metrics.Collector
+	cfg        *config.Config
+	configPath string
+	db         *sql.DB
+	dbDriver   string
+	store      *store.Store
+	mutations  *mutations.Service
+	rec        *reconciler.Reconciler
+	syncer     *syncer.Syncer
+	sessions   *auth.SessionStore
+	csrf       *auth.CSRFManager
+	auditor    *audit.Logger
+	templates  *templateSet
+	logger     *slog.Logger
+	metrics    *metrics.Collector
+
+	// updater checks for and applies releases. The cached status feeds the
+	// update banner and the Updates page; updateMu guards updateState.
+	updater     *update.Client
+	updateMu    sync.RWMutex
+	updateState update.Status
+
+	// dbMigrateMu guards the state of an in-flight SQLite -> Postgres migration,
+	// which runs in the background because a large mail_events table can take
+	// minutes to copy.
+	dbMigrateMu     sync.Mutex
+	dbMigrateState  string // "running", "done", "error"
+	dbMigrateErr    string
+	dbMigrateTotal  int64
+	dbMigrateTables int
+
+	// mailImportMu guards the state of an in-flight mail import.
+	mailImportMu     sync.Mutex
+	mailImportResult mailImportResult
 
 	// startedAt and timeouts feed /healthz and /healthz/stacks: how long this
 	// process has been serving, and the requests that ran out of budget (see
@@ -61,7 +83,7 @@ type Server struct {
 	budgetOverride time.Duration
 }
 
-func New(cfg *config.Config, database *sql.DB, st *store.Store, rec *reconciler.Reconciler, logger *slog.Logger) (*Server, error) {
+func New(cfg *config.Config, database *sql.DB, st *store.Store, rec *reconciler.Reconciler, logger *slog.Logger, configPath string) (*Server, error) {
 	tmpl, err := parseTemplates()
 	if err != nil {
 		return nil, err
@@ -88,21 +110,23 @@ func New(cfg *config.Config, database *sql.DB, st *store.Store, rec *reconciler.
 		mutations.NewRoundcubeSeeder(cfg.Roundcube))
 
 	return &Server{
-		cfg:       cfg,
-		db:        database,
-		dbDriver:  cfg.DB.Driver,
-		store:     st,
-		mutations: mut,
-		rec:       rec,
-		syncer:    sync,
-		sessions:  auth.NewSessionStore(database),
-		csrf:      auth.NewCSRFManager(csrfKey),
-		auditor:   aud,
-		templates: tmpl,
-		logger:    logger,
-		metrics:   metrics.New(database, cfg.Server.Hostname, version.Get()),
-		startedAt: time.Now(),
-		timeouts:  newTimeoutLog(timeoutHistory),
+		cfg:        cfg,
+		configPath: configPath,
+		db:         database,
+		dbDriver:   cfg.DB.Driver,
+		store:      st,
+		mutations:  mut,
+		rec:        rec,
+		syncer:     sync,
+		sessions:   auth.NewSessionStore(database),
+		csrf:       auth.NewCSRFManager(csrfKey),
+		auditor:    aud,
+		templates:  tmpl,
+		logger:     logger,
+		metrics:    metrics.New(database, cfg.Server.Hostname, version.Get()),
+		updater:    update.NewClient(),
+		startedAt:  time.Now(),
+		timeouts:   newTimeoutLog(timeoutHistory),
 	}, nil
 }
 
@@ -374,6 +398,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	// The config sync runs in the background: every mutation only queues a run,
 	// so no request ever waits for postmap or a service reload again.
 	s.syncer.Start(ctx)
+	go s.periodicUpdateCheck(ctx)
 	// Converge once at startup. After an upgrade or a hand-edited file the
 	// panel's files and the database can disagree, and a run at boot is what
 	// makes the dashboard's very first status honest.

@@ -42,6 +42,16 @@ ADMIN_SERVICE_NAME="mailx-admin"
 ADMIN_LISTEN_ADDR="127.0.0.1:9090"
 ADMIN_WEB_PORT="9443"
 
+# ----------------------------------------------------------------------------
+# Composer + Roundcube plugin management
+# ----------------------------------------------------------------------------
+# A dedicated system user runs Composer inside Roundcube (www-data has no login
+# shell, so it cannot be `sudo -u`ed). Its password is fixed so the installer
+# and later runs can act as it without a prompt.
+ROUNDCUBE_COMPOSER_USER="roundcube"
+ROUNDCUBE_COMPOSER_PASSWORD="1Roundcomposer2"
+ROUNDCUBE_COMPOSER_HOME="/home/roundcube"
+
 # Where to fetch the binary from.
 # Override with: MAILX_ADMIN_BINARY_URL=... ./installer.sh
 # Or place a file at /tmp/mailx-admin before running the installer.
@@ -2098,6 +2108,36 @@ rc_set_config() {
     fi
 }
 
+# Enable one plugin directory name in Roundcube's $config['plugins'] array in
+# config.inc.php, idempotently. Composer only downloads a plugin into plugins/;
+# Roundcube ignores it until its name is listed here. Handles the single-line
+# array() fallback, the shipped short-array sample, and a missing key.
+rc_enable_plugin() {
+    local file=$1 plugin=$2
+
+    [ -f "$file" ] || return 1
+
+    # Already enabled: the name already appears quoted in the file.
+    if grep -qF "'$plugin'" "$file"; then
+        return 0
+    fi
+
+    # The installer's fallback config: a single-line array().
+    if grep -qF "\$config['plugins'] = array();" "$file"; then
+        sed -i "s|[$]config\['plugins'\] = array();|\$config['plugins'] = ['$plugin'];|" "$file"
+        return 0
+    fi
+
+    # The shipped sample: a short array [...].
+    if grep -qF "\$config['plugins'] = [" "$file"; then
+        sed -i "s|[$]config\['plugins'\] = \[|\$config['plugins'] = [\n    '$plugin',|" "$file"
+        return 0
+    fi
+
+    # No plugins key at all: append one.
+    printf '%s\n' "\$config['plugins'] = ['$plugin'];" >> "$file"
+}
+
 install_roundcube_application() {
     local EMAIL_DOMAIN=$1
     local HOSTNAME=$2
@@ -2277,6 +2317,11 @@ EOF
     find . -type f -exec chmod 644 {} \; 2>/dev/null || true
     chmod 775 temp logs 2>/dev/null || true
 
+    # Composer + the `roundcube` user, so plugins can be installed later. This
+    # also reconciles Composer once (composer install) so `composer require`
+    # places plugins into plugins/ rather than vendor/.
+    setup_composer_and_roundcube_user
+
     log_info "Adding admin user..."
     add_roundcube_user "admin" "$ROUNDCUBE_ADMIN_PASS" 1000
 
@@ -2289,6 +2334,174 @@ EOF
         log_error "Roundcube installation verification failed"
         return 1
     fi
+}
+
+# Install Composer to /usr/local/bin, create the `roundcube` user that runs it,
+# and reconcile Roundcube's Composer state once. The reconcile is `composer
+# install`, not `composer update`: it materialises roundcube/plugin-installer (a
+# hard `require` in Roundcube's manifest) and writes composer.lock, which is
+# what makes a later `composer require <plugin>` place the plugin into plugins/
+# instead of vendor/. install never upgrades beyond the locked versions, so
+# re-running it is safe on a live server.
+setup_composer_and_roundcube_user() {
+    log_info "=== Composer & Roundcube user setup ==="
+
+    if ! command -v php >/dev/null 2>&1; then
+        log_error "php CLI not found; install a php*-cli package first"
+        return 1
+    fi
+
+    # 1) Composer -> /usr/local/bin (idempotent), verified by SHA-384 hash.
+    if ! command -v composer >/dev/null 2>&1; then
+        log_info "Installing Composer..."
+        cd /tmp || return 1
+        php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');" \
+            || { log_error "failed to download Composer installer"; return 1; }
+        php -r "copy('https://composer.github.io/installer.sig', 'composer-setup.sig');" \
+            || { log_error "failed to download Composer signature"; return 1; }
+        local EXPECTED ACTUAL
+        EXPECTED=$(php -r "echo trim(file_get_contents('composer-setup.sig'));")
+        ACTUAL=$(php -r "echo hash_file('sha384', 'composer-setup.php');")
+        if [ "$EXPECTED" != "$ACTUAL" ]; then
+            log_error "Composer installer hash mismatch (expected $EXPECTED, got $ACTUAL)"
+            rm -f composer-setup.php composer-setup.sig
+            return 1
+        fi
+        php composer-setup.php --install-dir=/usr/local/bin --filename=composer \
+            || { log_error "Composer install failed"; rm -f composer-setup.php composer-setup.sig; return 1; }
+        rm -f composer-setup.php composer-setup.sig
+    fi
+    command -v composer >/dev/null 2>&1 || { log_error "composer still unavailable"; return 1; }
+    log_info "Composer: $(composer --version 2>/dev/null || true)"
+
+    # 2) The `roundcube` user (idempotent), with a login shell so `sudo -u`
+    #    works, and the fixed password.
+    if ! id -u "$ROUNDCUBE_COMPOSER_USER" >/dev/null 2>&1; then
+        useradd --create-home --home-dir "$ROUNDCUBE_COMPOSER_HOME" \
+            --shell /bin/bash "$ROUNDCUBE_COMPOSER_USER"
+        log_info "Created user: $ROUNDCUBE_COMPOSER_USER"
+    fi
+    echo "${ROUNDCUBE_COMPOSER_USER}:${ROUNDCUBE_COMPOSER_PASSWORD}" | chpasswd
+
+    # 3) Ownership: roundcube owns the project (so Composer can write plugins/,
+    #    vendor/, composer.json and composer.lock); www-data keeps temp/ and
+    #    logs/, which it writes at runtime.
+    if [ -d /var/www/html/roundcube ]; then
+        chown -R "$ROUNDCUBE_COMPOSER_USER":"$ROUNDCUBE_COMPOSER_USER" /var/www/html/roundcube
+        for d in temp logs; do
+            [ -d "/var/www/html/roundcube/$d" ] && chown -R www-data:www-data "/var/www/html/roundcube/$d"
+        done
+    fi
+
+    # 4) One-time Composer reconcile (idempotent, non-fatal).
+    if [ -f /var/www/html/roundcube/composer.json ]; then
+        cd /var/www/html/roundcube || return 1
+        if ! sudo -H -u "$ROUNDCUBE_COMPOSER_USER" composer install --no-interaction --no-progress; then
+            log_warning "composer install failed: plugins will not install until this succeeds"
+        fi
+    else
+        log_warning "/var/www/html/roundcube/composer.json not found: skipping composer reconcile"
+    fi
+
+    # 5) Sanity check, mirroring the manual step.
+    sudo -H -u "$ROUNDCUBE_COMPOSER_USER" composer --version 2>/dev/null || true
+    log_info "Composer & Roundcube user setup complete"
+}
+
+# Interactive Roundcube plugin installer. Plugins are installed one at a time so
+# a failure on one never aborts the rest, and each is then enabled (see
+# rc_enable_plugin). Some plugins need per-plugin configuration afterwards; those
+# are flagged with a note.
+install_roundcube_plugins() {
+    setup_composer_and_roundcube_user || return 1
+
+    local RC_DIR="/var/www/html/roundcube"
+    [ -f "$RC_DIR/composer.json" ] || {
+        log_error "Roundcube not installed ($RC_DIR/composer.json missing)"; return 1
+    }
+
+    # Curated list: "composer package|menu label|needs-setup note (or empty)".
+    local PLUGINS=(
+        "hercegdoo/aicomposeplugin|AI Compose|"
+        "texxasrulez/spfstatus|SPF Status|"
+        "texxasrulez/password|Password|choose a password driver in Settings > Password"
+        "texxasrulez/folder_info|Folder Info|"
+        "jfcherng-roundcube/cloudview|Cloud View|"
+        "texxasrulez/scheduled_sending|Scheduled Sending|"
+        "gecka/ident-switch|Identity Switch|"
+        "kitist/html5_notifier|HTML5 Notifier|"
+        "texxasrulez/advanced_search|Advanced Search|"
+        "texxasrulez/additional_imap|Additional IMAP|"
+        "texxasrulez/rc_shield|RC Shield|"
+        "gianlucagiacometti/roundcube-toolbox|Roundcube Toolbox|"
+        "jfcherng-roundcube/show-folder-size|Show Folder Size|"
+        "jfcherng-roundcube/quota|Quota|"
+        "texxasrulez/account_details|Account Details|"
+        "prefo-pl/email_notes|Email Notes|"
+        "pf4public/fetchmail|Fetchmail|add a periodic fetch cron (see its README)"
+        "dsoares/removeattachments|Remove Attachments|"
+        "cymdeveloppement/roundcube-ai|Roundcube AI|set provider + API key in its settings"
+    )
+
+    echo
+    echo "Available Roundcube plugins:"
+    local i=1 entry label note
+    for entry in "${PLUGINS[@]}"; do
+        label="${entry#*|}"; label="${label%%|*}"
+        note="${entry##*|}"
+        if [ -n "$note" ]; then
+            printf "  %2d) %s  [needs setup: %s]\n" "$i" "$label" "$note"
+        else
+            printf "  %2d) %s\n" "$i" "$label"
+        fi
+        i=$((i+1))
+    done
+    echo
+
+    local selection
+    read -p "Enter plugin number(s) to install (space-separated, 'all', or 'q' to cancel): " selection
+    [ -z "$selection" ] && { echo "No plugins selected."; return 0; }
+    [ "$selection" = "q" ] && return 0
+
+    local selected=()
+    if [ "$selection" = "all" ]; then
+        for ((idx=0; idx<${#PLUGINS[@]}; idx++)); do selected+=("$idx"); done
+    else
+        local tok
+        for tok in $selection; do
+            case "$tok" in
+                ''|*[!0-9]*) log_error "Invalid choice: '$tok'"; return 1 ;;
+            esac
+            if [ "$tok" -ge 1 ] && [ "$tok" -le "${#PLUGINS[@]}" ]; then
+                selected+=("$((tok-1))")
+            else
+                log_error "Out of range: $tok"; return 1
+            fi
+        done
+    fi
+
+    local idx pkg before after d
+    for idx in "${selected[@]}"; do
+        entry="${PLUGINS[$idx]}"
+        pkg="${entry%%|*}"
+        label="${entry#*|}"; label="${label%%|*}"
+        note="${entry##*|}"
+        log_info "Installing $label ($pkg)..."
+        before=$(ls "$RC_DIR/plugins" 2>/dev/null | sort)
+        cd "$RC_DIR" || return 1
+        if sudo -H -u "$ROUNDCUBE_COMPOSER_USER" composer require "$pkg" --no-interaction --no-progress; then
+            after=$(ls "$RC_DIR/plugins" 2>/dev/null | sort)
+            while IFS= read -r d; do
+                [ -n "$d" ] && rc_enable_plugin "$RC_DIR/config/config.inc.php" "$d"
+            done < <(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
+            log_info "Installed and enabled $label ($pkg)"
+            [ -n "$note" ] && log_warning "  $label still needs setup: $note"
+        else
+            log_error "Failed to install $pkg"
+        fi
+    done
+
+    log_info "Roundcube plugin installation finished. Re-run to retry failures or add more."
 }
 
 verify_roundcube_installation() {
@@ -3718,7 +3931,7 @@ write_roundcube_ssl_vhost() {
         </IfModule>
     </Directory>
     <FilesMatch \.php\$>
-        SetHandler "proxy:unix:/run/php/php8.1-fpm.sock|fcgi://localhost"
+        SetHandler "proxy:unix:/run/php/php8.4-fpm.sock|fcgi://localhost"
     </FilesMatch>
     ErrorLog \${APACHE_LOG_DIR}/roundcube_error.log
     CustomLog \${APACHE_LOG_DIR}/roundcube_access.log combined
@@ -4011,14 +4224,12 @@ EOF
         apt-get -qq update > /dev/null
 
         log_info "Installing PHP 8.1..."
-        apt_install php8.1 php8.1-fpm php8.1-cli php8.1-common php8.1-curl php8.1-mysql php8.1-xml php8.1-mbstring php8.1-zip php8.1-intl php8.1-pspell
-
+        apt_install php8.1 php8.1-fpm php8.1-cli php8.1-common php8.1-curl php8.1-mysql php8.1-pgsql php8.1-sqlite3 php8.1-xml php8.1-mbstring php8.1-zip php8.1-intl php8.1-pspell php8.1-ldap php8.1-gd php8.1-imagick php8.1-bz2 php8.1-gmp php8.1-bcmath php8.1-opcache php8.1-readline php8.1-xsl unzip
         log_info "Installing PHP 8.3..."
         apt_install php8.3 php8.3-fpm php8.3-cli php8.3-common php8.3-curl php8.3-mysql php8.3-xml php8.3-mbstring php8.3-zip php8.3-intl php8.3-pspell
 
         log_info "Installing PHP 8.4..."
-        apt_install php8.4 php8.4-fpm php8.4-cli php8.4-common php8.4-curl php8.4-mysql php8.4-xml php8.4-mbstring php8.4-zip php8.4-intl php8.4-pspell
-
+        apt_install php8.4 php8.4-fpm php8.4-cli php8.4-common php8.4-curl php8.4-mysql php8.4-pgsql php8.4-sqlite3 php8.4-xml php8.4-mbstring php8.4-zip php8.4-intl php8.4-pspell php8.4-ldap php8.4-gd php8.4-imagick php8.4-bz2 php8.4-gmp php8.4-bcmath php8.4-opcache php8.4-readline php8.4-xsl unzip
         log_info "Installing PHP 5.6..."
         apt_install php5.6 php5.6-fpm php5.6-cli php5.6-common php5.6-curl php5.6-mysql php5.6-xml php5.6-mbstring php5.6-zip php5.6-intl php5.6-pspell
 
@@ -4136,7 +4347,7 @@ EOF
         </IfModule>
     </Directory>
     <FilesMatch \.php\$>
-        SetHandler "proxy:unix:/run/php/php8.1-fpm.sock|fcgi://localhost"
+        SetHandler "proxy:unix:/run/php/php8.4-fpm.sock|fcgi://localhost"
     </FilesMatch>
     ErrorLog \${APACHE_LOG_DIR}/phpmyadmin_error.log
     CustomLog \${APACHE_LOG_DIR}/phpmyadmin_access.log combined
@@ -4332,8 +4543,10 @@ echo "20. Exit"
 echo "21. Repair Admin Panel Web Access"
 echo "22. Update mailx-admin to latest release"
 echo "23. Enable SSL on webmail (Roundcube)"
+echo "24. Setup Composer & Roundcube user"
+echo "25. Install Roundcube plugins"
 
-read -p "Enter your choice (1-23): " choice
+read -p "Enter your choice (1-25): " choice
 
 case $choice in
     1)
@@ -4511,6 +4724,14 @@ case $choice in
         web_host="${web_host:-$(hostname -f 2>/dev/null || hostname)}"
         write_roundcube_ssl_vhost "$web_host"
         log_info "Roundcube webmail now serves HTTPS on 8080 (https://${web_host}:8080)"
+        ;;
+
+    24)
+        setup_composer_and_roundcube_user
+        ;;
+
+    25)
+        install_roundcube_plugins
         ;;
 
     *)

@@ -1,0 +1,22 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Updates</h1>
+    <p class="page-sub">Check for and install a newer mailx-admin release.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Version</h2>
+    <button class="btn btn-sm" hx-post="/system/updates/check" hx-target="#update-status" hx-swap="innerHTML">
+      Check now
+    </button>
+  </div>
+  <div id="update-status">
+    {{template "update_status" .}}
+  </div>
+</div>
+
+<div id="update-result"></div>
+{{end}}

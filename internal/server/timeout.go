@@ -28,6 +28,11 @@ const (
 	// runs postmap and may reload a service, so it gets twice the budget.
 	mutationTimeout = 30 * time.Second
 
+	// updateApplyBudget bounds the self-update download+install. The download
+	// runs on its own context (see handlers_updates.go); this only widens the
+	// response budget so the browser is not answered with a timeout first.
+	updateApplyBudget = 3 * time.Minute
+
 	// timeoutGrace is how long a handler that finished at the very moment the
 	// budget ran out still gets to flush its answer. Without it a create that
 	// completed at 30.0s would be reported as a timeout, and the operator would
@@ -70,6 +75,8 @@ func isSlowRead(path string) bool {
 // defaultBudget returns the request budget for a route by shape and method.
 func defaultBudget(r *http.Request) time.Duration {
 	switch {
+	case r.URL.Path == "/system/updates/apply":
+		return updateApplyBudget
 	case r.Method != http.MethodGet && r.Method != http.MethodHead:
 		return mutationTimeout
 	case isSlowRead(r.URL.Path):

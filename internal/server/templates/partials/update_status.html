@@ -1,0 +1,38 @@
+{{define "update_status"}}
+<div class="card-body">
+  {{with .Update}}
+  <div class="grid grid-cols-2 gap-4 mb-4">
+    <div class="stat"><span class="stat-label">Current</span><span class="stat-value mono">{{.Current}}</span></div>
+    <div class="stat"><span class="stat-label">Latest</span><span class="stat-value mono">{{if .Latest}}{{.Latest}}{{else}}unknown{{end}}</span></div>
+  </div>
+
+  {{if .Error}}
+  <div class="alert alert-warn mb-4" role="status">Could not check for updates: {{.Error}}</div>
+  {{else if .Available}}
+  <div class="alert alert-ok mb-4" role="status">A newer release ({{.Latest}}) is available.</div>
+  {{else if .UpToDate}}
+  <div class="alert alert-ok mb-4" role="status">You are on the latest release.</div>
+  {{end}}
+
+  {{if .Notes}}
+  <details class="mb-4">
+    <summary class="strong">Release notes</summary>
+    <pre class="mono text-sm mt-2">{{.Notes}}</pre>
+  </details>
+  {{end}}
+
+  {{if .CanUpdate}}
+  <button class="btn btn-primary" hx-post="/system/updates/apply" hx-target="#update-result" hx-swap="innerHTML"
+          hx-confirm="Update mailx-admin to {{.Latest}}? The panel will restart.">
+    Update to {{.Latest}}
+  </button>
+  {{else if .Available}}
+  <span class="dim text-sm">This build was not stamped from a release, so it cannot self-update.</span>
+  {{end}}
+
+  {{if .CheckedAt}}<div class="dim text-xs mt-3">Checked {{.CheckedAt}}</div>{{end}}
+  {{else}}
+  <div class="dim text-sm">Not checked yet. Click "Check now".</div>
+  {{end}}
+</div>
+{{end}}

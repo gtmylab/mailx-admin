@@ -1,0 +1,16 @@
+{{define "database_migrate_result"}}
+{{if eq .Status "running"}}
+<div class="alert alert-warn mt-3" role="status"
+     hx-get="/system/database/status" hx-trigger="load delay:2s" hx-target="#database-migrate-result" hx-swap="outerHTML">
+  <strong>Migration running...</strong>
+  <p class="text-sm">Copying tables. The panel restarts when it finishes.</p>
+</div>
+{{else if eq .Status "done"}}
+<div class="alert alert-ok mt-3" role="status">
+  <strong>Migration complete.</strong> Restarting the panel on Postgres.
+  <p class="text-sm">Copied {{.Total}} rows across {{.TableCount}} tables.</p>
+</div>
+{{else if eq .Status "error"}}
+<div class="alert alert-err mt-3" role="alert"><strong>Migration failed.</strong> {{.Error}}</div>
+{{end}}
+{{end}}

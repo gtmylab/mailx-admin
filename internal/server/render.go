@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/gtmylab/mailx-admin/internal/auth"
+	"github.com/gtmylab/mailx-admin/internal/update"
 	"github.com/gtmylab/mailx-admin/internal/version"
 	"net/http"
 )
@@ -64,6 +65,10 @@ type pageData struct {
 	// pages rendered without a request (error.html) and when the history is
 	// unreadable, and the banner hides itself in that case.
 	Sync *syncView
+
+	// Update is the cached release check, shown by the update banner on every
+	// page and by the Updates page. Nil while the panel has not checked yet.
+	Update *update.Status
 }
 
 // newPageData builds the envelope for a full page render, including the CSRF
@@ -91,7 +96,8 @@ func (s *Server) newPageData(w http.ResponseWriter, r *http.Request, title, nav 
 		Data:      data,
 		// Read from the syncer's short-lived cache, so a page render costs at
 		// most one row every couple of seconds.
-		Sync: s.syncStatus(r.Context()),
+		Sync:   s.syncStatus(r.Context()),
+		Update: s.updateStatus(),
 	}
 }
 

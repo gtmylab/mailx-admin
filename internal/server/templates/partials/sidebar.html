@@ -45,6 +45,9 @@
       {{template "nav-item" (dict "Href" "/system/outbound-ips" "Label" "Outbound IPs" "Icon" "server" "Active" (eq .ActiveNav "outbound-ips"))}}
       {{template "nav-item" (dict "Href" "/system/relay" "Label" "Outbound relay" "Icon" "relay" "Active" (eq .ActiveNav "relay"))}}
       {{template "nav-item" (dict "Href" "/system/postfix" "Label" "Postfix config" "Icon" "postfix" "Active" (eq .ActiveNav "postfix"))}}
+      {{template "nav-item" (dict "Href" "/system/updates" "Label" "Updates" "Icon" "update" "Active" (eq .ActiveNav "updates"))}}
+      {{template "nav-item" (dict "Href" "/system/database" "Label" "Database" "Icon" "database" "Active" (eq .ActiveNav "database"))}}
+      {{template "nav-item" (dict "Href" "/system/import" "Label" "Mail import" "Icon" "import" "Active" (eq .ActiveNav "mail-import"))}}
       {{template "nav-item" (dict "Href" "/settings/api" "Label" "API & Webhooks" "Icon" "api" "Active" (eq .ActiveNav "api"))}}
       {{template "nav-item" (dict "Href" "/backup" "Label" "Backups" "Icon" "backup" "Active" (eq .ActiveNav "backup"))}}
     </div>

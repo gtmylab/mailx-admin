@@ -160,6 +160,22 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("GET /system/relay", s.handleRelayPage)
 	protected.HandleFunc("POST /system/relay", s.handleRelaySave)
 
+	// Self-update
+	protected.HandleFunc("GET /system/updates", s.handleUpdatesPage)
+	protected.HandleFunc("POST /system/updates/check", s.handleUpdateCheck)
+	protected.HandleFunc("POST /system/updates/apply", s.handleUpdateApply)
+
+	// Database (SQLite -> Postgres migration)
+	protected.HandleFunc("GET /system/database", s.handleDatabasePage)
+	protected.HandleFunc("POST /system/database/test", s.handleDatabaseTest)
+	protected.HandleFunc("POST /system/database/migrate", s.handleDatabaseMigrate)
+	protected.HandleFunc("GET /system/database/status", s.handleDatabaseStatus)
+
+	// Mail import
+	protected.HandleFunc("GET /system/import", s.handleMailImportPage)
+	protected.HandleFunc("POST /system/import", s.handleMailImportStart)
+	protected.HandleFunc("GET /system/import/status", s.handleMailImportStatus)
+
 	// Postfix config editor
 	protected.HandleFunc("GET /system/postfix", s.handlePostfixPage)
 	protected.HandleFunc("POST /system/postfix/file/{name}", s.handlePostfixFileSave)

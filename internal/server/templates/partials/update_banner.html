@@ -1,0 +1,13 @@
+{{define "update_banner"}}
+{{with .Update}}
+{{if .Available}}
+<div class="alert alert-warn mb-4" role="status">
+  <div>
+    <strong>A new version is available: {{.Latest}}</strong>
+    <p class="text-sm">This panel runs {{.Current}}. Review and install from the Updates page.</p>
+    <a class="btn btn-sm btn-primary mt-2" href="/system/updates">Review update</a>
+  </div>
+</div>
+{{end}}
+{{end}}
+{{end}}

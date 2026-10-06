@@ -75,7 +75,7 @@ func cmdServe() *cobra.Command {
 				PasswdScheme:   cfg.Mail.PasswdScheme,
 			}, audit.New(database.DB))
 
-			srv, err := server.New(cfg, database.DB, st, rec, logger)
+			srv, err := server.New(cfg, database.DB, st, rec, logger, cfgPath)
 			if err != nil {
 				return err
 			}

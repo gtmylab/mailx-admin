@@ -1,0 +1,66 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Database</h1>
+    <p class="page-sub">Move the panel from SQLite to Postgres when a single mail server outgrows SQLite.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h2>Current database</h2></div>
+  <div class="card-body">
+    <div class="grid grid-cols-2 gap-4">
+      <div class="stat"><span class="stat-label">Driver</span><span class="stat-value mono">{{.Data.DB.Driver}}</span></div>
+      <div class="stat"><span class="stat-label">SQLite path</span><span class="stat-value mono">{{if .Data.DB.SQLitePath}}{{.Data.DB.SQLitePath}}{{else}}n/a{{end}}</span></div>
+    </div>
+  </div>
+</div>
+
+{{if eq .Data.DB.Driver "sqlite"}}
+<div class="card mt-4">
+  <div class="card-header"><h2>Migrate to Postgres</h2></div>
+  <div class="card-body">
+    <p class="text-sm dim mb-4">The migration creates the schema on the target Postgres, copies every table (preserving ids and history), then switches the panel over and restarts. Keep the SQLite file as a fallback.</p>
+    <form class="form" hx-post="/system/database/migrate" hx-target="#database-migrate-result" hx-swap="innerHTML"
+          hx-confirm="Migrate all panel data to Postgres? The panel will restart.">
+      <div class="grid grid-cols-2 gap-4">
+        <label class="field">
+          <span class="field-label">Host</span>
+          <input class="input" type="text" name="host" value="127.0.0.1" placeholder="127.0.0.1">
+        </label>
+        <label class="field">
+          <span class="field-label">Port</span>
+          <input class="input" type="number" name="port" value="5432">
+        </label>
+        <label class="field">
+          <span class="field-label">User</span>
+          <input class="input" type="text" name="user" value="postgres">
+        </label>
+        <label class="field">
+          <span class="field-label">Password</span>
+          <input class="input" type="password" name="password" autocomplete="new-password">
+        </label>
+        <label class="field">
+          <span class="field-label">Database</span>
+          <input class="input" type="text" name="dbname" placeholder="mailx">
+        </label>
+        <label class="field">
+          <span class="field-label">SSL mode</span>
+          <select class="select" name="sslmode">
+            <option value="disable">disable</option>
+            <option value="prefer" selected>prefer</option>
+            <option value="require">require</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn" hx-post="/system/database/test" hx-include="closest form" hx-target="#database-test-result" hx-swap="innerHTML">Test connection</button>
+        <button type="submit" class="btn btn-primary">Migrate to Postgres</button>
+      </div>
+    </form>
+    <div id="database-test-result"></div>
+    <div id="database-migrate-result"></div>
+  </div>
+</div>
+{{end}}
+{{end}}

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"time"
@@ -199,4 +200,18 @@ func (c *DBConfig) ToDriverConfig() db.Config {
 		out.PGSSLMode = c.Postgres.SSLMode
 	}
 	return out
+}
+
+// Save writes the config back to path as TOML. The SQLite -> Postgres migration
+// uses it to flip the [database] section; it rewrites the whole file, so
+// hand-written comments in admin.toml are not preserved.
+func Save(path string, cfg *Config) error {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	return nil
 }

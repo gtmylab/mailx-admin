@@ -1,0 +1,7 @@
+{{define "update_result"}}
+{{if .Error}}
+<div class="alert alert-err mt-4" role="alert"><strong>Update failed.</strong> {{.Error}}</div>
+{{else}}
+<div class="alert alert-ok mt-4" role="status"><strong>{{.Message}}</strong></div>
+{{end}}
+{{end}}
