@@ -143,9 +143,9 @@ func (r *Reconciler) hostname() string {
 // the paths but runs in DryRun mode: a preview must never write a file or reload
 // a service, which is what v1.0.4 did by borrowing the live reconciler.
 func (r *Reconciler) Config() Config {
-	c := r.cfg
-	c.Hostname = r.hostname()
-	return c
+	r.hostMu.RLock()
+	defer r.hostMu.RUnlock()
+	return r.cfg
 }
 
 // managedFile is a single file the reconciler owns.
