@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -95,19 +96,40 @@ func ImportIMAP(ctx context.Context, cfg IMAPConfig, w *Writer, report func(Prog
 		}
 	}
 
+	// Put INBOX first so the largest, most important folder imports first; the
+	// rest follow alphabetically (case-insensitive).
+	sort.Slice(names, func(i, j int) bool {
+		ni, nj := names[i], names[j]
+		if strings.EqualFold(ni, "INBOX") != strings.EqualFold(nj, "INBOX") {
+			return strings.EqualFold(ni, "INBOX")
+		}
+		return strings.ToLower(ni) < strings.ToLower(nj)
+	})
+
 	cumulative := 0
 	for _, name := range names {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		// Some folders exist only as namespace nodes and cannot be selected.
-		if _, err := c.Select(name, true); err != nil {
+		mbox, err := c.Select(name, true)
+		if err != nil {
 			continue
 		}
-		emit(Progress{Log: "Fetching " + name + "...", Folder: name, Messages: cumulative, Total: total})
-		n, err := importFolder(ctx, c, name, w, cumulative, total, emit)
+		if mbox.Messages == 0 {
+			emit(Progress{Log: "Folder " + name + " is empty.", Folder: name, Messages: cumulative, Total: total})
+			continue
+		}
+		emit(Progress{Log: fmt.Sprintf("Folder %s: %d messages.", name, mbox.Messages), Folder: name, Messages: cumulative, Total: total})
+		n, err := importFolder(ctx, c, name, w, cumulative, total, mbox.Messages, emit)
 		if err != nil {
-			return nil, err
+			// One bad folder must not abort the whole import; report it and keep
+			// going so the remaining folders still get migrated.
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			emit(Progress{Log: "Folder " + name + " failed: " + err.Error(), Folder: name, Messages: cumulative, Total: total})
+			continue
 		}
 		cumulative += n
 		res.Folders[name] += n
@@ -157,13 +179,14 @@ func dialIMAP(mode, addr string, insecure bool) (*client.Client, error) {
 
 // importFolder fetches every message in the selected folder and writes it.
 // base is the number of messages already imported from earlier folders, and
-// total is the best-effort grand total across all folders.
-func importFolder(ctx context.Context, c *client.Client, name string, w *Writer, base, total int, emit func(Progress)) (int, error) {
+// total is the best-effort grand total across all folders. count is the number
+// of messages in the folder (from Select), used to build an explicit 1:N range.
+func importFolder(ctx context.Context, c *client.Client, name string, w *Writer, base, total int, count uint32, emit func(Progress)) (int, error) {
 	section := &imap.BodySectionName{}
 	items := []imap.FetchItem{section.FetchItem(), imap.FetchFlags, imap.FetchInternalDate}
 
 	seqset := new(imap.SeqSet)
-	seqset.AddRange(1, 0) // 1:* — every message
+	seqset.AddRange(1, count) // explicit 1:N (the caller skips count == 0)
 
 	messages := make(chan *imap.Message, 64)
 	done := make(chan error, 1)
