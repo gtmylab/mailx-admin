@@ -1039,7 +1039,7 @@ EOF
 ::1
 localhost
 $DOMAIN
-mail.$DOMAIN
+$(mail_host)
 EOF
 
     chmod 644 "$OPENDKIM_CONF"
@@ -1207,6 +1207,45 @@ get_ssl_domain() {
             | tr -d '[:space:]')
     fi
     echo "$domain"
+}
+
+# The hostname mail clients / the MX record actually target: the optional
+# override, else the system hostname. Used for cert SANs and the DNS records we
+# print, so we never assume a "mail." prefix that the user may not have an A
+# record for.
+mail_host() {
+    local mh
+    mh=$(cat /usr/local/roundcube_mail_hostname.txt 2>/dev/null | tr -d '[:space:]')
+    if [ -z "$mh" ]; then
+        mh=$(cat /etc/mailname 2>/dev/null | tr -d '[:space:]')
+        mh="${mh:-$(hostname -f 2>/dev/null || hostname)}"
+    fi
+    printf '%s' "$mh"
+}
+
+# Emit the ordered, deduplicated "-d" arguments for a single Let's Encrypt cert.
+# The certificate is named after the first domain (the system hostname), which is
+# how configure_ssl_services / install_admin_apache_vhost look it up.
+#
+#   cert_domains <hostname> <email_domain> [mail_hostname] [include_admin]
+#
+# include_admin defaults to 1 (include the admin.<domain> SAN); pass 0 to drop it.
+cert_domains() {
+    local hostname=$1 email_domain=$2 mail_hostname=${3:-} include_admin=${4:-1}
+    local out="$hostname"
+    if [ "$include_admin" = "1" ]; then
+        case " $out " in *" admin.$email_domain "*) ;; *) out="$out admin.$email_domain" ;; esac
+    fi
+    case " $out " in *" $email_domain "*) ;; *) out="$out $email_domain" ;; esac
+    if [ -n "$mail_hostname" ]; then
+        case " $out " in *" $mail_hostname "*) ;; *) out="$out $mail_hostname" ;; esac
+    fi
+
+    local args=""
+    for d in $out; do
+        args="${args}${args:+ }-d ${d}"
+    done
+    printf '%s' "$args"
 }
 
 show_ssl_details() {
@@ -1393,10 +1432,12 @@ renew_ssl_now() {
             ;;
         2)
             log_info "Forcing renewal for $primary_domain..."
+            local hostname mail_hostname
+            hostname=$(cat /etc/mailname 2>/dev/null | tr -d '[:space:]')
+            hostname="${hostname:-$(hostname -f 2>/dev/null || hostname)}"
+            mail_hostname=$(cat /usr/local/roundcube_mail_hostname.txt 2>/dev/null | tr -d '[:space:]')
             if certbot certonly --force-renewal \
-                -d "$primary_domain" \
-                -d "mail.$primary_domain" \
-                -d "admin.$primary_domain" \
+                $(cert_domains "$hostname" "$primary_domain" "$mail_hostname") \
                 --non-interactive --agree-tos \
                 --email "admin@$primary_domain" \
                 --post-hook "systemctl reload postfix dovecot apache2"; then
@@ -1674,19 +1715,36 @@ RENEWAL_EOF
 
 manage_ssl_certificates() {
     local action=$1
-    local domain=${2:-$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')}
-    local webroot="/var/www/html"
+    local hostname=$2
+    local email_domain=$3
+    local mail_hostname=$4
 
-    if [ -z "$domain" ]; then
-        log_error "No domain specified for SSL certificate"
+    if [ -z "$hostname" ]; then
+        hostname=$(cat /etc/mailname 2>/dev/null | tr -d '[:space:]')
+        hostname="${hostname:-$(hostname -f 2>/dev/null || hostname)}"
+    fi
+    if [ -z "$email_domain" ]; then
+        email_domain=$(cat /usr/local/roundcube_mail_domain.txt 2>/dev/null | tr -d '[:space:]')
+    fi
+    if [ -z "$mail_hostname" ]; then
+        mail_hostname=$(cat /usr/local/roundcube_mail_hostname.txt 2>/dev/null | tr -d '[:space:]')
+    fi
+
+    local webroot="/var/www/html"
+    # The certificate is named after the system hostname; configure_ssl_services
+    # and install_admin_apache_vhost look it up at /etc/letsencrypt/live/<hostname>.
+    local cert_name="$hostname"
+
+    if [ -z "$hostname" ] || [ -z "$email_domain" ]; then
+        log_error "No hostname/domain specified for SSL certificate"
         return 1
     fi
 
     case "$action" in
         install)
-            if [ -d "/etc/letsencrypt/live/$domain" ]; then
-                log_info "SSL certificate already installed for $domain"
-                configure_ssl_services "$domain"
+            if [ -d "/etc/letsencrypt/live/$cert_name" ]; then
+                log_info "SSL certificate already installed for $cert_name"
+                configure_ssl_services "$cert_name"
                 return 0
             fi
 
@@ -1698,18 +1756,18 @@ manage_ssl_certificates() {
             mkdir -p "$webroot/.well-known/acme-challenge"
             chown -R www-data:www-data "$webroot"
 
-            log_info "Attempting to install Let's Encrypt SSL certificate for $domain..."
+            log_info "Attempting to install Let's Encrypt SSL certificate for $cert_name..."
 
-            # Include admin.<domain> in SANs so the panel has TLS
-            if retry_command "certbot certonly --webroot -w $webroot -d $domain -d mail.$domain -d admin.$domain --non-interactive --agree-tos --email admin@$domain --keep-until-expiring"; then
-                configure_ssl_services "$domain"
+            # SANs: system hostname + admin.<domain> + <domain> + optional mail host.
+            if retry_command "certbot certonly --webroot -w $webroot $(cert_domains "$hostname" "$email_domain" "$mail_hostname") --non-interactive --agree-tos --email admin@$email_domain --keep-until-expiring"; then
+                configure_ssl_services "$cert_name"
                 setup_ssl_renewal
                 log_info "SSL certificate installed successfully"
                 return 0
             else
                 log_warning "SSL cert with admin.<domain> failed — trying without admin SAN"
-                if retry_command "certbot certonly --webroot -w $webroot -d $domain -d mail.$domain --non-interactive --agree-tos --email admin@$domain --keep-until-expiring"; then
-                    configure_ssl_services "$domain"
+                if retry_command "certbot certonly --webroot -w $webroot $(cert_domains "$hostname" "$email_domain" "$mail_hostname" 0) --non-interactive --agree-tos --email admin@$email_domain --keep-until-expiring"; then
+                    configure_ssl_services "$cert_name"
                     setup_ssl_renewal
                     log_info "SSL certificate installed (without admin SAN)"
                     return 0
@@ -1725,23 +1783,22 @@ manage_ssl_certificates() {
             ;;
 
         change)
-            local new_domain=$2
-            if [[ -z "$new_domain" ]]; then
-                log_error "New domain not specified"
+            if [[ -z "$hostname" || -z "$email_domain" ]]; then
+                log_error "New hostname/domain not specified"
                 return 1
             fi
 
-            log_info "Changing SSL certificate from $domain to $new_domain..."
+            log_info "Changing SSL certificate to $hostname (domain $email_domain)..."
             certbot certonly --webroot -w "$webroot" \
-                -d "$new_domain" -d "mail.$new_domain" -d "admin.$new_domain" \
-                --non-interactive --agree-tos --email admin@$new_domain \
+                $(cert_domains "$hostname" "$email_domain" "$mail_hostname") \
+                --non-interactive --agree-tos --email admin@$email_domain \
                 --keep-until-expiring --force-renewal || true
 
-            configure_ssl_services "$new_domain"
+            configure_ssl_services "$hostname"
             ;;
 
         *)
-            log_error "Usage: manage_ssl_certificates [install|renew|change newdomain.com]"
+            log_error "Usage: manage_ssl_certificates [install|renew|change hostname email_domain [mail_hostname]]"
             return 1
             ;;
     esac
@@ -2019,14 +2076,14 @@ DNS RECORDS TO ADD (CRITICAL FOR EMAIL DELIVERY):
 4. MX Record (Mail exchange):
    Type: MX
    Host: $DOMAIN
-   Value: mail.$DOMAIN
+   Value: $(mail_host)
    Priority: 10
 
 5. A Records:
    Type: A
    Host: $DOMAIN          -> $server_ip
    Type: A
-   Host: mail.$DOMAIN     -> $server_ip
+   Host: $(mail_host)     -> $server_ip
    Type: A
    Host: admin.$DOMAIN    -> $server_ip
 
@@ -2068,7 +2125,7 @@ Value: "v=spf1 mx a ip4:$server_ip ~all"
 MX Record:
 Type: MX
 Host: $DOMAIN
-Value: mail.$DOMAIN
+Value: $(mail_host)
 Priority: 10
 EOF
 
@@ -2803,6 +2860,7 @@ change_domain_hostname() {
 
     read -p "Enter new email domain (e.g., example.com): " new_domain
     read -p "Enter new hostname (e.g., mail.example.com): " new_hostname
+    read -p "Enter new mail hostname / MX target [blank = same as hostname]: " new_mail_hostname
 
     if [[ -z "$new_domain" || -z "$new_hostname" ]]; then
         log_error "Both domain and hostname are required."
@@ -2815,6 +2873,7 @@ change_domain_hostname() {
 
     echo "$new_hostname" > /etc/mailname
     echo "$new_domain" > /usr/local/roundcube_mail_domain.txt
+    echo "$new_mail_hostname" > /usr/local/roundcube_mail_hostname.txt
 
     sed -i "s/$old_domain/$new_domain/g" /etc/postfix/main.cf 2>/dev/null || true
     sed -i "s/$old_hostname/$new_hostname/g" /etc/postfix/main.cf 2>/dev/null || true
@@ -2840,7 +2899,7 @@ change_domain_hostname() {
     restart_service dovecot
     restart_service apache2
 
-    manage_ssl_certificates change "$new_domain"
+    manage_ssl_certificates change "$new_hostname" "$new_domain" "$new_mail_hostname"
 
     log_info "Domain changed successfully to $new_domain with hostname $new_hostname"
 }
@@ -3255,12 +3314,12 @@ show_dkim_record() {
     echo "4. MX Record:"
     echo "   Type:     MX"
     echo "   Host:     $DOMAIN"
-    echo "   Value:    mail.$DOMAIN"
+    echo "   Value:    $(mail_host)"
     echo "   Priority: 10"
     echo
     echo "5. A Records:"
     echo "   $DOMAIN        -> $server_ip"
-    echo "   mail.$DOMAIN   -> $server_ip"
+    echo "   $(mail_host)   -> $server_ip"
     echo "   admin.$DOMAIN  -> $server_ip"
     echo
 }
@@ -3332,12 +3391,12 @@ DKIM & DNS Records for $DOMAIN
 4. MX Record:
    Type: MX
    Host: $DOMAIN
-   Value: mail.$DOMAIN
+   Value: $(mail_host)
    Priority: 10
 
 5. A Records:
    $DOMAIN        -> $server_ip
-   mail.$DOMAIN   -> $server_ip
+   $(mail_host)   -> $server_ip
    admin.$DOMAIN  -> $server_ip
 
 VERIFICATION:
@@ -3387,16 +3446,13 @@ fix_network_for_ppa() {
 
 # Write /etc/mailx/admin.toml based on the chosen DB driver.
 write_admin_toml() {
-    local driver=$1
-    local admin_db_password=$2
-    local email_domain=$3
-    local hostname=$4
+    local email_domain=$1
+    local hostname=$2
 
     mkdir -p "$ADMIN_CONFIG_DIR"
     chmod 700 "$ADMIN_CONFIG_DIR"
 
-    if [ "$driver" = "sqlite" ]; then
-        cat > "$ADMIN_CONFIG_FILE" <<EOF
+    cat > "$ADMIN_CONFIG_FILE" <<EOF
 # MailX Admin configuration
 # Generated by installer on $(date -Iseconds)
 # Edit carefully — the panel reads this on every start.
@@ -3454,66 +3510,6 @@ resolver = "1.1.1.1:53"
 mail_log_path  = "/var/log/mail.log"
 retention_days = 30
 EOF
-    else
-        cat > "$ADMIN_CONFIG_FILE" <<EOF
-# MailX Admin configuration
-# Generated by installer on $(date -Iseconds)
-
-[server]
-listen_addr = "${ADMIN_LISTEN_ADDR}"
-base_url    = "https://admin.${email_domain}"
-hostname    = "${hostname}"
-
-[database]
-driver = "postgres"
-
-[database.sqlite]
-path = "${ADMIN_STATE_DB}"
-
-[database.postgres]
-host     = "127.0.0.1"
-port     = 5432
-user     = "mailx_admin"
-password = "${admin_db_password}"
-dbname   = "mailx_admin"
-sslmode  = "disable"
-
-[mail]
-postfix_conf_dir    = "/etc/postfix"
-dovecot_conf_dir    = "/etc/dovecot"
-opendkim_dir        = "/etc/opendkim"
-primary_domain_file = "/usr/local/roundcube_mail_domain.txt"
-# Which scheme new mailbox passwords are hashed with. "auto" asks the local
-# Dovecot (doveadm pw -l): ARGON2ID where it was built with libsodium, SSHA512
-# where it was not. A hard-coded ARGON2ID on a Dovecot without libsodium is a
-# mailbox that can never log in.
-passwd_scheme       = "auto"
-
-[roundcube]
-# Pre-seed Roundcube's own database (a users row and its default identity) for
-# every mailbox the panel creates, so webmail knows the account before its owner
-# first logs in. Roundcube would create the rows itself at first login; doing it
-# here is what makes "does webmail know about this mailbox?" answerable.
-enabled   = true
-database  = "roundcubemail"
-# The MySQL client reads the Roundcube DB credentials from this defaults file,
-# which lives outside /root because the panel's systemd unit sets ProtectHome=yes.
-binary    = "mysql"
-args      = ["--defaults-file=/etc/mailx/roundcube.my.cnf"]
-# Has to match Roundcube's imap_host/default_host, or the row written here is
-# not the one a login looks up.
-mail_host = "localhost"
-language  = "en_GB"
-
-[dns]
-resolver = "1.1.1.1:53"
-
-[logs]
-mail_log_path  = "/var/log/mail.log"
-retention_days = 30
-EOF
-    fi
-
     chmod 600 "$ADMIN_CONFIG_FILE"
 }
 
@@ -3957,55 +3953,19 @@ install_mailx_admin_panel() {
     # ---- 13a. Prerequisites ----
     apt_install sqlite3 ca-certificates curl
 
-    # ---- 13b. Ask which DB driver ----
-    echo ""
-    echo "MailX Admin needs its own state database."
-    echo "This is separate from the Roundcube MySQL database."
-    echo ""
-    echo "  1) SQLite     (recommended for a single server, low memory)"
-    echo "  2) PostgreSQL (recommended for multi-server or high concurrency)"
-    echo ""
-    read -p "Choose admin DB driver [1]: " admin_db_choice
-    admin_db_choice="${admin_db_choice:-1}"
-
+    # ---- 13b. Database driver ----
+    # SQLite is the default and needs no prompt: it suits a single server, and a
+    # PostgreSQL upgrade is performed later from the panel (which migrates the
+    # schema), not at install time.
     local admin_db_driver="sqlite"
-    if [ "$admin_db_choice" = "2" ]; then
-        admin_db_driver="postgres"
-    fi
     echo "$admin_db_driver" > "${STATE_DIR}/admin_db_driver"
 
     mkdir -p "$ADMIN_CONFIG_DIR" "$ADMIN_STATE_DIR" "$ADMIN_BACKUP_DIR"
     chmod 700 "$ADMIN_CONFIG_DIR" "$ADMIN_STATE_DIR"
 
-    # ---- 13c. PostgreSQL setup ----
-    local admin_db_password=""
-    if [ "$admin_db_driver" = "postgres" ]; then
-        if ! command_exists psql; then
-            log_info "Installing PostgreSQL..."
-            apt_install postgresql postgresql-contrib
-        fi
-
-        admin_db_password=$(generate_password 32)
-        echo "$admin_db_password" > "${ADMIN_CONFIG_DIR}/pg_password"
-        chmod 600 "${ADMIN_CONFIG_DIR}/pg_password"
-
-        if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='mailx_admin'" | grep -q 1; then
-            sudo -u postgres psql -c "CREATE ROLE mailx_admin LOGIN PASSWORD '${admin_db_password}';"
-            log_info "Created PostgreSQL role: mailx_admin"
-        else
-            sudo -u postgres psql -c "ALTER ROLE mailx_admin WITH PASSWORD '${admin_db_password}';"
-            log_info "Updated PostgreSQL role password: mailx_admin"
-        fi
-
-        if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='mailx_admin'" | grep -q 1; then
-            sudo -u postgres createdb -O mailx_admin mailx_admin
-            log_info "Created PostgreSQL database: mailx_admin"
-        fi
-    fi
-
-    # ---- 13d. Write admin.toml ----
+    # ---- 13c. Write admin.toml ----
     log_info "Writing $ADMIN_CONFIG_FILE"
-    write_admin_toml "$admin_db_driver" "$admin_db_password" "$EMAIL_DOMAIN" "$HOSTNAME"
+    write_admin_toml "$EMAIL_DOMAIN" "$HOSTNAME"
 
     # ---- 13e. Download & install the binary ----
     if [ -x "$ADMIN_BINARY_PATH" ] && [ -z "$MAILX_ADMIN_FORCE_REINSTALL" ]; then
@@ -4374,7 +4334,7 @@ EOF
     if ! is_stage_completed "ssl_installation"; then
         log_info "=== Stage 8: SSL Certificate Installation ==="
 
-        if manage_ssl_certificates install "$HOSTNAME"; then
+        if manage_ssl_certificates install "$HOSTNAME" "$EMAIL_DOMAIN"; then
             mark_stage_complete "ssl_installation"
             # Roundcube's 8080 vhost can now use the Let's Encrypt cert instead
             # of the self-signed placeholder from Stage 6.
@@ -4560,7 +4520,8 @@ case $choice in
 
         while true; do
             read -p "Please enter the email domain (e.g., example.com): " EMAIL_DOMAIN
-            read -p "Please enter the hostname (e.g., mail.example.com): " HOSTNAME
+            read -p "Please enter the system hostname (e.g., mail.example.com): " HOSTNAME
+            read -p "Please enter the mail hostname / MX target [blank = same as system hostname]: " MAIL_HOSTNAME
             read -p "Please enter the admin email address: " ADMIN_MAILX_EMAIL
             echo
 
@@ -4574,10 +4535,16 @@ case $choice in
                 continue
             fi
 
+            if [[ -n "$MAIL_HOSTNAME" && ! "$MAIL_HOSTNAME" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+                log_error "'$MAIL_HOSTNAME' is not a fully qualified domain name."
+                continue
+            fi
+
             echo "You have entered:"
-            echo "Email Domain: $EMAIL_DOMAIN"
-            echo "Hostname: $HOSTNAME"
-            echo "Admin Email: $ADMIN_MAILX_EMAIL"
+            echo "Email Domain:    $EMAIL_DOMAIN"
+            echo "System Hostname: $HOSTNAME"
+            echo "Mail Hostname:   ${MAIL_HOSTNAME:-$HOSTNAME}"
+            echo "Admin Email:     $ADMIN_MAILX_EMAIL"
             echo
             read -p "Is this information correct? (y/n): " CONFIRM
 
@@ -4594,6 +4561,7 @@ case $choice in
         echo "$MYSQL_ROOT_PASSWORD" > /usr/local/mysql_root_pwd.txt
         echo "$ROUNDCUBE_DB_PASSWORD" > /usr/local/roundcube_db_pwd.txt
         echo "$EMAIL_DOMAIN" > /usr/local/roundcube_mail_domain.txt
+        echo "$MAIL_HOSTNAME" > /usr/local/roundcube_mail_hostname.txt
 
         install_roundcube "$EMAIL_DOMAIN" "$HOSTNAME" "$ADMIN_MAILX_EMAIL"
         ;;
