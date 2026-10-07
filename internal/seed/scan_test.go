@@ -263,6 +263,39 @@ func TestParseQuotaFromHome(t *testing.T) {
 }
 
 // TestLookupSystemAccount is what `mailbox add --kind system` uses to adopt an
+
+func TestScanAliases(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "virtual"), strings.Join([]string{
+		"sales@example.com     alice@example.com,bob@example.com",
+		"postmaster@example.com alice@example.com",
+		"@example.com          catchall@example.com",
+		"alice@example.com     alice@example.com", // self-map: skipped
+		"# a comment line",
+	}, "\n")+"\n")
+
+	aliases := scanAliases(dir)
+	if len(aliases) != 3 {
+		t.Fatalf("scanAliases = %d aliases, want 3: %+v", len(aliases), aliases)
+	}
+
+	got := map[string]string{}
+	for _, a := range aliases {
+		got[a.Source] = a.Domain + " -> " + a.Destination
+	}
+
+	if got["sales"] != "example.com -> alice@example.com,bob@example.com" {
+		t.Errorf("forwarder sales wrong: %+v", aliases)
+	}
+	if got["postmaster"] != "example.com -> alice@example.com" {
+		t.Errorf("forwarder postmaster wrong: %+v", aliases)
+	}
+	// The catch-all must be canonicalized to "@example.com", not stored as "".
+	if got["@example.com"] != "example.com -> catchall@example.com" {
+		t.Errorf("catch-all not canonicalized to @domain: %+v", aliases)
+	}
+}
+
 // account instead of inventing a second one with the same name.
 func TestLookupSystemAccount(t *testing.T) {
 	fx := newSystemFixture(t)

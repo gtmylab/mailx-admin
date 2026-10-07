@@ -184,21 +184,25 @@ func RenderVirtualMap(snap *models.Snapshot) []byte {
 
 	// Aliases
 	for _, a := range snap.Aliases {
+		var domainName string
+		for _, d := range snap.Domains {
+			if d.ID == a.DomainID {
+				domainName = d.Name
+				break
+			}
+		}
 		source := a.Source
-		if !strings.Contains(source, "@") {
-			// Local part only — expand with domain
-			var domainName string
-			for _, d := range snap.Domains {
-				if d.ID == a.DomainID {
-					domainName = d.Name
-					break
-				}
+		switch {
+		case source == "@" || source == "":
+			// Bare catch-all ("@") or a legacy empty seed row → "@domain".
+			if domainName != "" {
+				source = "@" + domainName
 			}
-			if strings.HasPrefix(source, "@") {
-				// already has @domain
-				source = source[1:] // strip leading @ handled below
-			}
-			if domainName != "" && !strings.Contains(source, "@") {
+		case strings.Contains(source, "@"):
+			// Already fully qualified ("@example.com" catch-all).
+		default:
+			// Local part only — expand with the domain name.
+			if domainName != "" {
 				source = source + "@" + domainName
 			}
 		}

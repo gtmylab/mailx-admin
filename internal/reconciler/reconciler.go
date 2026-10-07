@@ -420,6 +420,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 			mode:    0o644,
 			service: "opendkim",
 		},
+		{
+			// The main config lives one level up (/etc/opendkim.conf). It must be
+			// managed too: the installer left it in single-domain mode
+			// (Domain/Selector/KeyFile), which made OpenDKIM ignore the tables
+			// above and sign with a single hardcoded key.
+			path:    filepath.Join(filepath.Dir(r.cfg.OpenDKIMDir), "opendkim.conf"),
+			content: RenderOpenDKIMConf(r.cfg.OpenDKIMDir),
+			mode:    0o644,
+			service: "opendkim",
+		},
 	}
 
 	// ------------------------------------------------------------------

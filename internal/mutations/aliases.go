@@ -13,6 +13,23 @@ type CreateAliasInput struct {
 	Destination string // can be comma-separated
 }
 
+// normalizeAliasSource canonicalizes the source field of an alias. A bare "@"
+// becomes the domain's catch-all "@domain"; a local part is kept as-is; and any
+// source with an embedded "@" that is not a catch-all (e.g. "sales@example.com")
+// is rejected.
+func normalizeAliasSource(source, domainName string) (string, error) {
+	switch {
+	case source == "@":
+		return "@" + domainName, nil
+	case strings.HasPrefix(source, "@"):
+		// already a fully-qualified catch-all ("@example.com"); keep as-is
+		return source, nil
+	case strings.Contains(source, "@"):
+		return "", fmt.Errorf("%w: source must be a local part or \"@domain\" (catch-all)", ErrInvalidInput)
+	}
+	return source, nil
+}
+
 func (s *Service) CreateAlias(ctx context.Context, actor Actor, in CreateAliasInput) (*Result, error) {
 	in.Source = strings.TrimSpace(strings.ToLower(in.Source))
 	in.Destination = strings.TrimSpace(in.Destination)
@@ -32,6 +49,12 @@ func (s *Service) CreateAlias(ctx context.Context, actor Actor, in CreateAliasIn
 		return nil, fmt.Errorf("%w: domain not found", ErrNotFound)
 	}
 
+	normalized, err := normalizeAliasSource(in.Source, domainName)
+	if err != nil {
+		return nil, err
+	}
+	in.Source = normalized
+
 	// Validate destination emails
 	for _, dest := range strings.Split(in.Destination, ",") {
 		dest = strings.TrimSpace(dest)
@@ -50,6 +73,9 @@ func (s *Service) CreateAlias(ctx context.Context, actor Actor, in CreateAliasIn
 			in.DomainID, in.Source,
 		).Scan(&exists)
 		if err == nil {
+			if strings.HasPrefix(in.Source, "@") {
+				return fmt.Errorf("%w: a catch-all already exists for %s", ErrConflict, domainName)
+			}
 			return fmt.Errorf("%w: alias %s@%s already exists",
 				ErrConflict, in.Source, domainName)
 		}

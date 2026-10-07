@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gtmylab/mailx-admin/internal/models"
 )
@@ -86,9 +87,20 @@ func (s *Server) handleDomainDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The domain's catch-all, if any, is the alias whose source is the canonical
+	// "@domain". It is surfaced as its own field, separate from the forwarders.
+	var catchAll *models.Alias
+	for i := range aliases {
+		if strings.HasPrefix(aliases[i].Source, "@") {
+			catchAll = &aliases[i]
+			break
+		}
+	}
+
 	s.render(w, 200, "domain_detail.html", s.newPageData(w, r, found.Name, "domains", map[string]any{
-		"Domain":  found,
-		"Users":   users,
-		"Aliases": aliases,
+		"Domain":   found,
+		"Users":    users,
+		"Aliases":  aliases,
+		"CatchAll": catchAll,
 	}))
 }

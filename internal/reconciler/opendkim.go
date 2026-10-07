@@ -64,7 +64,9 @@ func RenderTrustedHosts(snap *models.Snapshot, hostname string) []byte {
 
 	lines := []string{"127.0.0.1", "::1", "localhost", hostname}
 	for _, d := range snap.Domains {
-		lines = append(lines, d.Name, "mail."+d.Name)
+		// Trust the real hostname above; never invent a "mail.<domain>" host the
+		// operator may not have an A record for.
+		lines = append(lines, d.Name)
 	}
 	sort.Strings(lines)
 
@@ -73,4 +75,46 @@ func RenderTrustedHosts(snap *models.Snapshot, hostname string) []byte {
 		b.WriteString("\n")
 	}
 	return b.Bytes()
+}
+
+// RenderOpenDKIMConf produces /etc/opendkim.conf in multi-domain mode: keys and
+// signing policies come from KeyTable and SigningTable, not a single
+// Domain/Selector/KeyFile triple, which is what lets the panel manage any number
+// of domains. The daemon settings mirror Mailx-Installer's, so a server the
+// installer set up keeps working unchanged.
+func RenderOpenDKIMConf(opendkimDir string) []byte {
+	// These are server paths written into the config file, so join with "/" —
+	// never filepath.Join, which would use the panel's own OS separator.
+	keyTable := opendkimDir + "/KeyTable"
+	signingTable := opendkimDir + "/SigningTable"
+	trustedHosts := opendkimDir + "/TrustedHosts"
+
+	return []byte(fmt.Sprintf(`# Managed by mailx-admin — DO NOT EDIT
+
+Syslog                  yes
+SyslogSuccess           yes
+LogWhy                  yes
+
+Canonicalization        relaxed/simple
+Mode                    sv
+SubDomains              no
+OversignHeaders         From
+SignatureAlgorithm      rsa-sha256
+UMask                   007
+
+UserID                  opendkim:opendkim
+
+Socket                  local:/var/spool/postfix/opendkim/opendkim.sock
+
+# Multi-domain: keys and signing policies come from the tables above, not from
+# one hardcoded key, so every domain the panel manages is signed.
+KeyTable                %s
+SigningTable            refile:%s
+InternalHosts           %s
+ExternalIgnoreList      %s
+
+AutoRestart             yes
+AutoRestartRate         10/1M
+DNSTimeout              5
+`, keyTable, signingTable, trustedHosts, trustedHosts))
 }

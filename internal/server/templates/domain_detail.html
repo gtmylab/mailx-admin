@@ -106,10 +106,37 @@
 <div class="card">
   <div class="card-header">
     <h2>Aliases <span class="badge">{{len .Data.Aliases}}</span></h2>
-    <span class="dim text-xs">Use <span class="mono">@</span> as the source for a catch-all</span>
+    <span class="dim text-xs">Forward addresses on this domain to other mailboxes.</span>
   </div>
 
   <div class="card-body">
+    <div class="mb-1">
+      <span class="font-semibold text-sm">Catch-all</span>
+      <span class="dim text-xs"> Deliver mail to unknown addresses on {{$d.Name}} to one inbox.</span>
+    </div>
+    {{if .Data.CatchAll}}
+    <div class="form-row">
+      <form class="form-row grow" hx-patch="/aliases/{{.Data.CatchAll.ID}}?domain_id={{$d.ID}}"
+            hx-target="#form-error" hx-swap="innerHTML">
+        <input class="input grow" name="destination" value="{{.Data.CatchAll.Destination}}" required>
+        <button class="btn btn-sm" type="submit">Save</button>
+      </form>
+      <button class="btn btn-sm btn-danger" hx-delete="/aliases/{{.Data.CatchAll.ID}}?domain_id={{$d.ID}}"
+              hx-target="#form-error" hx-swap="innerHTML"
+              hx-confirm="Remove the catch-all for {{$d.Name}}?">
+        Remove
+      </button>
+    </div>
+    {{else}}
+    <form class="form-row" hx-post="/domains/{{$d.ID}}/aliases" hx-target="#form-error" hx-swap="innerHTML">
+      <input type="hidden" name="source" value="@">
+      <input class="input grow" name="destination" required placeholder="catchall@example.com">
+      <button class="btn btn-primary" type="submit">Set catch-all</button>
+    </form>
+    {{end}}
+
+    <hr>
+
     <form class="form-row" hx-post="/domains/{{$d.ID}}/aliases" hx-target="#form-error" hx-swap="innerHTML">
       <input class="input grow" name="source" required placeholder="sales or @">
       <input class="input grow" name="destination" required placeholder="alice@example.com, bob@example.org">

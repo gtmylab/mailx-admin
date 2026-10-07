@@ -238,43 +238,61 @@ func Scan(opts Options) (*Found, error) {
 	sort.Slice(out.Users, func(i, j int) bool { return out.Users[i].Email < out.Users[j].Email })
 
 	// ---- Aliases from /etc/postfix/virtual ------------------------------
-	virtualMap := filepath.Join(opts.PostfixConfDir, "virtual")
-	if f, err := os.Open(virtualMap); err == nil {
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			fields := strings.Fields(line)
-			if len(fields) != 2 {
-				continue
-			}
-			source, destination := fields[0], fields[1]
-
-			// Skip self-maps (user -> same user) — these are generated from users
-			if source == destination {
-				continue
-			}
-
-			_, domain, ok := strings.Cut(source, "@")
-			if !ok {
-				continue
-			}
-
-			// Strip leading @ for catch-all: "@example.com" -> "@" + domain
-			local := source[:strings.Index(source, "@")]
-
-			out.Aliases = append(out.Aliases, FoundAlias{
-				Domain:      domain,
-				Source:      local,
-				Destination: destination,
-			})
-		}
-		f.Close()
-	}
+	out.Aliases = scanAliases(opts.PostfixConfDir)
 
 	return out, nil
+}
+
+// scanAliases reads the Postfix virtual map and returns the forwarders and
+// catch-alls it contains. A catch-all ("@example.com") is returned with the
+// canonical "@domain" source; a forwarder ("sales@example.com") with its bare
+// local part. Self-maps (user -> same user) are skipped — those are generated
+// from the users table, not stored as aliases.
+func scanAliases(postfixConfDir string) []FoundAlias {
+	var aliases []FoundAlias
+	virtualMap := filepath.Join(postfixConfDir, "virtual")
+	f, err := os.Open(virtualMap)
+	if err != nil {
+		return aliases
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		source, destination := fields[0], fields[1]
+
+		// Skip self-maps (user -> same user) — these are generated from users
+		if source == destination {
+			continue
+		}
+
+		_, domain, ok := strings.Cut(source, "@")
+		if !ok {
+			continue
+		}
+
+		// A catch-all is "@example.com" -> store the canonical "@domain"; a
+		// forwarder is "sales@example.com" -> store the bare local part "sales".
+		local := source[:strings.Index(source, "@")]
+		if local == "" {
+			local = "@" + domain
+		}
+
+		aliases = append(aliases, FoundAlias{
+			Domain:      domain,
+			Source:      local,
+			Destination: destination,
+		})
+	}
+	return aliases
 }
 
 // Apply inserts everything Found into the DB in one transaction.

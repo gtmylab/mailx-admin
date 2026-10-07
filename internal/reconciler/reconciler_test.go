@@ -35,6 +35,7 @@ func fixtureSnapshot() *models.Snapshot {
 		Aliases: []models.Alias{
 			{ID: 1, DomainID: 1, Source: "sales", Destination: "alice@example.com,bob@example.com"},
 			{ID: 2, DomainID: 1, Source: "postmaster", Destination: "alice@example.com"},
+			{ID: 3, DomainID: 1, Source: "@example.com", Destination: "alice@example.com"},
 		},
 	}
 }
@@ -61,11 +62,30 @@ func TestRenderVirtualMap(t *testing.T) {
 	if !strings.Contains(out, "postmaster@example.com\talice@example.com") {
 		t.Errorf("missing postmaster alias")
 	}
+	if !strings.Contains(out, "@example.com\talice@example.com") {
+		t.Errorf("missing catch-all alias; got:\n%s", out)
+	}
 
 	// Deterministic ordering
 	out2 := string(RenderVirtualMap(snap))
 	if out != out2 {
 		t.Errorf("output not deterministic")
+	}
+}
+
+func TestRenderVirtualMapCatchAllLegacyForms(t *testing.T) {
+	// Rows written before catch-all was canonicalized to "@domain" may carry a
+	// bare "@" (from the UI) or an empty source (from the seed). Both must
+	// render as the domain's catch-all, never as a bare "@".
+	for _, source := range []string{"@", ""} {
+		snap := fixtureSnapshot()
+		snap.Aliases = []models.Alias{
+			{ID: 1, DomainID: 1, Source: source, Destination: "alice@example.com"},
+		}
+		out := string(RenderVirtualMap(snap))
+		if !strings.Contains(out, "@example.com\talice@example.com") {
+			t.Errorf("catch-all source %q did not render as @example.com; got:\n%s", source, out)
+		}
 	}
 }
 
@@ -169,6 +189,34 @@ func TestRenderKeyTable(t *testing.T) {
 	want := "default._domainkey.example.com example.com:default:/etc/opendkim/keys/example.com/default.private"
 	if !strings.Contains(out, want) {
 		t.Errorf("missing keytable line %q", want)
+	}
+}
+
+func TestRenderOpenDKIMConf(t *testing.T) {
+	out := string(RenderOpenDKIMConf("/etc/opendkim"))
+
+	for _, want := range []string{
+		"KeyTable",
+		"SigningTable",
+		"refile:",
+		"InternalHosts",
+		"ExternalIgnoreList",
+		"/etc/opendkim/KeyTable",
+		"/etc/opendkim/SigningTable",
+		"/etc/opendkim/TrustedHosts",
+		"local:/var/spool/postfix/opendkim/opendkim.sock",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Single-domain directives would lock OpenDKIM to one domain and ignore the
+	// tables; the managed conf must not carry any of them.
+	for _, notWant := range []string{"KeyFile", "Selector "} {
+		if strings.Contains(out, notWant) {
+			t.Errorf("single-domain directive %q still present in:\n%s", notWant, out)
+		}
 	}
 }
 
