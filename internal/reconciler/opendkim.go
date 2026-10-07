@@ -110,8 +110,8 @@ Socket                  local:/var/spool/postfix/opendkim/opendkim.sock
 # one hardcoded key, so every domain the panel manages is signed.
 KeyTable                %s
 SigningTable            refile:%s
-InternalHosts           %s
-ExternalIgnoreList      %s
+InternalHosts           file:%s
+ExternalIgnoreList      file:%s
 
 AutoRestart             yes
 AutoRestartRate         10/1M

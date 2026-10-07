@@ -203,7 +203,7 @@ func TestRenderOpenDKIMConf(t *testing.T) {
 		"ExternalIgnoreList",
 		"/etc/opendkim/KeyTable",
 		"/etc/opendkim/SigningTable",
-		"/etc/opendkim/TrustedHosts",
+		"file:/etc/opendkim/TrustedHosts",
 		"local:/var/spool/postfix/opendkim/opendkim.sock",
 	} {
 		if !strings.Contains(out, want) {
