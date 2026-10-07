@@ -56,16 +56,15 @@ func installerTomlTemplate(t *testing.T, driverLine string) string {
 }
 
 // TestInstallerAdminTomlRoundTrips — admin.toml written by the installer must
-// parse and must select the section the installer filled in. The driver name is
-// what decides that: the old code compared against "sqlite"/"postgres" exactly,
-// so a differently-spelled (but valid) name quietly produced an empty DSN.
+// parse and must select the section the installer filled in. The installer now
+// writes SQLite only (a PostgreSQL upgrade is migrated later from the panel,
+// not the installer), so there is no driver = "postgres" branch to assert.
 func TestInstallerAdminTomlRoundTrips(t *testing.T) {
 	cases := []struct {
 		driverLine string
 		want       db.Driver
 	}{
 		{`driver = "sqlite"`, db.DriverSQLite},
-		{`driver = "postgres"`, db.DriverPostgres},
 	}
 
 	for _, tc := range cases {
