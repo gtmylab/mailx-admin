@@ -37,3 +37,28 @@ func dovecotPasswdOwner() *Ownership {
 	}
 	return &Ownership{UID: 0, GID: gid}
 }
+
+// opendkimOwner is the uid/gid the DKIM key files and their directory chain
+// have to be given. The OpenDKIM daemon runs as the unprivileged `opendkim`
+// user (UserID opendkim:opendkim), so a key file or directory the panel wrote
+// as root:root is one the daemon cannot open — signing then fails with
+// "Permission denied" loading the key and every message is deferred.
+//
+// A nil result means "do not touch ownership": there is no opendkim account on
+// this host (the test suite, a developer's laptop, Windows), so nothing can or
+// should be chowned here.
+func opendkimOwner() *Ownership {
+	u, err := user.Lookup("opendkim")
+	if err != nil {
+		return nil
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return nil
+	}
+	gid, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		return nil
+	}
+	return &Ownership{UID: uid, GID: gid}
+}

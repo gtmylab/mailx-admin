@@ -59,6 +59,17 @@ func GenerateWithSelector(ctx context.Context, domain, baseDir, selector string,
 		return nil, fmt.Errorf("mkdir %s: %w", keyDir, err)
 	}
 
+	// The OpenDKIM daemon runs as opendkim:opendkim; it must be able to traverse
+	// into the key directory and read the private key. A 0750 root:root directory
+	// is untraversable for it, so signing fails with "Permission denied" loading
+	// the key and every message is deferred (451). Own the directory chain, not
+	// just the key files below.
+	keysDir := filepath.Dir(keyDir)
+	for _, d := range []string{baseDir, keysDir, keyDir} {
+		_ = os.Chmod(d, 0o750)
+	}
+	_ = execx.Run(ctx, chownTimeout, "chown", "opendkim:opendkim", baseDir, keysDir, keyDir)
+
 	// opendkim-genkey writes into -D; -s/-d name the selector and domain.
 	out, err := execx.Output(ctx, genkeyTimeout, "opendkim-genkey",
 		"-s", selector,

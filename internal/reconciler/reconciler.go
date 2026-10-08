@@ -553,6 +553,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 	}
 
 	// ------------------------------------------------------------------
+	// DKIM key ownership.
+	//
+	// The OpenDKIM daemon runs as opendkim:opendkim; it must be able to
+	// traverse into /etc/opendkim/keys/<domain> and read the private key.
+	// dkim.Generate chowns the key files but not the directory it creates, so a
+	// key added through the panel ends up in a 0750 root:root directory the
+	// daemon cannot enter — signing fails with "Permission denied" and every
+	// message is deferred. Re-apply the ownership on every reconcile so an
+	// already-broken install heals on the next update.
+	// ------------------------------------------------------------------
+	if !r.cfg.DryRun {
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
+		res.Warnings = append(res.Warnings, ensureDKIMKeyOwnership(ctx, snap)...)
+	}
+
+	// ------------------------------------------------------------------
 	// Postfix hash maps: virtual, vmailbox, vuidmaps, vgidmaps and
 	// helo_access need `postmap`.
 	// ------------------------------------------------------------------
