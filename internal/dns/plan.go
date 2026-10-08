@@ -58,8 +58,15 @@ type RecordPlan struct {
 	Warnings []string `json:"warnings"`
 }
 
-// MailHost is the host name mail for this domain is delivered to.
-func (p *RecordPlan) MailHost() string { return "mail." + p.Domain }
+// MailHost is the host name mail for this domain is delivered to: the server's
+// own mail host (its hostname, or whatever /etc/mailname resolves to), never a
+// synthetic "mail.<domain>" the operator may not have an A record for.
+func (p *RecordPlan) MailHost() string {
+	if p.Hostname != "" {
+		return p.Hostname
+	}
+	return "mail." + p.Domain
+}
 
 // Checkable returns the records the checker can verify.
 func (p *RecordPlan) Checkable() []Expected {
@@ -163,13 +170,14 @@ func BuildPlan(domain models.Domain, serverIP, hostname string) *RecordPlan {
 	}
 
 	// ---- DMARC ----------------------------------------------------------
+	dmarc := fmt.Sprintf("v=DMARC1; p=quarantine; pct=100; rua=mailto:admin@%s; ruf=mailto:admin@%s; sp=quarantine; aspf=r; adkim=r", name, name)
 	add(Record{
 		Type: TypeTXT, Name: "_dmarc." + name,
-		Value:    "v=DMARC1; p=none; rua=mailto:postmaster@" + name,
+		Value:    dmarc,
 		Purpose:  "DMARC (policy + reports)",
-		Note:     "Recommended: start at p=none to collect reports, then tighten to quarantine or reject.",
+		Note:     "Quarantines mail that fails DMARC and sends aggregate + forensic reports to admin@" + name + ".",
 		Required: false, Checkable: true,
-		Expected: Expected{Type: TypeTXT, Name: "_dmarc." + name, Value: "v=DMARC1; p=none", Purpose: "DMARC", Required: false},
+		Expected: Expected{Type: TypeTXT, Name: "_dmarc." + name, Value: dmarc, Purpose: "DMARC", Required: false},
 	})
 
 	// ---- PTR ------------------------------------------------------------

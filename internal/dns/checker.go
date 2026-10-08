@@ -143,37 +143,50 @@ func (c *Checker) checkOne(ctx context.Context, exp Expected) CheckResult {
 }
 
 func (c *Checker) lookupSingle(ctx context.Context, name string, t RecordType) (*Observed, error) {
-	// Prefer the custom resolver
-	r := &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			d := net.Dialer{Timeout: c.timeout}
-			return d.DialContext(ctx, "udp", c.resolver)
-		},
-	}
-
-	var ips []string
-	var err error
+	m := new(dns.Msg)
 	switch t {
-	case TypeA:
-		ips, err = r.LookupHost(ctx, name)
 	case TypeAAAA:
-		ips, err = r.LookupHost(ctx, name)
+		m.SetQuestion(dns.Fqdn(name), dns.TypeAAAA)
 	case TypeCNAME:
-		cname, e := r.LookupCNAME(ctx, name)
-		if e != nil {
-			return nil, e
-		}
-		ips = []string{cname}
+		m.SetQuestion(dns.Fqdn(name), dns.TypeCNAME)
+	default:
+		m.SetQuestion(dns.Fqdn(name), dns.TypeA)
 	}
 
+	client := &dns.Client{Timeout: c.timeout}
+	resp, _, err := client.ExchangeContext(ctx, m, c.resolver)
 	if err != nil {
-		if isNXDomain(err) {
-			return nil, nil
-		}
 		return nil, err
 	}
-	return &Observed{Type: t, Name: name, Values: ips}, nil
+	if resp.Rcode == dns.RcodeNameError {
+		return nil, nil
+	}
+	if resp.Rcode != dns.RcodeSuccess {
+		return nil, fmt.Errorf("DNS response code: %s", dns.RcodeToString[resp.Rcode])
+	}
+
+	var values []string
+	var minTTL uint32
+	for _, rr := range resp.Answer {
+		switch rec := rr.(type) {
+		case *dns.A:
+			if t == TypeA {
+				values = append(values, rec.A.String())
+			}
+		case *dns.AAAA:
+			if t == TypeAAAA {
+				values = append(values, rec.AAAA.String())
+			}
+		case *dns.CNAME:
+			if t == TypeCNAME {
+				values = append(values, strings.TrimSuffix(rec.Target, "."))
+			}
+		}
+		if minTTL == 0 || rr.Header().Ttl < minTTL {
+			minTTL = rr.Header().Ttl
+		}
+	}
+	return &Observed{Type: t, Name: strings.TrimSuffix(name, "."), Values: values, TTL: minTTL}, nil
 }
 
 func (c *Checker) lookupMX(ctx context.Context, name string) (*Observed, error) {

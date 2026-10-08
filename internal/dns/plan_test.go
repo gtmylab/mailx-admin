@@ -19,16 +19,16 @@ func testDomain() models.Domain {
 // TestBuildPlanHasEverythingMailNeeds — the page, the export and the check all
 // render this one list, so what it contains is the contract.
 func TestBuildPlanHasEverythingMailNeeds(t *testing.T) {
-	plan := BuildPlan(testDomain(), "203.0.113.10", "mail.example.com")
+	plan := BuildPlan(testDomain(), "203.0.113.10", "mx.example.com")
 
 	want := map[string]string{
 		"A|example.com":                      "203.0.113.10",
-		"A|mail.example.com":                 "203.0.113.10",
-		"MX|example.com":                     "mail.example.com",
+		"A|mx.example.com":                   "203.0.113.10",
+		"MX|example.com":                     "mx.example.com",
 		"TXT|example.com":                    "v=spf1 mx a ip4:203.0.113.10 ~all",
 		"TXT|default._domainkey.example.com": "v=DKIM1; h=sha256; k=rsa; p=MIIBIjANBgkq",
-		"TXT|_dmarc.example.com":             "v=DMARC1; p=none; rua=mailto:postmaster@example.com",
-		"PTR|10.113.0.203.in-addr.arpa":      "mail.example.com",
+		"TXT|_dmarc.example.com":             "v=DMARC1; p=quarantine; pct=100; rua=mailto:admin@example.com; ruf=mailto:admin@example.com; sp=quarantine; aspf=r; adkim=r",
+		"PTR|10.113.0.203.in-addr.arpa":      "mx.example.com",
 		"A|admin.example.com":                "203.0.113.10",
 	}
 

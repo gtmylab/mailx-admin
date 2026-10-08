@@ -44,11 +44,11 @@ var (
 	pmClient     = regexp.MustCompile(`^([0-9A-F]+): client=(\S+)\[([^\]]+)\]$`)
 	pmQmgrInsert = regexp.MustCompile(`^([0-9A-F]+): from=<([^>]*)>, size=(\d+), nrcpt=(\d+)`)
 	pmQmgrRemove = regexp.MustCompile(`^([0-9A-F]+): removed$`)
-	pmSmtpRelay  = regexp.MustCompile(`^([0-9A-F]+): to=<([^>]+)>(?:, relay=(\S+?)(?:\[\d+\])?)?(?:, delay=([0-9.]+))?(?:, delays=([^,]*))?(?:, dsn=([^,]*))?(?:, status=(\S+)(?:\s+\((.*)\))?)?`)
+	pmSmtpRelay  = regexp.MustCompile(`^([0-9A-F]+): to=<([^>]+)>(?:, relay=([^,]+))?(?:, delay=([^,]+))?(?:, delays=([^,]+))?(?:, dsn=([^,]+))?(?:, status=(\S+)(?:\s+\((.*)\))?)?`)
 	pmBounce     = regexp.MustCompile(`^([0-9A-F]+): sender non-delivery notification`)
 	pmReject     = regexp.MustCompile(`^NOQUEUE: reject: RCPT from (\S+)\[([^\]]+)\]: \d+ [^:]+: (.*?); from=<([^>]*)> to=<([^>]*)>`)
 	pmSASL       = regexp.MustCompile(`^([0-9A-F]+): (?:client=\S+\[[^\]]+\], )?sasl_method=\S+, sasl_username=(\S+)`)
-	pmDovecot    = regexp.MustCompile(`^(?:imap|pop3)-login: Login: user=<([^>]+)>, method=(\S+), rip=([\d.]+), lip=([\d.]+)`)
+	pmDovecot    = regexp.MustCompile(`^(?:imap|pop3)-login: Login: user=<([^>]+)>, method=(\S+), rip=([^\s,]+), lip=([^\s,]+)`)
 )
 
 // ParseLine converts a raw log line into an Event.

@@ -10,6 +10,7 @@ import (
 	"github.com/gtmylab/mailx-admin/internal/models"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +32,7 @@ func (s *Server) handleDomainDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	page := s.buildDNSPage(domain, s.serverIP(ctx), s.cfg.Server.Hostname, s.loadCachedDNSChecks(ctx, id))
+	page := s.buildDNSPage(domain, s.serverIP(ctx), s.mailHostname(), s.loadCachedDNSChecks(ctx, id))
 
 	s.render(w, 200, "domain_dns.html", s.newPageData(w, r,
 		"DNS · "+domain.Name, "domains", page))
@@ -53,7 +54,7 @@ func (s *Server) handleDomainDNSCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plan := dns.BuildPlan(*domain, s.serverIP(ctx), s.cfg.Server.Hostname)
+	plan := dns.BuildPlan(*domain, s.serverIP(ctx), s.mailHostname())
 	expected := plan.Checkable()
 	if only := r.URL.Query().Get("only"); only != "" {
 		filtered := make([]dns.Expected, 0, 1)
@@ -73,7 +74,7 @@ func (s *Server) handleDomainDNSCheck(w http.ResponseWriter, r *http.Request) {
 	// rows so a per-row check does not wipe the rest.
 	s.saveDNSChecks(ctx, id, mergeChecks(s.loadCachedDNSChecks(ctx, id), results, expected))
 
-	page := s.buildDNSPage(domain, s.serverIP(ctx), s.cfg.Server.Hostname,
+	page := s.buildDNSPage(domain, s.serverIP(ctx), s.mailHostname(),
 		mergeChecks(s.loadCachedDNSChecks(ctx, id), results, expected))
 
 	s.renderPartial(w, "dns_check_results", page)
@@ -113,7 +114,7 @@ func (s *Server) handleDomainDNSCopy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plan := dns.BuildPlan(*domain, s.serverIP(ctx), s.cfg.Server.Hostname)
+	plan := dns.BuildPlan(*domain, s.serverIP(ctx), s.mailHostname())
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(
@@ -263,6 +264,18 @@ func (s *Server) serverIP(ctx context.Context) string {
 		return ip
 	}
 	return localAddress()
+}
+
+// mailHostname is the host mail for a domain is delivered to: /etc/mailname
+// when it is set (the operator's explicit choice), otherwise the configured
+// server hostname. This is what the MX, A and PTR records point at.
+func (s *Server) mailHostname() string {
+	if b, err := os.ReadFile("/etc/mailname"); err == nil {
+		if v := strings.TrimSpace(string(b)); v != "" {
+			return v
+		}
+	}
+	return s.cfg.Server.Hostname
 }
 
 // hostnameAddress resolves the server's own name: on most installs the mail host
