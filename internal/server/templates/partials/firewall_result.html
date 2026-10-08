@@ -1,0 +1,5 @@
+{{define "firewall_result"}}
+<div class="alert alert-ok" role="status">Firewall updated.</div>
+{{if .Output}}<pre class="mono text-xs" style="max-height: 240px; overflow: auto;">{{.Output}}</pre>{{end}}
+<button class="btn btn-sm mt-2" data-reload>Reload page</button>
+{{end}}

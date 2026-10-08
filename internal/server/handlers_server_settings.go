@@ -106,6 +106,9 @@ func (s *Server) handleServerSettingsSave(w http.ResponseWriter, r *http.Request
 		if s.syncer != nil {
 			s.syncer.Request("system:config")
 		}
+		// Re-issue the Let's Encrypt certificate for the new hostname and repoint
+		// the mail services at it, in the background.
+		go s.reissueHostCertificates(context.Background(), hostname)
 	}
 
 	_ = s.auditor.Log(r.Context(), audit.Entry{

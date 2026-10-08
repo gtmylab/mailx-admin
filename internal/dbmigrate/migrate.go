@@ -42,6 +42,7 @@ var tables = []string{
 	"api_keys",
 	"webhooks",
 	"webhook_deliveries",
+	"cron_jobs",
 }
 
 // serialTables are the tables whose "id" column is backed by a sequence. After
@@ -52,7 +53,7 @@ var serialTables = []string{
 	"reconcile_runs", "dns_checks", "ssl_certs", "test_sends", "mail_events",
 	"sieve_rules", "port_listeners", "queue_actions", "backups", "outbound_ips",
 	"outbound_rules", "blocklist_checks", "suppressions", "quota_samples",
-	"api_keys", "webhooks", "webhook_deliveries",
+	"api_keys", "webhooks", "webhook_deliveries", "cron_jobs",
 }
 
 // Result reports how many rows were copied, per table.

@@ -65,7 +65,16 @@ func (m *TerminalManager) Get(adminID int64) *TermSession {
 
 func (m *TerminalManager) Put(s *TermSession) {
 	m.mu.Lock()
+	s.manager = m
 	m.ses[s.adminID] = s
+	m.mu.Unlock()
+}
+
+// remove drops a session from the registry without closing it. It is called by
+// TermSession.Close once the shell has already been torn down.
+func (m *TerminalManager) remove(adminID int64) {
+	m.mu.Lock()
+	delete(m.ses, adminID)
 	m.mu.Unlock()
 }
 
@@ -91,12 +100,15 @@ type TermSession struct {
 
 	mu      sync.Mutex
 	stdinMu sync.Mutex
+	writeMu sync.Mutex
 	conns   map[*websocket.Conn]struct{}
 	replay  []byte
 	closed  bool
+
+	manager *TerminalManager
 }
 
-func startTermSession(adminID int64, username, password, key string) (*TermSession, error) {
+func (s *Server) startTermSession(adminID int64, username, password, key string) (*TermSession, error) {
 	var methods []ssh.AuthMethod
 	if key != "" {
 		signer, err := ssh.ParsePrivateKey([]byte(key))
@@ -122,6 +134,7 @@ func startTermSession(adminID int64, username, password, key string) (*TermSessi
 	}
 	client, err := ssh.Dial("tcp", terminalSSHAddr, cfg)
 	if err != nil {
+		s.logger.Warn("terminal ssh dial failed", "user", username, "err", err)
 		return nil, fmt.Errorf("login failed: %w", err)
 	}
 
@@ -137,6 +150,12 @@ func startTermSession(adminID int64, username, password, key string) (*TermSessi
 		return nil, err
 	}
 	stdout, err := sess.StdoutPipe()
+	if err != nil {
+		sess.Close()
+		client.Close()
+		return nil, err
+	}
+	stderr, err := sess.StderrPipe()
 	if err != nil {
 		sess.Close()
 		client.Close()
@@ -164,21 +183,34 @@ func startTermSession(adminID int64, username, password, key string) (*TermSessi
 		conns:    map[*websocket.Conn]struct{}{},
 	}
 
+	go ts.pump(stdout)
+	go ts.pump(stderr)
+	// Reap the shell: when it exits, tear the session down and remove it from
+	// the manager so a reconnect starts a fresh shell rather than resuming one.
 	go func() {
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := stdout.Read(buf)
-			if n > 0 {
-				ts.broadcast(buf[:n])
-			}
-			if err != nil {
-				ts.Close()
-				return
-			}
-		}
+		_ = sess.Wait()
+		s.logger.Info("terminal session ended", "user", username)
+		ts.Close()
 	}()
 
+	s.logger.Info("terminal session started", "user", username)
 	return ts, nil
+}
+
+// pump copies one SSH stream (stdout or stderr) into the shared broadcast
+// buffer until it reaches EOF. The shell-exit path is handled by Wait, so a
+// pump only returns without closing anything itself.
+func (s *TermSession) pump(r io.Reader) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			s.broadcast(buf[:n])
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 func (s *TermSession) broadcast(p []byte) {
@@ -193,6 +225,8 @@ func (s *TermSession) broadcast(p []byte) {
 	}
 	s.mu.Unlock()
 
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	for _, c := range conns {
 		_ = c.WriteMessage(websocket.BinaryMessage, p)
 	}
@@ -204,7 +238,9 @@ func (s *TermSession) Attach(conn *websocket.Conn) {
 	replay := append([]byte(nil), s.replay...)
 	s.mu.Unlock()
 	if len(replay) > 0 {
+		s.writeMu.Lock()
 		_ = conn.WriteMessage(websocket.BinaryMessage, replay)
+		s.writeMu.Unlock()
 	}
 }
 
@@ -249,6 +285,16 @@ func (s *TermSession) Close() {
 	if s.client != nil {
 		_ = s.client.Close()
 	}
+	if s.manager != nil {
+		s.manager.remove(s.adminID)
+	}
+}
+
+// isClosed reports whether the session has been torn down.
+func (s *TermSession) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *Server) handleTerminalPage(w http.ResponseWriter, r *http.Request) {
@@ -267,12 +313,13 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		s.logger.Warn("terminal websocket upgrade failed", "err", err)
 		return
 	}
 	defer conn.Close()
 
-	// Resume an existing session if one is open for this admin.
-	if ts := s.terminals.Get(sess.AdminUserID); ts != nil {
+	// Resume an existing, live session if one is open for this admin.
+	if ts := s.terminals.Get(sess.AdminUserID); ts != nil && !ts.isClosed() {
 		_ = conn.WriteJSON(termMsg{Type: "login-ok"})
 		ts.Attach(conn)
 		defer ts.Detach(conn)
@@ -297,7 +344,7 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 		if json.Unmarshal(data, &msg) != nil || msg.Type != "login" {
 			continue
 		}
-		ts, err = startTermSession(sess.AdminUserID, msg.Username, msg.Password, msg.Key)
+		ts, err = s.startTermSession(sess.AdminUserID, msg.Username, msg.Password, msg.Key)
 		if err != nil {
 			_ = conn.WriteJSON(termMsg{Type: "login-error", Message: err.Error()})
 			ts = nil

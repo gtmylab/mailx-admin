@@ -169,6 +169,22 @@ type RelayConfig struct {
 	TLSMode  string
 }
 
+// CronJob is a user-defined scheduled job. Schedule is a standard 5-field cron
+// expression; the command is run by the system cron daemon through
+// `mailx-admin cron run <id>`, which records the result back to the panel.
+type CronJob struct {
+	ID         int64
+	Name       string
+	Schedule   string
+	Command    string
+	Enabled    bool
+	LastRunAt  *time.Time
+	LastStatus string // "", "ok", "error", "running"
+	LastOutput string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
 // Snapshot is what the reconciler consumes. Immutable, rendered from DB.
 type Snapshot struct {
 	Domains    []Domain

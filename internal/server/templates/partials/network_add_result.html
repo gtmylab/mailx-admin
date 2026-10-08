@@ -1,0 +1,4 @@
+{{define "network_add_result"}}
+{{if .Error}}<div class="alert alert-warn" role="status">{{.Error}}</div>{{else}}<div class="alert alert-ok" role="status">{{.Message}}</div>{{end}}
+{{if .Out}}<pre class="mono text-xs">{{.Out}}</pre>{{end}}
+{{end}}

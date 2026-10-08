@@ -37,6 +37,7 @@
       <div class="nav-label">Security</div>
       {{template "nav-item" (dict "Href" "/ssl" "Label" "Certificates" "Icon" "ssl" "Active" (eq .ActiveNav "ssl"))}}
       {{template "nav-item" (dict "Href" "/ports" "Label" "Ports" "Icon" "ports" "Active" (eq .ActiveNav "ports"))}}
+      {{template "nav-item" (dict "Href" "/system/firewall" "Label" "Firewall" "Icon" "firewall" "Active" (eq .ActiveNav "firewall"))}}
       {{template "nav-item" (dict "Href" "/audit" "Label" "Audit log" "Icon" "audit" "Active" (eq .ActiveNav "audit"))}}
     </div>
 
@@ -48,6 +49,9 @@
       {{template "nav-item" (dict "Href" "/system/services" "Label" "Services" "Icon" "services" "Active" (eq .ActiveNav "services"))}}
       {{template "nav-item" (dict "Href" "/system/packages" "Label" "Software updates" "Icon" "packages" "Active" (eq .ActiveNav "packages"))}}
       {{template "nav-item" (dict "Href" "/system/server" "Label" "Server" "Icon" "settings" "Active" (eq .ActiveNav "server"))}}
+      {{template "nav-item" (dict "Href" "/system/service-ports" "Label" "Service ports" "Icon" "ports" "Active" (eq .ActiveNav "service-ports"))}}
+      {{template "nav-item" (dict "Href" "/system/networking" "Label" "Networking" "Icon" "network" "Active" (eq .ActiveNav "networking"))}}
+      {{template "nav-item" (dict "Href" "/system/cron" "Label" "Scheduled tasks" "Icon" "update" "Active" (eq .ActiveNav "cron"))}}
       {{template "nav-item" (dict "Href" "/terminal" "Label" "Terminal" "Icon" "terminal" "Active" (eq .ActiveNav "terminal"))}}
       {{template "nav-item" (dict "Href" "/account" "Label" "Account" "Icon" "account" "Active" (eq .ActiveNav "account"))}}
       {{template "nav-item" (dict "Href" "/system/updates" "Label" "Updates" "Icon" "update" "Active" (eq .ActiveNav "updates"))}}

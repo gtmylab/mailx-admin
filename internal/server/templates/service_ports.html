@@ -1,0 +1,38 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Service ports</h1>
+    <p class="page-sub">The core listening ports of the mail stack.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h2>Listening ports</h2></div>
+  <div class="card-body">
+    <table class="table">
+      <thead><tr><th>Service</th><th>Port</th><th>Purpose</th></tr></thead>
+      <tbody>
+        {{range .Data.Ports}}
+        <tr>
+          <td>{{.Name}}</td>
+          <td class="mono">{{.Port}}</td>
+          <td class="dim">{{.Purpose}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card mt-4">
+  <div class="card-header"><h2>Submission port</h2></div>
+  <div class="card-body">
+    <form class="form-row" hx-post="/system/service-ports" hx-target="#sp-result" hx-swap="innerHTML">
+      <input class="input" type="number" name="submission_port" min="1" max="65535" placeholder="587" required>
+      <button type="submit" class="btn btn-primary">Change</button>
+    </form>
+    <div class="dim text-xs mt-2">The port authenticated clients use to send mail (SMTP submission, STARTTLS). Changing it rewrites master.cf, opens the new port in the firewall, and reloads Postfix. Clients must be told the new port.</div>
+    <div id="sp-result" class="mt-2"></div>
+  </div>
+</div>
+{{end}}

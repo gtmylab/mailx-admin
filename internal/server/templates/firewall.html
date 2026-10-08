@@ -1,0 +1,55 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Firewall</h1>
+    <p class="page-sub">Host firewall rules (ufw / firewalld).</p>
+  </div>
+</div>
+
+{{with .Data.Status}}
+<div class="card">
+  <div class="card-header">
+    <h2>Status</h2>
+    {{if .Active}}<span class="badge ok">active</span>{{else}}<span class="badge warn">inactive</span>{{end}}
+    <span class="dim text-xs">backend: {{.Backend}}</span>
+  </div>
+  <div class="card-body">
+    <div class="btn-group">
+      {{if .Active}}
+      <button class="btn btn-danger" hx-post="/system/firewall" hx-vals='{"action":"disable"}' hx-target="#fw-result" hx-swap="innerHTML"
+              hx-confirm="Disable the firewall? All inbound traffic will be allowed.">Disable firewall</button>
+      {{else}}
+      <button class="btn btn-primary" hx-post="/system/firewall" hx-vals='{"action":"enable"}' hx-target="#fw-result" hx-swap="innerHTML">Enable firewall</button>
+      {{end}}
+      <button class="btn btn-sm" data-reload>Refresh</button>
+    </div>
+    <pre class="mono text-xs" style="max-height: 360px; overflow: auto;">{{.Output}}</pre>
+  </div>
+</div>
+{{end}}
+
+<div class="card mt-4">
+  <div class="card-header"><h2>Open a port</h2></div>
+  <div class="card-body">
+    <form class="form-row" hx-post="/system/firewall" hx-target="#fw-result" hx-swap="innerHTML">
+      <input type="hidden" name="action" value="allow">
+      <input class="input" type="number" name="port" min="1" max="65535" placeholder="587" required>
+      <button type="submit" class="btn btn-primary">Allow TCP</button>
+    </form>
+    <div class="dim text-xs mt-2">Allow a TCP port through the firewall (for example a custom submission port).</div>
+  </div>
+</div>
+
+<div class="card mt-4">
+  <div class="card-header"><h2>Close a port</h2></div>
+  <div class="card-body">
+    <form class="form-row" hx-post="/system/firewall" hx-target="#fw-result" hx-swap="innerHTML">
+      <input type="hidden" name="action" value="deny">
+      <input class="input" type="number" name="port" min="1" max="65535" placeholder="587" required>
+      <button type="submit" class="btn btn-danger">Close TCP</button>
+    </form>
+    <div class="dim text-xs mt-2">Remove the allow rule for a TCP port.</div>
+  </div>
+</div>
+<div id="fw-result"></div>
+{{end}}

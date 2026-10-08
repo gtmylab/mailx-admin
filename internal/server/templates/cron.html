@@ -1,0 +1,61 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Scheduled tasks</h1>
+    <p class="page-sub">Cron jobs on this server. Enabled jobs are written to <code>/etc/cron.d/mailx-admin</code> and run by the system cron daemon.</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-primary" hx-get="/system/cron/new" hx-target="#modal-host" hx-swap="innerHTML">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+           aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      Add job
+    </button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h2>Jobs <span class="badge">{{len .Data.Jobs}}</span></h2></div>
+  {{if .Data.Jobs}}
+  <div class="table-wrap">
+    <table class="table table-stack">
+      <thead>
+        <tr><th>Name</th><th>Schedule</th><th>Command</th><th>Last run</th><th>Status</th><th class="table-actions">Actions</th></tr>
+      </thead>
+      <tbody>
+        {{range .Data.Jobs}}
+        <tr>
+          <td data-label="Name">{{.Name}}</td>
+          <td data-label="Schedule" class="mono">{{.Schedule}}</td>
+          <td data-label="Command" class="mono text-xs break-all">{{.Command}}</td>
+          <td data-label="Last run" class="dim">{{humanTime .LastRunAt}}</td>
+          <td data-label="Status">
+            {{if not .Enabled}}<span class="badge warn">disabled</span>
+            {{else if eq .LastStatus "running"}}<span class="badge warn">running</span>
+            {{else if eq .LastStatus "error"}}<span class="badge err">error</span>
+            {{else if eq .LastStatus "ok"}}<span class="badge ok">ok</span>
+            {{else}}<span class="badge dim">idle</span>{{end}}
+          </td>
+          <td class="table-actions" data-label="">
+            <div class="btn-group">
+              <button class="btn btn-sm" hx-post="/system/cron/{{.ID}}/run" hx-target="#form-error" hx-swap="none">Run now</button>
+              <button class="btn btn-sm" hx-get="/system/cron/{{.ID}}/edit" hx-target="#modal-host" hx-swap="innerHTML">Edit</button>
+              <button class="btn btn-sm" hx-post="/system/cron/{{.ID}}/toggle" hx-target="#form-error" hx-swap="none">{{if .Enabled}}Disable{{else}}Enable{{end}}</button>
+              <button class="btn btn-sm" hx-get="/system/cron/{{.ID}}/log" hx-target="#modal-host" hx-swap="innerHTML">Log</button>
+              <button class="btn btn-sm btn-danger" hx-delete="/system/cron/{{.ID}}" hx-target="#form-error" hx-swap="none"
+                      hx-confirm="Delete job {{.Name}}?">Delete</button>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="empty">
+    <span class="empty-title">No scheduled jobs</span>
+    <span class="empty-hint">Add a job to run a command on a cron schedule.</span>
+  </div>
+  {{end}}
+</div>
+<div id="form-error" class="form-error-slot" hidden></div>
+{{end}}

@@ -45,6 +45,10 @@ var pageTemplateNames = []string{
 	"terminal.html",
 	"packages.html",
 	"user_sieve.html",
+	"firewall.html",
+	"networking.html",
+	"service_ports.html",
+	"cron.html",
 }
 
 // fragmentTemplateNames are the HTMX fragments referenced by handlers via
@@ -85,6 +89,12 @@ var fragmentTemplateNames = []string{
 	"system_info",
 	"package_list",
 	"package_status",
+	"firewall_result",
+	"network_test_result",
+	"network_add_result",
+	"service_ports_result",
+	"cron_form",
+	"cron_log",
 }
 
 func newTestServer(t *testing.T, tmpl *templateSet) *Server {

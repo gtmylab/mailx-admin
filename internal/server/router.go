@@ -194,6 +194,29 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("GET /system/server", s.handleServerSettingsPage)
 	protected.HandleFunc("POST /system/server", s.handleServerSettingsSave)
 
+	// Firewall rules (ufw/firewalld)
+	protected.HandleFunc("GET /system/firewall", s.handleFirewallPage)
+	protected.HandleFunc("POST /system/firewall", s.handleFirewallAction)
+
+	// Networking (interfaces, addresses, connectivity test)
+	protected.HandleFunc("GET /system/networking", s.handleNetworkingPage)
+	protected.HandleFunc("POST /system/networking/ping", s.handleNetworkPing)
+	protected.HandleFunc("POST /system/networking/ip", s.handleNetworkAddIP)
+
+	// Service ports (submission port reconfiguration)
+	protected.HandleFunc("GET /system/service-ports", s.handleServicePortsPage)
+	protected.HandleFunc("POST /system/service-ports", s.handleServicePortsSave)
+
+	// Scheduled tasks (cron jobs)
+	protected.HandleFunc("GET /system/cron", s.handleCronPage)
+	protected.HandleFunc("GET /system/cron/new", s.handleCronNew)
+	protected.HandleFunc("GET /system/cron/{id}/edit", s.handleCronEdit)
+	protected.HandleFunc("POST /system/cron", s.handleCronSave)
+	protected.HandleFunc("POST /system/cron/{id}/toggle", s.handleCronToggle)
+	protected.HandleFunc("POST /system/cron/{id}/run", s.handleCronRun)
+	protected.HandleFunc("GET /system/cron/{id}/log", s.handleCronLog)
+	protected.HandleFunc("DELETE /system/cron/{id}", s.handleCronDelete)
+
 	// Software package updates (apt)
 	protected.HandleFunc("GET /system/packages", s.handlePackagesPage)
 	protected.HandleFunc("GET /system/packages/list", s.handlePackagesList)
