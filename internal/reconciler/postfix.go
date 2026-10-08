@@ -112,6 +112,9 @@ func RenderPostfixMainCF(snap *models.Snapshot, hostname string) []byte {
 		}
 	}
 
+	b.WriteString("\n# Suppression checks\n")
+	b.WriteString("smtpd_sender_restrictions = check_sender_access hash:/etc/postfix/suppressions_in\n")
+
 	b.WriteString("\n# END mailx-admin managed block\n")
 	return b.Bytes()
 }
@@ -397,12 +400,44 @@ func DefaultOutboundTransport(ips []models.OutboundIP) string {
 }
 
 // RenderSuppressions produces /etc/postfix/suppressions: a recipient access map
-// the submission service consults via check_recipient_access.
+// the submission service consults via check_recipient_access to refuse outbound
+// mail to suppressed recipients/domains.
 func RenderSuppressions(sups []models.Suppression) []byte {
 	var b bytes.Buffer
 	b.WriteString("# Managed by mailx-admin — DO NOT EDIT\n\n")
 	for _, s := range sups {
-		fmt.Fprintf(&b, "%s\t550 5.7.1 recipient suppressed by policy\n", s.Email)
+		if s.Direction == "in" {
+			continue
+		}
+		fmt.Fprintf(&b, "%s\t550 5.7.1 recipient suppressed by policy\n", suppressionKey(s, false))
 	}
 	return b.Bytes()
+}
+
+// RenderSenderSuppressions produces /etc/postfix/suppressions_in: a sender
+// access map consulted via smtpd_sender_restrictions to reject inbound mail from
+// suppressed senders/domains.
+func RenderSenderSuppressions(sups []models.Suppression) []byte {
+	var b bytes.Buffer
+	b.WriteString("# Managed by mailx-admin — DO NOT EDIT\n\n")
+	for _, s := range sups {
+		if s.Direction != "in" {
+			continue
+		}
+		fmt.Fprintf(&b, "%s\t550 5.7.1 sender rejected by policy\n", suppressionKey(s, true))
+	}
+	return b.Bytes()
+}
+
+// suppressionKey returns the Postfix access-map key for a rule: the full address
+// for an email match, "@domain" for an outbound domain match (all recipients in
+// the domain), or the bare domain for an inbound domain match.
+func suppressionKey(s models.Suppression, sender bool) string {
+	if s.MatchType == "domain" {
+		if sender {
+			return s.Email
+		}
+		return "@" + s.Email
+	}
+	return s.Email
 }

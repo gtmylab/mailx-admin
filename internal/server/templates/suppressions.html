@@ -2,52 +2,83 @@
 <div class="page-header">
   <div>
     <h1>Suppressions</h1>
-    <p class="page-sub">Recipients the server will not deliver to. A recipient on this list is dropped before sending.</p>
+    <p class="page-sub">Reject inbound senders and refuse outbound recipients, by exact address or whole domain.</p>
   </div>
 </div>
 
 <div class="card">
-  <div class="card-header">
-    <h2>Add suppression</h2>
-  </div>
-  <form class="form-row" hx-post="/suppressions" hx-target="#form-error" hx-swap="innerHTML">
-    <input class="input" type="email" name="email" placeholder="user@example.com" required>
-    <select class="select" name="reason">
-      <option value="manual">Manual</option>
-      <option value="complaint">Complaint</option>
-      <option value="bounce_hard">Hard bounce</option>
-      <option value="bounce_transient">Transient bounce</option>
-    </select>
-    <button class="btn btn-primary" type="submit">Add</button>
+  <div class="card-header"><h2>Add suppression rule</h2></div>
+  <form class="form" hx-post="/suppressions" hx-target="#form-error" hx-swap="innerHTML">
+    <div class="grid grid-cols-2 gap-4">
+      <label class="field">
+        <span class="field-label">Email or domain</span>
+        <input class="input" type="text" name="email" placeholder="user@example.com or example.com" required>
+      </label>
+      <label class="field">
+        <span class="field-label">Match</span>
+        <select class="select" name="match_type">
+          <option value="email">Exact email</option>
+          <option value="domain">Whole domain</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label">Direction</span>
+        <select class="select" name="direction">
+          <option value="out">Outgoing (don't send to)</option>
+          <option value="in">Incoming (reject from)</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label">Duration</span>
+        <select class="select" name="duration">
+          <option value="">Permanent</option>
+          <option value="24h">1 day</option>
+          <option value="168h">7 days</option>
+          <option value="720h">30 days</option>
+        </select>
+      </label>
+    </div>
+    <label class="field">
+      <span class="field-label">Reason</span>
+      <select class="select" name="reason">
+        <option value="manual">Manual</option>
+        <option value="complaint">Complaint</option>
+        <option value="bounce_hard">Hard bounce</option>
+        <option value="bounce_transient">Transient bounce</option>
+      </select>
+    </label>
+    <div class="form-actions">
+      <button class="btn btn-primary" type="submit">Add rule</button>
+    </div>
   </form>
+  <div class="form-error-slot" id="form-error"></div>
 </div>
 
-<div class="card">
-  <div class="card-header">
-    <h2>Suppressed recipients <span class="badge">{{len .Data.Suppressions}}</span></h2>
-  </div>
+<div class="card mt-4">
+  <div class="card-header"><h2>Suppression rules <span class="badge">{{len .Data.Suppressions}}</span></h2></div>
   {{if .Data.Suppressions}}
   <table class="table">
     <thead>
-      <tr><th>Email</th><th>Reason</th><th>Source</th><th>Added</th><th></th></tr>
+      <tr><th>Value</th><th>Match</th><th>Direction</th><th>Reason</th><th>Expires</th><th></th></tr>
     </thead>
     <tbody>
       {{range .Data.Suppressions}}
       <tr>
         <td class="mono">{{.Email}}</td>
+        <td>{{if eq .MatchType "domain"}}domain{{else}}email{{end}}</td>
+        <td>{{if eq .Direction "in"}}<span class="badge warn">incoming</span>{{else}}<span class="badge dim">outgoing</span>{{end}}</td>
         <td>{{.Reason}}</td>
-        <td>{{.Source}}</td>
-        <td class="dim">{{.CreatedAt.Format "2006-01-02"}}</td>
+        <td class="dim">{{if .ExpiresAt}}{{.ExpiresAt.Format "2006-01-02"}}{{else}}permanent{{end}}</td>
         <td class="text-right">
           <button class="btn btn-sm btn-danger" hx-delete="/suppressions/{{.ID}}" hx-target="#form-error" hx-swap="innerHTML"
-                  hx-confirm="Remove {{.Email}} from suppressions?">Remove</button>
+                  hx-confirm="Remove {{.Email}} ({{.Direction}}) from suppressions?">Remove</button>
         </td>
       </tr>
       {{end}}
     </tbody>
   </table>
   {{else}}
-  <div class="empty">No recipients are suppressed.</div>
+  <div class="empty">No suppression rules.</div>
   {{end}}
 </div>
 {{end}}

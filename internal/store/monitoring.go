@@ -128,8 +128,8 @@ func (s *Store) DeleteOutboundRule(ctx context.Context, id int64) error {
 
 func (s *Store) ListSuppressions(ctx context.Context) ([]models.Suppression, error) {
 	rows, err := s.db.QueryContext(ctx, `
-        SELECT id, email, reason, source, notes, created_at, expires_at
-        FROM suppressions ORDER BY email ASC`)
+        SELECT id, email, reason, source, notes, created_at, expires_at, direction, match_type
+        FROM suppressions ORDER BY direction ASC, email ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list suppressions: %w", err)
 	}
@@ -139,7 +139,7 @@ func (s *Store) ListSuppressions(ctx context.Context) ([]models.Suppression, err
 	for rows.Next() {
 		var sup models.Suppression
 		var expires sql.NullTime
-		if err := rows.Scan(&sup.ID, &sup.Email, &sup.Reason, &sup.Source, &sup.Notes, &sup.CreatedAt, &expires); err != nil {
+		if err := rows.Scan(&sup.ID, &sup.Email, &sup.Reason, &sup.Source, &sup.Notes, &sup.CreatedAt, &expires, &sup.Direction, &sup.MatchType); err != nil {
 			return nil, fmt.Errorf("scan suppression: %w", err)
 		}
 		if expires.Valid {
@@ -151,16 +151,23 @@ func (s *Store) ListSuppressions(ctx context.Context) ([]models.Suppression, err
 }
 
 func (s *Store) InsertSuppression(ctx context.Context, sup models.Suppression) (int64, error) {
+	if sup.Direction == "" {
+		sup.Direction = "out"
+	}
+	if sup.MatchType == "" {
+		sup.MatchType = "email"
+	}
 	var expires any
 	if sup.ExpiresAt != nil {
 		expires = *sup.ExpiresAt
 	}
 	res, err := s.db.ExecContext(ctx, `
-        INSERT INTO suppressions (email, reason, source, notes, created_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO suppressions (email, reason, source, notes, created_at, expires_at, direction, match_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(email) DO UPDATE SET reason = excluded.reason, source = excluded.source,
-            notes = excluded.notes, expires_at = excluded.expires_at`,
-		sup.Email, sup.Reason, sup.Source, sup.Notes, time.Now(), expires)
+            notes = excluded.notes, expires_at = excluded.expires_at,
+            direction = excluded.direction, match_type = excluded.match_type`,
+		sup.Email, sup.Reason, sup.Source, sup.Notes, time.Now(), expires, sup.Direction, sup.MatchType)
 	if err != nil {
 		return 0, fmt.Errorf("insert suppression: %w", err)
 	}
@@ -461,8 +468,8 @@ func (s *Store) listOutboundIPsTx(ctx context.Context, tx *sql.Tx) ([]models.Out
 // listSuppressionsTx loads the suppression list inside a transaction.
 func (s *Store) listSuppressionsTx(ctx context.Context, tx *sql.Tx) ([]models.Suppression, error) {
 	rows, err := tx.QueryContext(ctx, `
-        SELECT id, email, reason, source, notes, created_at, expires_at
-        FROM suppressions ORDER BY email ASC`)
+        SELECT id, email, reason, source, notes, created_at, expires_at, direction, match_type
+        FROM suppressions ORDER BY direction ASC, email ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list suppressions: %w", err)
 	}
@@ -472,7 +479,7 @@ func (s *Store) listSuppressionsTx(ctx context.Context, tx *sql.Tx) ([]models.Su
 	for rows.Next() {
 		var sup models.Suppression
 		var expires sql.NullTime
-		if err := rows.Scan(&sup.ID, &sup.Email, &sup.Reason, &sup.Source, &sup.Notes, &sup.CreatedAt, &expires); err != nil {
+		if err := rows.Scan(&sup.ID, &sup.Email, &sup.Reason, &sup.Source, &sup.Notes, &sup.CreatedAt, &expires, &sup.Direction, &sup.MatchType); err != nil {
 			return nil, fmt.Errorf("scan suppression: %w", err)
 		}
 		if expires.Valid {

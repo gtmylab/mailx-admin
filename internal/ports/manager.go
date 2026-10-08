@@ -212,7 +212,7 @@ func renderListener(l models.PortListener) string {
 		b.WriteString("  -o smtpd_sasl_auth_enable=yes\n")
 		b.WriteString("  -o smtpd_client_restrictions=permit_sasl_authenticated,reject\n")
 		b.WriteString("  -o smtpd_sender_login_maps=hash:/etc/postfix/virtual\n")
-		b.WriteString("  -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject\n")
+		b.WriteString("  -o smtpd_recipient_restrictions=permit_sasl_authenticated,check_recipient_access hash:/etc/postfix/suppressions,reject\n")
 	}
 
 	b.WriteString("  -o milter_macro_daemon_name=ORIGINATING\n")

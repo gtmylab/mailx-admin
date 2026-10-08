@@ -370,6 +370,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 			service: "postfix",
 		},
 		{
+			path:    filepath.Join(r.cfg.PostfixConfDir, "suppressions_in"),
+			content: RenderSenderSuppressions(snap.Suppressions),
+			mode:    0o644,
+			service: "postfix",
+		},
+		{
 			// smarthost credentials. 0600 root:root: this file holds the relay
 			// password in plaintext and must not be world-readable.
 			path:    filepath.Join(r.cfg.PostfixConfDir, "sasl_passwd"),

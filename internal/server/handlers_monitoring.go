@@ -32,26 +32,51 @@ func (s *Server) handleSuppressionCreate(w http.ResponseWriter, r *http.Request)
 		s.renderFormError(w, "Invalid form data")
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
-	if email == "" {
-		s.renderFormError(w, "Email is required")
+	value := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
+	if value == "" {
+		s.renderFormError(w, "Email or domain is required")
 		return
+	}
+	matchType := r.FormValue("match_type")
+	if matchType != "domain" {
+		matchType = "email"
+	}
+	direction := r.FormValue("direction")
+	if direction != "in" {
+		direction = "out"
 	}
 	reason := r.FormValue("reason")
 	if reason == "" {
 		reason = "manual"
 	}
+
+	var expires *time.Time
+	switch r.FormValue("duration") {
+	case "24h":
+		t := time.Now().Add(24 * time.Hour)
+		expires = &t
+	case "168h":
+		t := time.Now().Add(7 * 24 * time.Hour)
+		expires = &t
+	case "720h":
+		t := time.Now().Add(30 * 24 * time.Hour)
+		expires = &t
+	}
+
 	_, err := s.store.InsertSuppression(r.Context(), models.Suppression{
-		Email:  email,
-		Reason: reason,
-		Source: "admin",
+		Email:     value,
+		Reason:    reason,
+		Source:    "admin",
+		Direction: direction,
+		MatchType: matchType,
+		ExpiresAt: expires,
 	})
 	if err != nil {
 		s.renderFormError(w, err.Error())
 		return
 	}
 	s.requestSync("suppressions.change")
-	w.Header().Set("HX-Redirect", "/suppressions?flash="+encodeFlash("Suppressed "+email))
+	w.Header().Set("HX-Redirect", "/suppressions?flash="+encodeFlash("Suppressed "+value))
 	w.WriteHeader(http.StatusOK)
 }
 

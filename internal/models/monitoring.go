@@ -53,10 +53,13 @@ type BlocklistCheck struct {
 	CheckedAt time.Time
 }
 
-// Suppression is a recipient the panel must not send to.
+// Suppression is a rule that rejects a sender (direction "in") or refuses a
+// recipient (direction "out"), matching an exact address or a whole domain.
 type Suppression struct {
 	ID        int64
-	Email     string
+	Email     string // the match value: an address, or a bare domain when MatchType == "domain"
+	Direction string // "in" (reject inbound sender) | "out" (refuse outbound recipient)
+	MatchType string // "email" | "domain"
 	Reason    string
 	Source    string
 	Notes     string

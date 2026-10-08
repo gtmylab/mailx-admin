@@ -2,44 +2,60 @@
 <div class="page-header">
   <div>
     <h1>Server</h1>
-    <p class="page-sub">Hostname, webmail mail host and DNS settings for the panel and the mail stack.</p>
+    <p class="page-sub">Hostname, mail identity and panel settings.</p>
   </div>
 </div>
 
-<div class="card">
-  <div class="card-header"><h2>Server configuration</h2></div>
-  <div class="card-body">
-    <form class="form" hx-post="/system/server" hx-target="#settings-result" hx-swap="innerHTML">
+<form class="form" hx-post="/system/server" hx-target="#settings-result" hx-swap="innerHTML">
+
+  <div class="card">
+    <div class="card-header"><h2>Mail host &amp; identity</h2></div>
+    <div class="card-body">
       <div class="grid grid-cols-2 gap-4">
         <label class="field">
           <span class="field-label">Hostname</span>
           <input class="input" type="text" name="hostname" value="{{.Data.Settings.Hostname}}" required>
-          <span class="field-hint">Used as Postfix myhostname and in HELO / DKIM trusted hosts.</span>
+          <span class="field-hint">System hostname; used as Postfix myhostname and in HELO / DKIM trusted hosts. An A record must exist before changing it.</span>
         </label>
         <label class="field">
-          <span class="field-label">DNS resolver</span>
-          <input class="input" type="text" name="resolver" value="{{.Data.Settings.Resolver}}" placeholder="1.1.1.1:53">
-          <span class="field-hint">Used by monitoring jobs; takes effect after a panel restart.</span>
+          <span class="field-label">Mail name (/etc/mailname)</span>
+          <input class="input" type="text" name="mailname" value="{{.Data.Settings.Mailname}}" placeholder="mail.example.com">
+          <span class="field-hint">The host mail is delivered to; MX and PTR records point at it.</span>
         </label>
         <label class="field">
           <span class="field-label">Webmail mail host</span>
           <input class="input" type="text" name="mail_host" value="{{.Data.Settings.MailHost}}" placeholder="mail.example.com">
           <span class="field-hint">The IMAP/SMTP host Roundcube uses when pre-seeding new webmail accounts.</span>
         </label>
+        <label class="field">
+          <span class="field-label">DNS resolver</span>
+          <input class="input" type="text" name="resolver" value="{{.Data.Settings.Resolver}}" placeholder="1.1.1.1:53">
+          <span class="field-hint">Used by monitoring jobs; takes effect after a panel restart.</span>
+        </label>
       </div>
-
-      <div class="kv mt-4">
-        <span class="kv-label">Listen address</span>
-        <span class="kv-value mono">{{.Data.Settings.ListenAddr}}</span>
-        <span class="kv-label">Base URL</span>
-        <span class="kv-value mono">{{.Data.Settings.BaseURL}}</span>
-      </div>
-
-      <div class="form-actions">
-        <button type="submit" class="btn btn-primary">Save</button>
-      </div>
-    </form>
-    <div id="settings-result"></div>
+    </div>
   </div>
-</div>
+
+  <div class="card mt-4">
+    <div class="card-header"><h2>Panel</h2></div>
+    <div class="card-body">
+      <div class="grid grid-cols-2 gap-4">
+        <label class="field">
+          <span class="field-label">Panel base URL</span>
+          <input class="input" type="text" name="base_url" value="{{.Data.Settings.BaseURL}}" placeholder="https://admin.example.com">
+          <span class="field-hint">The subdomain the panel is served on. An A record must exist before changing it.</span>
+        </label>
+        <div class="kv">
+          <span class="kv-label">Listen address</span>
+          <span class="kv-value mono">{{.Data.Settings.ListenAddr}}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">Save</button>
+  </div>
+</form>
+<div id="settings-result"></div>
 {{end}}
