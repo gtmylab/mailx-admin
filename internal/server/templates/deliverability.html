@@ -11,10 +11,10 @@
   </div>
 </div>
 
-<div class="grid grid-cols-4 gap-4 mb-4">
+<div class="grid grid-cols-3 gap-4 mb-4">
   <div class="stat">
     <div class="stat-value">{{.Data.Summary.Sent}}</div>
-    <div class="stat-label">Sent</div>
+    <div class="stat-label">Total sent</div>
   </div>
   <div class="stat">
     <div class="stat-value">{{.Data.Summary.Bounced}}</div>
@@ -23,6 +23,10 @@
   <div class="stat">
     <div class="stat-value">{{.Data.Summary.Deferred}}</div>
     <div class="stat-label">Deferred</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{.Data.Summary.Total}}</div>
+    <div class="stat-label">Total processed</div>
   </div>
   <div class="stat">
     <div class="stat-value">{{printf "%.1f" .Data.Summary.BounceRate}}%</div>
@@ -58,4 +62,27 @@
   <div class="empty">No delivery events in the selected window.</div>
   {{end}}
 </div>
+
+{{if .Data.Summary.ByAccount}}
+<div class="card mt-4">
+  <div class="card-header">
+    <h2>By sending account</h2>
+  </div>
+  <table class="table">
+    <thead>
+      <tr><th>Account</th><th>Sent</th><th>Bounced</th><th>Deferred</th></tr>
+    </thead>
+    <tbody>
+      {{range .Data.Summary.ByAccount}}
+      <tr>
+        <td class="mono">{{if .Account}}{{.Account}}{{else}}<span class="dim">(unknown)</span>{{end}}</td>
+        <td>{{.Sent}}</td>
+        <td>{{.Bounced}}</td>
+        <td>{{.Deferred}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
 {{end}}

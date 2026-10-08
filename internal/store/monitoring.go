@@ -506,6 +506,46 @@ func (s *Store) Deliverability(ctx context.Context, since time.Time) ([]Delivera
 	return out, rows.Err()
 }
 
+// DeliverabilityAccount is one sending account's delivery aggregate, derived by
+// joining delivery events back to their queue event (which records the sender).
+type DeliverabilityAccount struct {
+	Account  string
+	Sent     int64
+	Bounced  int64
+	Deferred int64
+}
+
+// DeliverabilityByAccount returns sent/deferred/bounced counts grouped by the
+// sending account (envelope sender) since the given time. Each delivery event is
+// matched to its queue event on queue_id to recover the sender, because the
+// delivery log line only names the recipient.
+func (s *Store) DeliverabilityByAccount(ctx context.Context, since time.Time) ([]DeliverabilityAccount, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT COALESCE(q.from_addr, ''),
+		       COALESCE(SUM(CASE WHEN d.status = 'sent' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN d.status = 'bounced' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN d.status = 'deferred' THEN 1 ELSE 0 END), 0)
+		FROM mail_events d
+		LEFT JOIN mail_events q ON q.queue_id = d.queue_id AND q.action = 'queue'
+		WHERE d.ts >= ? AND d.action = 'delivery' AND d.status IN ('sent', 'deferred', 'bounced')
+		GROUP BY COALESCE(q.from_addr, '')
+		ORDER BY 2 DESC, 1 ASC`, since)
+	if err != nil {
+		return nil, fmt.Errorf("deliverability by account: %w", err)
+	}
+	defer rows.Close()
+
+	var out []DeliverabilityAccount
+	for rows.Next() {
+		var a DeliverabilityAccount
+		if err := rows.Scan(&a.Account, &a.Sent, &a.Bounced, &a.Deferred); err != nil {
+			return nil, fmt.Errorf("scan deliverability account: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // DayVolume is one day of mail traffic, split by outcome.
 type DayVolume struct {
 	Day      time.Time

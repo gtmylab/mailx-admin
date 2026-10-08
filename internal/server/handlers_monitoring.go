@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -86,7 +87,11 @@ func (s *Server) handleDeliverabilityPage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	summary := summarizeDeliverability(metrics)
+	// Per-account is a secondary aggregate; a failure here must not blank the
+	// whole page.
+	accounts, _ := s.store.DeliverabilityByAccount(r.Context(), since)
+
+	summary := summarizeDeliverability(metrics, accounts)
 
 	s.render(w, http.StatusOK, "deliverability.html", s.newPageData(w, r, "Deliverability", "deliverability", map[string]any{
 		"Summary": summary,
@@ -99,9 +104,11 @@ type delivSummary struct {
 	Sent         int64
 	Bounced      int64
 	Deferred     int64
+	Total        int64
 	BounceRate   float64
 	DeferralRate float64
 	ByDomain     []delivDomain
+	ByAccount    []delivAccount
 }
 
 type delivDomain struct {
@@ -111,7 +118,14 @@ type delivDomain struct {
 	Deferred int64
 }
 
-func summarizeDeliverability(metrics []store.DeliverabilityMetric) delivSummary {
+type delivAccount struct {
+	Account  string
+	Sent     int64
+	Bounced  int64
+	Deferred int64
+}
+
+func summarizeDeliverability(metrics []store.DeliverabilityMetric, accounts []store.DeliverabilityAccount) delivSummary {
 	var out delivSummary
 	totals := map[string]int64{}
 	byDomain := map[string]map[string]int64{}
@@ -127,6 +141,7 @@ func summarizeDeliverability(metrics []store.DeliverabilityMetric) delivSummary 
 	out.Sent = totals["sent"]
 	out.Bounced = totals["bounced"]
 	out.Deferred = totals["deferred"]
+	out.Total = out.Sent + out.Bounced + out.Deferred
 
 	if out.Sent+out.Bounced > 0 {
 		out.BounceRate = float64(out.Bounced) / float64(out.Sent+out.Bounced) * 100
@@ -143,6 +158,19 @@ func summarizeDeliverability(metrics []store.DeliverabilityMetric) delivSummary 
 			Deferred: m["deferred"],
 		})
 	}
+	sort.Slice(out.ByDomain, func(i, j int) bool {
+		return out.ByDomain[i].Sent > out.ByDomain[j].Sent
+	})
+
+	for _, a := range accounts {
+		out.ByAccount = append(out.ByAccount, delivAccount{
+			Account:  a.Account,
+			Sent:     a.Sent,
+			Bounced:  a.Bounced,
+			Deferred: a.Deferred,
+		})
+	}
+
 	return out
 }
 
