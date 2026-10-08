@@ -82,8 +82,8 @@ func RenderPostfixMainCF(snap *models.Snapshot, hostname string) []byte {
 	b.WriteString("\n# DKIM milter\n")
 	b.WriteString("milter_default_action = accept\n")
 	b.WriteString("milter_protocol = 2\n")
-	b.WriteString("smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock\n")
-	b.WriteString("non_smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock\n")
+	b.WriteString("smtpd_milters = unix:opendkim/opendkim.sock\n")
+	b.WriteString("non_smtpd_milters = unix:opendkim/opendkim.sock\n")
 
 	b.WriteString("\n# Header checks\n")
 	b.WriteString("header_checks = regexp:/etc/postfix/header_checks\n")

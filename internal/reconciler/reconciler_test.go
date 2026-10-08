@@ -154,6 +154,29 @@ func TestRenderPostfixMainCF(t *testing.T) {
 	}
 }
 
+// TestRenderPostfixMainCFMilterSocketPath — the milter socket must be written
+// chroot-relative (unix:opendkim/opendkim.sock), never as an absolute path.
+// Postfix smtpd/pickup/cleanup run chrooted to /var/spool/postfix, so an
+// absolute path would resolve inside the chroot and the connection would never
+// reach OpenDKIM — mail goes out with no DKIM-Signature, and
+// milter_default_action=accept hides the failure.
+func TestRenderPostfixMainCFMilterSocketPath(t *testing.T) {
+	out := string(RenderPostfixMainCF(fixtureSnapshot(), "mail.example.com"))
+
+	for _, want := range []string{
+		"smtpd_milters = unix:opendkim/opendkim.sock",
+		"non_smtpd_milters = unix:opendkim/opendkim.sock",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	if strings.Contains(out, "unix:/var/spool/postfix/opendkim/opendkim.sock") {
+		t.Errorf("milter socket path is absolute; it must be chroot-relative:\n%s", out)
+	}
+}
+
 // TestMergeMainCF — the managed block has to land in the main.cf Postfix reads,
 // replacing any previous block rather than growing the file on every reconcile.
 func TestMergeMainCF(t *testing.T) {
