@@ -30,6 +30,16 @@ const (
 	reloadTimeout = 120 * time.Second
 )
 
+// postmapMaps are the Postfix hash maps that must be compiled with postmap
+// before Postfix can read them. Both suppression maps are here: suppressions
+// (outbound, via check_recipient_access) and suppressions_in (inbound, via
+// check_sender_access). Omitting one leaves its .db unbuilt and Postfix rejects
+// every message with "hash:... lookup error".
+var postmapMaps = []string{
+	"virtual", "vmailbox", "vuidmaps", "vgidmaps", "helo_access",
+	"sender_transport", "suppressions", "suppressions_in", "sasl_passwd",
+}
+
 type Config struct {
 	PostfixConfDir    string // /etc/postfix
 	DovecotConfDir    string // /etc/dovecot
@@ -584,9 +594,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
-		for _, name := range []string{"virtual", "vmailbox", "vuidmaps", "vgidmaps", "helo_access", "sender_transport", "suppressions", "sasl_passwd"} {
+		for _, name := range postmapMaps {
 			path := filepath.Join(r.cfg.PostfixConfDir, name)
-			if fileChanged(res.Changes, path) {
+			if fileChanged(res.Changes, path) || compiledMapMissing(path) {
 				if err := runCmd(ctx, commandTimeout, "postmap", path); err != nil {
 					return res, fmt.Errorf("postmap %s: %w", path, err)
 				}
@@ -672,6 +682,15 @@ func fileChanged(changes []FileChange, path string) bool {
 		}
 	}
 	return false
+}
+
+// compiledMapMissing reports whether a Postfix hash map's compiled .db file is
+// absent. It heals installs upgraded from a build that wrote the source map but
+// never postmapped it (see postmapMaps), which otherwise fail every lookup with
+// "hash:... lookup error".
+func compiledMapMissing(path string) bool {
+	_, err := os.Stat(path + ".db")
+	return os.IsNotExist(err)
 }
 
 // runCmd executes one external helper under a hard deadline and with the whole
