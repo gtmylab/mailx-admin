@@ -164,6 +164,7 @@ func (s *Server) buildRouter() http.Handler {
 	// Outbound relay (smarthost)
 	protected.HandleFunc("GET /system/relay", s.handleRelayPage)
 	protected.HandleFunc("POST /system/relay", s.handleRelaySave)
+	protected.HandleFunc("POST /system/relay/test", s.handleRelayTest)
 
 	// Self-update
 	protected.HandleFunc("GET /system/updates", s.handleUpdatesPage)

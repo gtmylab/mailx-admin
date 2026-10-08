@@ -7,6 +7,7 @@ import (
 
 	"github.com/gtmylab/mailx-admin/internal/audit"
 	"github.com/gtmylab/mailx-admin/internal/execx"
+	"github.com/gtmylab/mailx-admin/internal/store"
 	"github.com/gtmylab/mailx-admin/internal/update"
 	"github.com/gtmylab/mailx-admin/internal/version"
 )
@@ -18,7 +19,13 @@ type updateResult struct {
 }
 
 func (s *Server) handleUpdatesPage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, 200, "updates.html", s.newPageData(w, r, "Updates", "updates", nil))
+	var history []store.UpdateCheck
+	if s.store != nil {
+		history, _ = s.store.ListUpdateChecks(r.Context(), 10)
+	}
+	s.render(w, 200, "updates.html", s.newPageData(w, r, "Updates", "updates", map[string]any{
+		"History": history,
+	}))
 }
 
 // handleUpdateCheck forces a fresh release check and swaps in the status card.
@@ -83,7 +90,8 @@ func (s *Server) updateStatus() *update.Status {
 	return &st
 }
 
-// checkUpdates re-queries the release and replaces the cached result.
+// checkUpdates re-queries the release and replaces the cached result, recording
+// the outcome in the update_checks history.
 func (s *Server) checkUpdates(ctx context.Context) {
 	if s.updater == nil {
 		return
@@ -92,23 +100,47 @@ func (s *Server) checkUpdates(ctx context.Context) {
 	s.updateMu.Lock()
 	s.updateState = st
 	s.updateMu.Unlock()
+
+	if s.store != nil {
+		_ = s.store.RecordUpdateCheck(ctx, store.UpdateCheck{
+			CheckedAt: time.Now(),
+			Current:   st.Current,
+			Latest:    st.Latest,
+			Available: st.Available,
+			UpToDate:  st.UpToDate,
+			Error:     st.Error,
+			Notes:     st.Notes,
+		})
+	}
 }
 
-// periodicUpdateCheck re-checks for a release at startup and on a long interval,
-// so the banner is populated without every page render paying for a network call.
+// periodicUpdateCheck re-checks for a release at startup and daily at 01:00
+// local, so the banner is populated without every page render paying for a
+// network call.
 func (s *Server) periodicUpdateCheck(ctx context.Context) {
 	if s.updater == nil {
 		return
 	}
 	s.checkUpdates(ctx)
-	ticker := time.NewTicker(update.CheckInterval)
-	defer ticker.Stop()
 	for {
+		timer := time.NewTimer(untilNext(1, 0))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			s.checkUpdates(ctx)
 		}
 	}
+}
+
+// untilNext returns the duration until the next hour:minute in local time,
+// rolling into tomorrow when that time has already passed today.
+func untilNext(hour, minute int) time.Duration {
+	now := time.Now()
+	next := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
+	if !next.After(now) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return next.Sub(now)
 }

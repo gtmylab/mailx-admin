@@ -36,6 +36,11 @@ type SendOptions struct {
 	Body    string
 
 	Timeout time.Duration
+
+	// ProbeOnly stops after connect + TLS + auth, without sending a message.
+	// The relay "test connection" button uses it to verify a smarthost without
+	// actually delivering anything through it.
+	ProbeOnly bool
 }
 
 type Result struct {
@@ -174,6 +179,13 @@ func Send(ctx context.Context, opts SendOptions) *Result {
 			res.Error = "AUTH: " + err.Error()
 			return res
 		}
+	}
+
+	// ---- Probe-only: stop after connect + TLS + auth, no message. ----
+	if opts.ProbeOnly {
+		_ = cmd(conn, reader, log, "QUIT", 221)
+		res.Success = true
+		return res
 	}
 
 	// ---- MAIL FROM ----

@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/gtmylab/mailx-admin/internal/smtp"
 )
 
 // relayView is the outbound smarthost form. Password is deliberately excluded:
@@ -60,6 +63,53 @@ func (s *Server) handleRelaySave(w http.ResponseWriter, r *http.Request) {
 	s.requestSync("relay.change")
 	w.Header().Set("HX-Redirect", "/system/relay?flash="+encodeFlash("Relay settings saved"))
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleRelayTest attempts a connection (and, when credentials are given, an
+// AUTH) to the relay host as entered in the form, without sending any mail. It
+// is the "test connection" action next to Save.
+func (s *Server) handleRelayTest(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.renderFormError(w, "Invalid form data")
+		return
+	}
+
+	host := strings.TrimSpace(r.FormValue("host"))
+	port, _ := strconv.Atoi(r.FormValue("port"))
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+	tlsMode := r.FormValue("tls")
+
+	if host == "" {
+		s.renderFormError(w, "Relay host is required")
+		return
+	}
+	if port == 0 {
+		port = 587
+	}
+
+	mode := smtp.TLSNone
+	switch tlsMode {
+	case "starttls":
+		mode = smtp.TLSStartTLS
+	case "smtps":
+		mode = smtp.TLSImplicit
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	res := smtp.Send(ctx, smtp.SendOptions{
+		Host:       host,
+		Port:       port,
+		TLSMode:    mode,
+		Username:   username,
+		Password:   password,
+		SkipVerify: true,
+		ProbeOnly:  true,
+	})
+
+	s.renderPartial(w, "relay_test", map[string]any{"Result": res})
 }
 
 // readRelaySettings loads the relay form state from the settings table.

@@ -1,0 +1,16 @@
+{{define "relay_test"}}
+<div class="mt-4">
+  {{with .Result}}
+    {{if .Success}}
+      <div class="alert alert-ok" role="status">Connection{{if .TLS}} and TLS{{end}} succeeded{{if .TLS}} ({{.TLS.Version}} / {{.TLS.CipherSuite}}){{end}} in {{.Duration}}.</div>
+    {{else}}
+      <div class="alert alert-warn" role="status">Connection failed: {{.Error}}</div>
+    {{end}}
+    <details class="mt-2">
+      <summary class="dim text-sm">Transcript</summary>
+      <pre class="mono text-xs" style="max-height: 300px; overflow: auto;">{{range .Transcript}}{{.Dir}} {{.Text}}
+{{end}}</pre>
+    </details>
+  {{end}}
+</div>
+{{end}}

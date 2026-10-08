@@ -19,4 +19,30 @@
 </div>
 
 <div id="update-result"></div>
+
+{{if .Data.History}}
+<div class="card mt-4">
+  <div class="card-header"><h2>Check history</h2></div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Checked</th><th>Current</th><th>Latest</th><th>Result</th></tr></thead>
+      <tbody>
+        {{range .Data.History}}
+        <tr>
+          <td class="mono">{{.CheckedAt.Format "2006-01-02 15:04"}}</td>
+          <td class="mono">{{.Current}}</td>
+          <td class="mono">{{if .Latest}}{{.Latest}}{{else}}unknown{{end}}</td>
+          <td>
+            {{if .Error}}<span class="badge warn">error</span>
+            {{else if .Available}}<span class="badge ok">update available</span>
+            {{else if .UpToDate}}<span class="badge ok">up to date</span>
+            {{else}}<span class="badge dim">—</span>{{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
 {{end}}
