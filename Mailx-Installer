@@ -3745,7 +3745,7 @@ install_admin_apache_vhost() {
     # proxy/proxy_http reverse-proxy the Go binary on ${ADMIN_LISTEN_ADDR},
     # ssl terminates TLS, headers writes HSTS. Show what a2enmod does: silently
     # swallowed module failures produced an installed-but-unusable vhost before.
-    a2enmod proxy proxy_http ssl headers 2>&1 | grep -E 'Enabling module|already enabled' || true
+    a2enmod proxy proxy_http proxy_wstunnel ssl headers 2>&1 | grep -E 'Enabling module|already enabled' || true
 
     local cert_path="/etc/letsencrypt/live/${hostname}"
     if [ ! -f "${cert_path}/fullchain.pem" ] || [ ! -f "${cert_path}/privkey.pem" ]; then
@@ -3786,6 +3786,10 @@ install_admin_apache_vhost() {
         SetEnv proxy-sendchunked 1
         SetEnv proxy-sendcl 0
     </Location>
+
+    # WebSocket — interactive terminal
+    ProxyPass        /terminal/ws ws://${ADMIN_LISTEN_ADDR}/terminal/ws
+    ProxyPassReverse /terminal/ws ws://${ADMIN_LISTEN_ADDR}/terminal/ws
 
     ProxyPass        / http://${ADMIN_LISTEN_ADDR}/
     ProxyPassReverse / http://${ADMIN_LISTEN_ADDR}/
