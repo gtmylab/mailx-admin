@@ -953,6 +953,7 @@ input::file-selector-button {
 .flex { display: flex; }
 .grid { display: grid; }
 .hidden { display: none; }
+[hidden] { display: none !important; }
 .contents { display: contents; }
 
 /* flex + grid */

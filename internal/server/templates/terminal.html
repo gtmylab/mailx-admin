@@ -19,6 +19,11 @@
           <input class="input" type="text" name="username" required>
         </label>
         <label class="field">
+          <span class="field-label">SSH port</span>
+          <input class="input" type="number" name="port" value="22" min="1" max="65535">
+          <span class="field-hint">The port this server's sshd listens on — 22 by default. Change it if you use a non-standard SSH port.</span>
+        </label>
+        <label class="field">
           <span class="field-label">Password</span>
           <input class="input" type="password" name="password" autocomplete="current-password">
         </label>
@@ -123,7 +128,8 @@
       type: 'login',
       username: username,
       password: form.password.value,
-      key: form.key.value.trim()
+      key: form.key.value.trim(),
+      port: parseInt(form.port.value, 10) || 22
     }));
   });
 

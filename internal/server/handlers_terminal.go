@@ -15,11 +15,15 @@ import (
 	"github.com/gtmylab/mailx-admin/internal/auth"
 )
 
-// terminalSSHAddr is where the panel connects to open a shell: the loopback
-// address of the server it is running on. The login dialog's credentials are
-// handed to sshd, which does the real authentication — PAM for passwords,
-// authorized_keys for private keys.
-const terminalSSHAddr = "127.0.0.1:22"
+// terminalSSHHost is the loopback address the panel connects to when opening a
+// shell. The port is chosen in the login dialog (defaultSSHPort), because many
+// hosts run sshd on a non-standard port. The credentials are handed to sshd,
+// which does the real authentication — PAM for passwords, authorized_keys for
+// private keys.
+const (
+	terminalSSHHost = "127.0.0.1"
+	defaultSSHPort  = 22
+)
 
 // upgrader turns the terminal page's WebSocket request into a connection. The
 // session has already been checked by RequireAuth, so every caller here is a
@@ -38,6 +42,7 @@ type termMsg struct {
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
 	Key      string `json:"key,omitempty"`
+	Port     int    `json:"port,omitempty"`
 	Cols     int    `json:"cols,omitempty"`
 	Rows     int    `json:"rows,omitempty"`
 	Message  string `json:"message,omitempty"`
@@ -108,7 +113,7 @@ type TermSession struct {
 	manager *TerminalManager
 }
 
-func (s *Server) startTermSession(adminID int64, username, password, key string) (*TermSession, error) {
+func (s *Server) startTermSession(adminID int64, username, password, key string, port int) (*TermSession, error) {
 	var methods []ssh.AuthMethod
 	if key != "" {
 		signer, err := ssh.ParsePrivateKey([]byte(key))
@@ -132,7 +137,7 @@ func (s *Server) startTermSession(adminID int64, username, password, key string)
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         10 * time.Second,
 	}
-	client, err := ssh.Dial("tcp", terminalSSHAddr, cfg)
+	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", terminalSSHHost, port), cfg)
 	if err != nil {
 		s.logger.Warn("terminal ssh dial failed", "user", username, "err", err)
 		return nil, fmt.Errorf("login failed: %w", err)
@@ -344,7 +349,11 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 		if json.Unmarshal(data, &msg) != nil || msg.Type != "login" {
 			continue
 		}
-		ts, err = s.startTermSession(sess.AdminUserID, msg.Username, msg.Password, msg.Key)
+		port := msg.Port
+		if port <= 0 {
+			port = defaultSSHPort
+		}
+		ts, err = s.startTermSession(sess.AdminUserID, msg.Username, msg.Password, msg.Key, port)
 		if err != nil {
 			_ = conn.WriteJSON(termMsg{Type: "login-error", Message: err.Error()})
 			ts = nil
