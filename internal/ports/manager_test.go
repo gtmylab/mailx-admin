@@ -19,21 +19,12 @@ func TestRenderListenerChecksSuppressionsBeforePermit(t *testing.T) {
 		RequireSASL: true,
 	})
 
-	const prefix = "smtpd_recipient_restrictions="
-	i := strings.Index(out, prefix)
-	if i < 0 {
-		t.Fatalf("no recipient_restrictions line rendered:\n%s", out)
-	}
-	rest := out[i+len(prefix):]
-	if end := strings.Index(rest, "\n"); end >= 0 {
-		rest = rest[:end]
-	}
-
-	// The value must stay quoted: check_recipient_access takes a map argument
-	// separated by a space, and an unquoted space in a master.cf -o option makes
-	// smtpd fail to start ("unexpected command-line argument").
-	const want = `"check_recipient_access hash:/etc/postfix/suppressions,permit_sasl_authenticated,reject"`
-	if rest != want {
-		t.Fatalf("recipient_restrictions = %q, want %q", rest, want)
+	// The value contains a space ("check_recipient_access <map>"), which the
+	// short -o form cannot express and double quotes do NOT protect in master.cf.
+	// It must use the { } long form, and check_recipient_access must come before
+	// permit_sasl_authenticated for the suppression check to actually run.
+	const want = "  -o { smtpd_recipient_restrictions = check_recipient_access hash:/etc/postfix/suppressions,permit_sasl_authenticated,reject }"
+	if !strings.Contains(out, want) {
+		t.Fatalf("rendered listener missing { } recipient_restrictions:\n%s", out)
 	}
 }
