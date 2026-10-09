@@ -40,6 +40,11 @@
     </div>
 
     <div id="terminal-shell">
+      <div class="btn-group mb-2">
+        <button type="button" class="btn btn-sm" id="term-copy">Copy</button>
+        <button type="button" class="btn btn-sm" id="term-paste">Paste</button>
+        <button type="button" class="btn btn-sm" id="term-cad" title="Send Ctrl+Alt+Delete to the remote shell">Ctrl+Alt+Del</button>
+      </div>
       <div id="terminal" class="terminal-shell"></div>
       <div id="terminal-status" class="dim text-xs mt-2">Connecting…</div>
     </div>
@@ -135,10 +140,11 @@
 
   term.attachCustomKeyEventHandler(function (ev) {
     if (ev.type !== 'keydown') return true;
+    // Copy with Ctrl+Shift+C, or Ctrl+C when there is a selection (otherwise
+    // Ctrl+C stays the interrupt signal). Paste is deliberately left to the
+    // browser's native paste event so content is inserted exactly once.
     if (ev.ctrlKey && ev.shiftKey && ev.code === 'KeyC') { copySelection(); return false; }
-    if (ev.ctrlKey && ev.shiftKey && ev.code === 'KeyV') { pasteClipboard(); return false; }
     if (ev.ctrlKey && ev.code === 'KeyC' && term.hasSelection()) { copySelection(); return false; }
-    if (ev.ctrlKey && ev.code === 'KeyV') { pasteClipboard(); return false; }
     if (ev.ctrlKey && ev.shiftKey && ev.code === 'KeyF') { openSearch(); return false; }
     return true;
   });
@@ -157,6 +163,13 @@
       else search.findNext('');
     } catch (e) { /* best-effort */ }
   }
+
+  document.getElementById('term-copy').addEventListener('click', function () { copySelection(); });
+  document.getElementById('term-paste').addEventListener('click', function () { pasteClipboard(); });
+  document.getElementById('term-cad').addEventListener('click', function () {
+    // xterm key encoding for Delete + Ctrl + Alt
+    if (ws.readyState === 1) ws.send('\x1b[3;6~');
+  });
 })();
 </script>
 {{end}}

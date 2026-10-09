@@ -1713,6 +1713,47 @@ RENEWAL_EOF
     echo ""
 }
 
+# Resolve the server's public IPv4 address (used to decide whether an A record
+# points here, so Let's Encrypt can be attempted).
+server_public_ip() {
+    local ip
+    ip=$(curl -s --max-time 8 https://api.ipify.org 2>/dev/null || true)
+    [ -z "$ip" ] && ip=$(curl -s --max-time 8 https://ifconfig.me 2>/dev/null || true)
+    [ -z "$ip" ] && ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    echo "$ip"
+}
+
+# True when `host` has an A record equal to `ip`.
+has_matching_a_record() {
+    local host="$1" ip="$2" resolved
+    [ -z "$host" ] && return 1
+    resolved=$(getent ahostsv4 "$host" 2>/dev/null | awk 'NR==1 {print $1}')
+    [ -n "$resolved" ] && [ "$resolved" = "$ip" ]
+}
+
+# Generate a self-signed certificate for the mail services (no A record yet).
+generate_self_signed_cert() {
+    local hostname="$1" email_domain="$2"
+    local dir="/etc/ssl/mailx"
+    mkdir -p "$dir"
+    [ -f "$dir/fullchain.pem" ] && [ -f "$dir/privkey.pem" ] && return 0
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout "$dir/privkey.pem" -out "$dir/fullchain.pem" \
+        -subj "/CN=$hostname" \
+        -addext "subjectAltName=DNS:$hostname,DNS:$email_domain,DNS:admin.$email_domain" \
+        2>/dev/null || openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+            -keyout "$dir/privkey.pem" -out "$dir/fullchain.pem" -subj "/CN=$hostname"
+    chmod 600 "$dir/privkey.pem"
+    chmod 644 "$dir/fullchain.pem"
+}
+
+# Point Postfix/Dovecot at the self-signed certificate.
+apply_self_signed_cert() {
+    postconf -e "smtpd_tls_cert_file=/etc/ssl/mailx/fullchain.pem"
+    postconf -e "smtpd_tls_key_file=/etc/ssl/mailx/privkey.pem"
+    systemctl reload-or-restart postfix dovecot 2>/dev/null || true
+}
+
 manage_ssl_certificates() {
     local action=$1
     local hostname=$2
@@ -1745,6 +1786,38 @@ manage_ssl_certificates() {
             if [ -d "/etc/letsencrypt/live/$cert_name" ]; then
                 log_info "SSL certificate already installed for $cert_name"
                 configure_ssl_services "$cert_name"
+                return 0
+            fi
+
+            # Skip Let's Encrypt when no A record points at this server yet: the
+            # HTTP-01 challenge would fail and abort the install. Fall back to a
+            # self-signed certificate and warn the operator.
+            local server_ip a_ready
+            server_ip=$(server_public_ip)
+            a_ready=false
+            if [ -n "$server_ip" ]; then
+                for h in "$hostname" "$email_domain" "$mail_hostname" "admin.$email_domain"; do
+                    [ -z "$h" ] && continue
+                    if has_matching_a_record "$h" "$server_ip"; then
+                        a_ready=true
+                        break
+                    fi
+                done
+            fi
+
+            if [ "$a_ready" != "true" ]; then
+                log_warning "No A record for $hostname / $email_domain resolves to this server ($server_ip)."
+                log_warning "Generating a self-signed certificate instead of Let's Encrypt."
+                generate_self_signed_cert "$hostname" "$email_domain"
+                apply_self_signed_cert
+                echo ""
+                echo "=============================================================="
+                echo "  WARNING: installed with a SELF-SIGNED certificate."
+                echo "  No A record pointed at this server yet, so Let's Encrypt"
+                echo "  was skipped. Browsers will warn until you set the A record"
+                echo "  and re-run the SSL repair."
+                echo "=============================================================="
+                echo ""
                 return 0
             fi
 

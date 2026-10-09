@@ -145,6 +145,40 @@ func Renew(ctx context.Context, req RenewRequest) *RenewResult {
 	return res
 }
 
+// GenerateSelfSigned creates a self-signed certificate for cn (with optional
+// subjectAltName DNS entries) under dir and returns the fullchain and key
+// paths. Used when Let's Encrypt cannot issue (e.g. the hostname has no A
+// record yet) so the mail services still have a usable certificate.
+func GenerateSelfSigned(ctx context.Context, dir, cn string, sans []string) (fullchain, key string, err error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", "", fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	fullchain = filepath.Join(dir, "fullchain.pem")
+	key = filepath.Join(dir, "privkey.pem")
+
+	args := []string{"req", "-x509", "-nodes", "-days", "3650", "-newkey", "rsa:2048",
+		"-keyout", key, "-out", fullchain, "-subj", "/CN=" + cn}
+	if len(sans) > 0 {
+		args = append(args, "-addext", "subjectAltName="+sanList(sans))
+	}
+
+	cmd := exec.CommandContext(ctx, "openssl", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", "", fmt.Errorf("openssl req: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return fullchain, key, nil
+}
+
+func sanList(sans []string) string {
+	parts := make([]string, 0, len(sans))
+	for _, s := range sans {
+		if s != "" {
+			parts = append(parts, "DNS:"+s)
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
 // InspectRemote connects to a host:port and returns the leaf cert's NotAfter.
 // Used for external verification (e.g., is the cert on 993 correct?).
 func InspectRemote(ctx context.Context, host string, port int) (*CertInfo, error) {

@@ -8,10 +8,10 @@
     </p>
   </div>
   <div class="page-actions">
-    <button class="btn" hx-get="/sync/adopt/preview" hx-target="#modal-host" hx-swap="innerHTML"
-            title="Add the mailboxes, domains and aliases that exist on this server but not in the panel">
-      Import from server
-    </button>
+    <a class="btn" href="/system/import"
+       title="Import mail from another server or mailbox format">
+      Import mail
+    </a>
     <button class="btn btn-primary" hx-get="/users/new" hx-target="#modal-host" hx-swap="innerHTML">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
            aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
@@ -111,9 +111,9 @@
     <button class="btn btn-primary" hx-get="/users/new" hx-target="#modal-host" hx-swap="innerHTML">
       Create the first user
     </button>
-    <button class="btn" hx-get="/sync/adopt/preview" hx-target="#modal-host" hx-swap="innerHTML">
-      Import from server
-    </button>
+    <a class="btn" href="/system/import">
+      Import mail
+    </a>
   </div>
   {{end}}
 </div>

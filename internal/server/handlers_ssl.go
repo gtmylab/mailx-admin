@@ -213,6 +213,41 @@ func (s *Server) handleSSLSendTest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleSSLSelfSigned generates a self-signed certificate and optionally points
+// Postfix/Dovecot at it, for when Let's Encrypt cannot issue (no A record yet).
+func (s *Server) handleSSLSelfSigned(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.renderFormError(w, "Invalid form")
+		return
+	}
+	cn := strings.TrimSpace(r.FormValue("cn"))
+	if cn == "" {
+		s.renderFormError(w, "Common name (domain) is required")
+		return
+	}
+	var sans []string
+	for _, part := range strings.Split(r.FormValue("sans"), ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			sans = append(sans, p)
+		}
+	}
+
+	fc, key, err := ssl.GenerateSelfSigned(r.Context(), "/etc/ssl/mailx/"+cn, cn, sans)
+	if err != nil {
+		s.renderFormError(w, err.Error())
+		return
+	}
+
+	if r.FormValue("apply") == "on" {
+		_ = execx.Run(r.Context(), 30*time.Second, "postconf", "-e", "smtpd_tls_cert_file="+fc)
+		_ = execx.Run(r.Context(), 30*time.Second, "postconf", "-e", "smtpd_tls_key_file="+key)
+		_ = execx.Run(r.Context(), 30*time.Second, "systemctl", "reload-or-restart", "postfix", "dovecot")
+	}
+
+	w.Header().Set("HX-Redirect", "/ssl?flash="+encodeFlash("Self-signed certificate generated for "+cn))
+	w.WriteHeader(http.StatusOK)
+}
+
 // ---- helpers ----
 
 func (s *Server) listCerts(ctx context.Context) ([]*ssl.CertInfo, error) {

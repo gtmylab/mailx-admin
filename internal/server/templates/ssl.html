@@ -121,4 +121,31 @@
     <button type="submit" class="btn btn-primary btn-sm ml-auto">Save settings</button>
   </div>
 </form>
+
+<form class="card mt-4" hx-post="/ssl/self-signed" hx-target="#form-error" hx-swap="innerHTML">
+  <div class="card-header">
+    <h2>Self-signed certificate</h2>
+    <span class="dim text-xs">Generate a self-signed certificate when DNS isn't ready for Let's Encrypt</span>
+  </div>
+  <div class="card-body form">
+    <div class="form-grid">
+      <label class="field">
+        <span class="field-label">Common name (domain)</span>
+        <input class="input" type="text" name="cn" placeholder="mail.example.com" required>
+      </label>
+      <label class="field">
+        <span class="field-label">Additional names (SANs, comma-separated)</span>
+        <input class="input" type="text" name="sans" placeholder="admin.example.com, mx.example.com">
+      </label>
+    </div>
+    <label class="check-row">
+      <input class="checkbox" type="checkbox" name="apply" checked>
+      <span>Apply to Postfix &amp; Dovecot immediately</span>
+    </label>
+  </div>
+  <div class="card-footer form-row">
+    <button type="submit" class="btn btn-primary btn-sm ml-auto">Generate</button>
+  </div>
+</form>
+<div class="form-error-slot" id="form-error"></div>
 {{end}}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gtmylab/mailx-admin/internal/execx"
+	"github.com/gtmylab/mailx-admin/internal/ssl"
 )
 
 // sslAdminEmail returns the address certbot uses for registration/expiry
@@ -31,15 +32,30 @@ func (s *Server) reissueHostCertificates(ctx context.Context, newHostname string
 	}
 	email := s.sslAdminEmail(ctx)
 
-	// Prefer webroot (no service downtime); fall back to standalone.
-	webroot := []string{"certonly", "--non-interactive", "--agree-tos", "--webroot", "-w", "/var/www/html", "-d", newHostname, "-m", email}
-	if _, err := execx.Output(ctx, 2*time.Minute, "certbot", webroot...); err != nil {
-		_, _ = execx.Output(ctx, 2*time.Minute, "certbot",
-			"certonly", "--standalone", "--non-interactive", "--agree-tos", "-d", newHostname, "-m", email)
-	}
-
 	cert := "/etc/letsencrypt/live/" + newHostname + "/fullchain.pem"
 	key := "/etc/letsencrypt/live/" + newHostname + "/privkey.pem"
+
+	// Try Let's Encrypt (webroot, then standalone). If the hostname has no A
+	// record yet, both fail and we fall back to a self-signed certificate so
+	// the services still have a usable cert.
+	issued := false
+	webroot := []string{"certonly", "--non-interactive", "--agree-tos", "--webroot", "-w", "/var/www/html", "-d", newHostname, "-m", email}
+	if _, err := execx.Output(ctx, 2*time.Minute, "certbot", webroot...); err == nil {
+		issued = true
+	} else if _, err := execx.Output(ctx, 2*time.Minute, "certbot",
+		"certonly", "--standalone", "--non-interactive", "--agree-tos", "-d", newHostname, "-m", email); err == nil {
+		issued = true
+	}
+
+	if !issued {
+		fc, k, err := ssl.GenerateSelfSigned(ctx, "/etc/ssl/mailx/"+newHostname, newHostname, []string{newHostname})
+		if err != nil {
+			s.logger.Warn("self-signed fallback failed", "host", newHostname, "err", err)
+			return
+		}
+		cert, key = fc, k
+		s.logger.Info("issued self-signed certificate (no A record for hostname)", "host", newHostname)
+	}
 
 	_ = execx.Run(ctx, 30*time.Second, "postconf", "-e", "smtpd_tls_cert_file="+cert)
 	_ = execx.Run(ctx, 30*time.Second, "postconf", "-e", "smtpd_tls_key_file="+key)
@@ -57,34 +73,33 @@ type servicePort struct {
 // currentServicePorts reports the mail stack's core listening ports, read from
 // the live config so the page reflects the running daemons.
 func (s *Server) currentServicePorts(ctx context.Context) []servicePort {
-	ports := []servicePort{
+	return []servicePort{
 		{Name: "SMTP", Port: "25", Purpose: "Inbound mail"},
 		{Name: "Submission", Port: s.submissionPort(ctx), Purpose: "Authenticated sending (STARTTLS)"},
 		{Name: "SMTPS", Port: "465", Purpose: "Authenticated sending (implicit TLS)"},
-		{Name: "IMAP", Port: s.dovecotPort(ctx, "imap", "143"), Purpose: "Mailbox retrieval"},
-		{Name: "IMAPS", Port: s.dovecotPort(ctx, "imaps", "993"), Purpose: "Mailbox retrieval (TLS)"},
-		{Name: "POP3", Port: s.dovecotPort(ctx, "pop3", "110"), Purpose: "Legacy retrieval"},
-		{Name: "POP3S", Port: s.dovecotPort(ctx, "pop3s", "995"), Purpose: "Legacy retrieval (TLS)"},
+		{Name: "IMAP", Port: "143", Purpose: "Mailbox retrieval"},
+		{Name: "IMAPS", Port: "993", Purpose: "Mailbox retrieval (TLS)"},
+		{Name: "POP3", Port: "110", Purpose: "Legacy retrieval"},
+		{Name: "POP3S", Port: "995", Purpose: "Legacy retrieval (TLS)"},
 	}
-	return ports
 }
 
+// submissionPort reads the current submission (587) listener from master.cf. It
+// returns the numeric port whether the service is still named "submission" or
+// was rewritten to a custom port (the page keeps syslog_name=postfix/submission
+// as a marker).
 func (s *Server) submissionPort(ctx context.Context) string {
-	out, err := execx.Output(ctx, systemCmdTimeout, "grep", "-E", "^submission\\s+inet", "/etc/postfix/master.cf")
+	const awk = `{ if ($1 == "submission" || $1 ~ /^[0-9]+$/) { name=$1 } if ($0 ~ /syslog_name=postfix\/submission/) { print name; exit } }`
+	out, err := execx.Output(ctx, systemCmdTimeout, "awk", awk, "/etc/postfix/master.cf")
 	if err == nil {
-		if fields := strings.Fields(string(out)); len(fields) > 0 {
-			return fields[0]
+		if v := strings.TrimSpace(string(out)); v != "" {
+			if v == "submission" {
+				return "587"
+			}
+			return v
 		}
 	}
 	return "587"
-}
-
-func (s *Server) dovecotPort(ctx context.Context, proto, fallback string) string {
-	out, err := execx.Output(ctx, systemCmdTimeout, "doveconf", "-h", "service", proto, "inet_listener", proto, "port")
-	if err == nil && strings.TrimSpace(string(out)) != "" {
-		return strings.TrimSpace(string(out))
-	}
-	return fallback
 }
 
 func (s *Server) handleServicePortsPage(w http.ResponseWriter, r *http.Request) {

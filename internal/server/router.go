@@ -119,6 +119,7 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("POST /ssl/renew/{name}", s.handleSSLRenew)
 	protected.HandleFunc("POST /ssl/settings", s.handleSSLSettings)
 	protected.HandleFunc("POST /ssl/send-test", s.handleSSLSendTest)
+	protected.HandleFunc("POST /ssl/self-signed", s.handleSSLSelfSigned)
 
 	protected.HandleFunc("GET /ports", s.handlePortsPage)
 	protected.HandleFunc("GET /ports/new", s.handlePortNew)
