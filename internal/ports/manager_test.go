@@ -29,7 +29,10 @@ func TestRenderListenerChecksSuppressionsBeforePermit(t *testing.T) {
 		rest = rest[:end]
 	}
 
-	const want = "check_recipient_access hash:/etc/postfix/suppressions,permit_sasl_authenticated,reject"
+	// The value must stay quoted: check_recipient_access takes a map argument
+	// separated by a space, and an unquoted space in a master.cf -o option makes
+	// smtpd fail to start ("unexpected command-line argument").
+	const want = `"check_recipient_access hash:/etc/postfix/suppressions,permit_sasl_authenticated,reject"`
 	if rest != want {
 		t.Fatalf("recipient_restrictions = %q, want %q", rest, want)
 	}
