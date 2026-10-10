@@ -63,26 +63,13 @@
   {{end}}
 </div>
 
-{{if .Data.Summary.ByAccount}}
-<div class="card mt-4">
-  <div class="card-header">
-    <h2>By sending account</h2>
+<div id="accounts-card" class="mt-4"
+     hx-get="/deliverability/accounts?days={{.Data.Days}}"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+  <div class="card">
+    <div class="card-header"><h2>By sending account</h2></div>
+    <div class="empty">Loading…</div>
   </div>
-  <table class="table">
-    <thead>
-      <tr><th>Account</th><th>Sent</th><th>Bounced</th><th>Deferred</th></tr>
-    </thead>
-    <tbody>
-      {{range .Data.Summary.ByAccount}}
-      <tr>
-        <td class="mono">{{if .Account}}{{.Account}}{{else}}<span class="dim">(unknown)</span>{{end}}</td>
-        <td>{{.Sent}}</td>
-        <td>{{.Bounced}}</td>
-        <td>{{.Deferred}}</td>
-      </tr>
-      {{end}}
-    </tbody>
-  </table>
 </div>
-{{end}}
 {{end}}

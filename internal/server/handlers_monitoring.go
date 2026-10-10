@@ -98,30 +98,58 @@ func (s *Server) handleSuppressionDelete(w http.ResponseWriter, r *http.Request)
 // ---- Deliverability --------------------------------------------------------
 
 func (s *Server) handleDeliverabilityPage(w http.ResponseWriter, r *http.Request) {
+	days := deliverabilityDays(r)
+
+	metrics, err := s.store.Deliverability(r.Context(), time.Now().AddDate(0, 0, -days))
+	if err != nil {
+		s.renderError(w, 500, "Failed to load deliverability")
+		return
+	}
+
+	// The per-account breakdown is a heavy aggregate on busy servers, so it is
+	// loaded lazily by its own fragment (see handleDeliverabilityAccounts) and
+	// no longer blocks this page from rendering.
+	summary := summarizeDeliverability(metrics, nil)
+
+	s.render(w, http.StatusOK, "deliverability.html", s.newPageData(w, r, "Deliverability", "deliverability", map[string]any{
+		"Summary": summary,
+		"Days":    days,
+	}))
+}
+
+// deliverabilityDays reads and clamps the ?days= query parameter (default 30,
+// max 90).
+func deliverabilityDays(r *http.Request) int {
 	days := 30
 	if v := r.URL.Query().Get("days"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 90 {
 			days = n
 		}
 	}
-	since := time.Now().AddDate(0, 0, -days)
+	return days
+}
 
-	metrics, err := s.store.Deliverability(r.Context(), since)
+// handleDeliverabilityAccounts renders the "By sending account" fragment for the
+// deliverability page. It is a separate route so a slow aggregate cannot time
+// out the whole page: the page loads first and this fragment fills in after.
+func (s *Server) handleDeliverabilityAccounts(w http.ResponseWriter, r *http.Request) {
+	since := time.Now().AddDate(0, 0, -deliverabilityDays(r))
+
+	accounts, err := s.store.DeliverabilityByAccount(r.Context(), since)
 	if err != nil {
-		s.renderError(w, 500, "Failed to load deliverability")
+		s.renderPartial(w, "deliverability_accounts", map[string]any{
+			"Accounts": []delivAccount{},
+			"Error":    "The per-account breakdown failed to load.",
+		})
 		return
 	}
 
-	// Per-account is a secondary aggregate; a failure here must not blank the
-	// whole page.
-	accounts, _ := s.store.DeliverabilityByAccount(r.Context(), since)
+	out := make([]delivAccount, 0, len(accounts))
+	for _, a := range accounts {
+		out = append(out, delivAccount{Account: a.Account, Sent: a.Sent, Bounced: a.Bounced, Deferred: a.Deferred})
+	}
 
-	summary := summarizeDeliverability(metrics, accounts)
-
-	s.render(w, http.StatusOK, "deliverability.html", s.newPageData(w, r, "Deliverability", "deliverability", map[string]any{
-		"Summary": summary,
-		"Days":    days,
-	}))
+	s.renderPartial(w, "deliverability_accounts", map[string]any{"Accounts": out})
 }
 
 // delivSummary is the shape the deliverability page renders.

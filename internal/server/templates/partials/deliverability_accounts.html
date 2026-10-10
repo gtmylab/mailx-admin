@@ -1,0 +1,26 @@
+{{define "deliverability_accounts"}}
+<div class="card">
+  <div class="card-header"><h2>By sending account</h2></div>
+  {{if .Error}}
+  <div class="empty">{{.Error}} <a href="javascript:location.reload()">Reload</a> to retry.</div>
+  {{else if .Accounts}}
+  <table class="table">
+    <thead>
+      <tr><th>Account</th><th>Sent</th><th>Bounced</th><th>Deferred</th></tr>
+    </thead>
+    <tbody>
+      {{range .Accounts}}
+      <tr>
+        <td class="mono">{{if .Account}}{{.Account}}{{else}}<span class="dim">(unknown)</span>{{end}}</td>
+        <td>{{.Sent}}</td>
+        <td>{{.Bounced}}</td>
+        <td>{{.Deferred}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">No delivery events in the selected window.</div>
+  {{end}}
+</div>
+{{end}}

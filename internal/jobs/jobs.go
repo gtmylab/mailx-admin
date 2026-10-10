@@ -175,6 +175,29 @@ func (m *Manager) CheckPTRAndDiscover(ctx context.Context) error {
 	return nil
 }
 
+// BackfillDeliverySenders fills the envelope sender onto delivery events that
+// predate the ingester denormalization, in bounded chunks so the panel keeps
+// serving while it runs. It stops once a chunk updates no rows.
+func (m *Manager) BackfillDeliverySenders(ctx context.Context) error {
+	const batch = 5000
+	var total int64
+	for {
+		n, err := m.store.BackfillDeliverySenders(ctx, batch)
+		if err != nil {
+			return err
+		}
+		total += n
+		if n == 0 {
+			break
+		}
+		m.logger.Info("backfilling delivery senders", "rows", total)
+	}
+	if total > 0 {
+		m.logger.Info("delivery sender backfill complete", "rows", total)
+	}
+	return nil
+}
+
 // runLoop runs fn after first, then every period, until ctx is cancelled.
 func (m *Manager) runLoop(ctx context.Context, name string, first, period time.Duration, fn func(context.Context) error) {
 	timer := time.NewTimer(first)

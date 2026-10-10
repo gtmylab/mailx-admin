@@ -149,6 +149,7 @@ func (s *Server) buildRouter() http.Handler {
 
 	// Deliverability & reputation
 	protected.HandleFunc("GET /deliverability", s.handleDeliverabilityPage)
+	protected.HandleFunc("GET /deliverability/accounts", s.handleDeliverabilityAccounts)
 	protected.HandleFunc("GET /blocklists", s.handleBlocklistsPage)
 	protected.HandleFunc("GET /suppressions", s.handleSuppressionsPage)
 	protected.HandleFunc("POST /suppressions", s.handleSuppressionCreate)

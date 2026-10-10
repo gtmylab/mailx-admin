@@ -161,6 +161,7 @@ func (ing *Ingester) ingestOnce(ctx context.Context) error {
 		if ev.Ts.After(lastTs) {
 			lastTs = ev.Ts
 		}
+		ing.fillSender(ctx, tx, &ev)
 		_, err := tx.ExecContext(ctx, `
             INSERT INTO mail_events
               (ts, queue_id, service, action, status, from_addr, to_addr, domain,
@@ -205,6 +206,31 @@ func (ing *Ingester) saveState(ctx context.Context, inode, offset int64, lastSee
             last_seen_ts = COALESCE(excluded.last_seen_ts, log_state.last_seen_ts)
     `, ing.path, inode, offset, time.Now(), lastSeen)
 	return err
+}
+
+// queryRower is the subset of *sql.DB and *sql.Tx that fillSender needs, so it
+// works whether the delivery event is inserted in its own transaction (journal)
+// or as part of a batch (file).
+type queryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// fillSender copies the envelope sender onto a delivery event from its queue
+// event. Delivery log lines only name the recipient, so the sender is recovered
+// by matching queue_id back to the queue event (action='queue'). This keeps the
+// per-account deliverability aggregate a single-table query instead of a self
+// join over the whole mail_events table.
+func (ing *Ingester) fillSender(ctx context.Context, q queryRower, ev *Event) {
+	if ev.Action != "delivery" || ev.FromAddr != "" || ev.QueueID == "" {
+		return
+	}
+	var sender sql.NullString
+	if err := q.QueryRowContext(ctx, `
+		SELECT from_addr FROM mail_events
+		WHERE queue_id = ? AND action = 'queue'
+		ORDER BY ts ASC LIMIT 1`, ev.QueueID).Scan(&sender); err == nil && sender.Valid && sender.String != "" {
+		ev.FromAddr = sender.String
+	}
 }
 
 // ---- systemd journal source ----
@@ -332,6 +358,8 @@ func (ing *Ingester) insertEvent(ctx context.Context, ev *Event) error {
 		return err
 	}
 	defer tx.Rollback()
+
+	ing.fillSender(ctx, tx, ev)
 
 	if _, err := tx.ExecContext(ctx, `
         INSERT INTO mail_events

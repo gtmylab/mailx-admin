@@ -118,6 +118,15 @@ func cmdServe() *cobra.Command {
 			jm.SetWebhooks(webhooks.New(st, logger))
 			jm.Start(ctx)
 
+			// One-time backfill of the envelope sender onto delivery events so the
+			// per-account deliverability view no longer self-joins mail_events. Runs
+			// in the background in bounded chunks; it must not block startup.
+			go func() {
+				if err := jm.BackfillDeliverySenders(ctx); err != nil {
+					logger.Warn("delivery sender backfill failed", "err", err)
+				}
+			}()
+
 			// ---- Seed gate ----
 			snap, err := st.Snapshot(ctx)
 			if err != nil {
