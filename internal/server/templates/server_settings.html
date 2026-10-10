@@ -73,11 +73,19 @@
 
     <form class="form mt-3" hx-post="/system/server/time" hx-target="#time-result" hx-swap="innerHTML">
       <div class="grid grid-cols-2 gap-4">
+        <!-- Timezone: searchable full-list dropdown (Webmin-style) -->
         <label class="field">
-          <span class="field-label">Timezone</span>
-          <input class="input" type="text" name="timezone" list="tz-list" value="{{.Data.Time.Timezone}}" placeholder="UTC">
-          <datalist id="tz-list">{{range .Data.Timezones}}<option value="{{.}}">{{.}}</option>{{end}}</datalist>
-          <span class="field-hint">IANA zone name, e.g. Europe/London or UTC.</span>
+          <span class="field-label">Change timezone to</span>
+          <input class="input" type="text" name="timezone" list="tz-list"
+                 value="{{.Data.Time.Timezone}}" placeholder="Etc/UTC"
+                 autocomplete="off" spellcheck="false" required>
+          <datalist id="tz-list">
+            {{range .Data.Timezones}}<option value="{{.}}"></option>{{end}}
+          </datalist>
+          <span class="field-hint">
+            Type to filter, or click the arrow to browse all IANA zones
+            (e.g. <code>Europe/London</code>, <code>Africa/Cairo</code>, <code>Etc/UTC</code>).
+          </span>
         </label>
         <label class="field">
           <span class="field-label">NTP sync</span>

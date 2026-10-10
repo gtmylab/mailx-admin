@@ -1,0 +1,188 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>{{if .Data.Job.ID}}Edit Cron Job{{else}}Create Cron Job{{end}}</h1>
+    <p class="page-sub">Schedule a recurring command to run on this server.</p>
+  </div>
+</div>
+
+<form class="form" hx-post="/system/cron" hx-target="#form-error" hx-swap="innerHTML" id="cron-form">
+  <div class="form-error-slot" id="form-error" data-modal-error></div>
+  <input type="hidden" name="id" value="{{if .Data.Job.ID}}{{.Data.Job.ID}}{{end}}">
+
+  <!-- ================= Job Details ================= -->
+  <div class="card">
+    <div class="card-header"><h2>Job Details</h2></div>
+    <div class="card-body">
+      <div class="grid grid-cols-2 gap-4">
+        <label class="field">
+          <span class="field-label">Execute cron job as</span>
+          <select class="select" name="run_as">
+            {{range .Data.Users}}
+              <option value="{{.}}" {{if eq . $.Data.Job.RunAs}}selected{{end}}>{{.}}</option>
+            {{else}}
+              <option value="root" {{if eq "root" .Data.Job.RunAs}}selected{{end}}>root</option>
+            {{end}}
+          </select>
+        </label>
+
+        <div class="field">
+          <span class="field-label">Active</span>
+          <div class="radio-row">
+            <label class="radio">
+              <input type="radio" name="enabled" value="1" {{if or (not .Data.Job.ID) .Data.Job.Enabled}}checked{{end}}>
+              <span>Yes</span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="enabled" value="0" {{if and .Data.Job.ID (not .Data.Job.Enabled)}}checked{{end}}>
+              <span>No</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <label class="field mt-3">
+        <span class="field-label">Command</span>
+        <input class="input mono" type="text" name="command" value="{{.Data.Job.Command}}"
+               placeholder="/usr/local/bin/backup.sh" required>
+      </label>
+
+      <label class="field mt-3">
+        <span class="field-label">Input to command</span>
+        <textarea class="input mono" name="input" rows="3"
+                  placeholder="Optional stdin passed to the command">{{.Data.Job.Input}}</textarea>
+      </label>
+
+      <label class="field mt-3">
+        <span class="field-label">Description</span>
+        <textarea class="input" name="description" rows="3"
+                  placeholder="Optional notes about this job">{{.Data.Job.Description}}</textarea>
+      </label>
+    </div>
+  </div>
+
+  <!-- ================= When to execute ================= -->
+  <div class="card mt-4">
+    <div class="card-header"><h2>When to execute</h2></div>
+    <div class="card-body">
+      <div class="radio-row">
+        <label class="radio">
+          <input type="radio" name="schedule_mode" value="simple" {{if ne .Data.Job.ScheduleMode "advanced"}}checked{{end}}
+                 hx-on:change="document.getElementById('advanced-schedule-row').hidden = true;">
+          <span>Simple schedule</span>
+        </label>
+        <select class="select" name="simple_schedule" id="simple-schedule">
+          <option value="hourly"  {{if eq .Data.Job.SimpleSchedule "hourly"}}selected{{end}}>Hourly</option>
+          <option value="daily"   {{if eq .Data.Job.SimpleSchedule "daily"}}selected{{end}}>Daily</option>
+          <option value="weekly"  {{if eq .Data.Job.SimpleSchedule "weekly"}}selected{{end}}>Weekly</option>
+          <option value="monthly" {{if eq .Data.Job.SimpleSchedule "monthly"}}selected{{end}}>Monthly</option>
+          <option value="yearly"  {{if eq .Data.Job.SimpleSchedule "yearly"}}selected{{end}}>Yearly</option>
+        </select>
+        <label class="radio">
+          <input type="radio" name="schedule_mode" value="advanced"
+                 {{if eq .Data.Job.ScheduleMode "advanced"}}checked{{end}}
+                 hx-on:change="document.getElementById('advanced-schedule-row').hidden = false;">
+          <span>Times and dates selected below …</span>
+        </label>
+      </div>
+
+      <!-- Advanced: five list boxes -->
+      <div id="advanced-schedule-row" {{if ne .Data.Job.ScheduleMode "advanced"}}hidden{{end}}>
+        <div class="cron-picker grid grid-cols-5 gap-4 mt-4">
+          <div class="cron-col">
+            <h3 class="cron-col-title">Minutes</h3>
+            <label class="radio"><input type="radio" name="minutes_mode" value="all" checked><span>All</span></label>
+            <label class="radio"><input type="radio" name="minutes_mode" value="selected"><span>Selected …</span></label>
+            <select class="select mono" name="minutes" multiple size="12">
+              {{range .Data.CronMinutes}}<option value="{{.}}" {{if $.Data.Job.Minutes.Has .}}selected{{end}}>{{.}}</option>{{end}}
+            </select>
+          </div>
+
+          <div class="cron-col">
+            <h3 class="cron-col-title">Hours</h3>
+            <label class="radio"><input type="radio" name="hours_mode" value="all" checked><span>All</span></label>
+            <label class="radio"><input type="radio" name="hours_mode" value="selected"><span>Selected …</span></label>
+            <select class="select mono" name="hours" multiple size="12">
+              {{range .Data.CronHours}}<option value="{{.}}" {{if $.Data.Job.Hours.Has .}}selected{{end}}>{{.}}</option>{{end}}
+            </select>
+          </div>
+
+          <div class="cron-col">
+            <h3 class="cron-col-title">Days</h3>
+            <label class="radio"><input type="radio" name="days_mode" value="all" checked><span>All</span></label>
+            <label class="radio"><input type="radio" name="days_mode" value="selected"><span>Selected …</span></label>
+            <select class="select mono" name="days" multiple size="12">
+              {{range .Data.CronDays}}<option value="{{.}}" {{if $.Data.Job.Days.Has .}}selected{{end}}>{{.}}</option>{{end}}
+            </select>
+          </div>
+
+          <div class="cron-col">
+            <h3 class="cron-col-title">Months</h3>
+            <label class="radio"><input type="radio" name="months_mode" value="all" checked><span>All</span></label>
+            <label class="radio"><input type="radio" name="months_mode" value="selected"><span>Selected …</span></label>
+            <select class="select mono" name="months" multiple size="12">
+              {{range .Data.CronMonths}}<option value="{{.Value}}" {{if $.Data.Job.Months.Has .Value}}selected{{end}}>{{.Label}}</option>{{end}}
+            </select>
+          </div>
+
+          <div class="cron-col">
+            <h3 class="cron-col-title">Weekdays</h3>
+            <label class="radio"><input type="radio" name="weekdays_mode" value="all" checked><span>All</span></label>
+            <label class="radio"><input type="radio" name="weekdays_mode" value="selected"><span>Selected …</span></label>
+            <select class="select mono" name="weekdays" multiple size="12">
+              {{range .Data.CronWeekdays}}<option value="{{.Value}}" {{if $.Data.Job.Weekdays.Has .Value}}selected{{end}}>{{.Label}}</option>{{end}}
+            </select>
+          </div>
+        </div>
+
+        <p class="field-hint mt-2">Tip: Use Ctrl-click (or ⌘-click on Mac) to select or deselect multiple items, or Shift-click to select a range.</p>
+
+        <!-- Optional manual cron expression, kept for power users -->
+        <label class="field mt-3">
+          <span class="field-label">Cron expression</span>
+          <input class="input mono" type="text" name="schedule" value="{{.Data.Job.Schedule}}"
+                 placeholder="30 2 * * *">
+          <span class="field-hint">Five-field cron: <code>minute hour day-of-month month day-of-week</code>.</span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Date range to execute ================= -->
+  <div class="card mt-4">
+    <div class="card-header"><h2>Date range to execute</h2></div>
+    <div class="card-body">
+      <label class="radio">
+        <input type="radio" name="date_range_mode" value="any"
+               {{if ne .Data.Job.DateRangeMode "range"}}checked{{end}}
+               hx-on:change="document.getElementById('date-range-row').hidden = true;">
+        <span>Run on any date</span>
+      </label>
+      <label class="radio">
+        <input type="radio" name="date_range_mode" value="range"
+               {{if eq .Data.Job.DateRangeMode "range"}}checked{{end}}
+               hx-on:change="document.getElementById('date-range-row').hidden = false;">
+        <span>Only run from</span>
+      </label>
+
+      <div id="date-range-row" class="date-range-row mt-2"
+           {{if ne .Data.Job.DateRangeMode "range"}}hidden{{end}}>
+        <select class="select" name="start_month">
+          {{range .Data.Months}}<option value="{{.Value}}" {{if eq .Value $.Data.Job.StartMonth}}selected{{end}}>{{.Label}}</option>{{end}}
+        </select>
+        <input class="input" type="date" name="start_date" value="{{.Data.Job.StartDate}}">
+        <span>to</span>
+        <select class="select" name="end_month">
+          {{range .Data.Months}}<option value="{{.Value}}" {{if eq .Value $.Data.Job.EndMonth}}selected{{end}}>{{.Label}}</option>{{end}}
+        </select>
+        <input class="input" type="date" name="end_date" value="{{.Data.Job.EndDate}}">
+      </div>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <a class="btn" href="/system/cron">Cancel</a>
+    <button type="submit" class="btn btn-primary">{{if .Data.Job.ID}}Save{{else}}Create{{end}}</button>
+  </div>
+</form>
+{{end}}

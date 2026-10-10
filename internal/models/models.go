@@ -169,20 +169,44 @@ type RelayConfig struct {
 	TLSMode  string
 }
 
-// CronJob is a user-defined scheduled job. Schedule is a standard 5-field cron
-// expression; the command is run by the system cron daemon through
-// `mailx-admin cron run <id>`, which records the result back to the panel.
+// CronValueSet is a set of cron field values (selected minutes, hours, …) used by
+// the cron form's list boxes. It is persisted as a comma-separated string.
+type CronValueSet map[string]bool
+
+// Has reports whether v is selected.
+func (s CronValueSet) Has(v string) bool { return s[v] }
+
+// CronJob is a user-defined scheduled job. Schedule is the authoritative 5-field
+// cron expression derived from the simple/advanced picker; the command is run by
+// the system cron daemon through `mailx-admin cron run <id>`, which records the
+// result back to the panel.
 type CronJob struct {
-	ID         int64
-	Name       string
-	Schedule   string
-	Command    string
-	Enabled    bool
-	LastRunAt  *time.Time
-	LastStatus string // "", "ok", "error", "running"
-	LastOutput string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ID          int64
+	Name        string
+	Schedule    string
+	Command     string
+	RunAs       string
+	Input       string
+	Description string
+	Enabled     bool
+	// UI scheduling fields (the final Schedule is derived from these).
+	SimpleSchedule string
+	ScheduleMode   string // "simple" | "advanced"
+	Minutes        CronValueSet
+	Hours          CronValueSet
+	Days           CronValueSet
+	Months         CronValueSet
+	Weekdays       CronValueSet
+	DateRangeMode  string // "any" | "range"
+	StartMonth     string
+	StartDate      string
+	EndMonth       string
+	EndDate        string
+	LastRunAt      *time.Time
+	LastStatus     string // "", "ok", "error", "running"
+	LastOutput     string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // Snapshot is what the reconciler consumes. Immutable, rendered from DB.

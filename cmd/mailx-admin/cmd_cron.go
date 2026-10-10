@@ -52,7 +52,15 @@ func cmdCronRun() *cobra.Command {
 			}
 
 			_ = st.MarkCronRun(ctx, id, "running", "")
-			out, err := cron.RunCommand(ctx, job.Command)
+
+			// The date range is a runtime gate: a 5-field cron expression cannot
+			// express "only run between these dates".
+			if !cron.WithinDateRange(time.Now(), job.DateRangeMode, job.StartMonth, job.StartDate, job.EndMonth, job.EndDate) {
+				_ = st.MarkCronRun(ctx, id, "ok", "skipped: outside the configured date range")
+				return nil
+			}
+
+			out, err := cron.RunCommand(ctx, job.RunAs, job.Command, job.Input)
 			status := "ok"
 			if err != nil {
 				status = "error"

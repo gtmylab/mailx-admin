@@ -21,9 +21,10 @@ type timeView struct {
 	NTPActive bool
 }
 
-// commonTimezones seeds the timezone datalist. The field also accepts any IANA
-// zone name, so the list is a convenience, not a limit.
-var commonTimezones = []string{
+// fallbackTimezones seeds the datalist when timedatectl is unavailable (a
+// non-systemd host or a developer build). On a real server the full IANA list is
+// read from `timedatectl list-timezones`.
+var fallbackTimezones = []string{
 	"UTC", "Africa/Lagos", "Africa/Nairobi", "Africa/Johannesburg",
 	"America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
 	"America/Mexico_City", "America/Sao_Paulo", "America/Argentina/Buenos_Aires",
@@ -32,6 +33,26 @@ var commonTimezones = []string{
 	"Europe/London", "Europe/Dublin", "Europe/Paris", "Europe/Berlin", "Europe/Madrid",
 	"Europe/Rome", "Europe/Amsterdam", "Europe/Stockholm", "Europe/Warsaw", "Europe/Moscow",
 	"Pacific/Auckland",
+}
+
+// timezones returns every IANA timezone the host knows, for the Server page's
+// searchable dropdown. It falls back to fallbackTimezones when timedatectl cannot
+// list them.
+func timezones(ctx context.Context) []string {
+	out, err := execx.Output(ctx, systemCmdTimeout, "timedatectl", "list-timezones")
+	if err != nil {
+		return fallbackTimezones
+	}
+	var zones []string
+	for _, z := range strings.Split(string(out), "\n") {
+		if z = strings.TrimSpace(z); z != "" {
+			zones = append(zones, z)
+		}
+	}
+	if len(zones) == 0 {
+		return fallbackTimezones
+	}
+	return zones
 }
 
 // timeStatusView reads the host's clock and NTP state via timedatectl. On a

@@ -49,6 +49,7 @@ var pageTemplateNames = []string{
 	"networking.html",
 	"service_ports.html",
 	"cron.html",
+	"cron_form.html",
 }
 
 // fragmentTemplateNames are the HTMX fragments referenced by handlers via
@@ -94,7 +95,6 @@ var fragmentTemplateNames = []string{
 	"network_test_result",
 	"network_add_result",
 	"service_ports_result",
-	"cron_form",
 	"cron_log",
 	"time_result",
 }

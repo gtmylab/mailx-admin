@@ -895,6 +895,37 @@ input::file-selector-button {
 }
 .check-row input { flex: 0 0 auto; }
 
+/* Radio groups (used by the cron form) */
+.radio-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.5rem;
+}
+.radio-row .radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: auto;
+  height: auto;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.radio-row .radio input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  accent-color: var(--brand);
+}
+
+/* Cron picker (the five column list boxes) */
+.cron-picker { align-items: start; }
+.cron-col { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
+.cron-col-title { margin: 0; font-size: 0.8rem; font-weight: 500; color: var(--fg-muted); }
+.cron-col select { width: 100%; }
+.date-range-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+
 .switch { position: relative; display: inline-flex; align-items: center; width: 40px; height: 22px; flex: 0 0 auto; }
 .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
 .switch span {
