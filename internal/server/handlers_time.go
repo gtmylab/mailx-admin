@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -35,24 +37,91 @@ var fallbackTimezones = []string{
 	"Pacific/Auckland",
 }
 
-// timezones returns every IANA timezone the host knows, for the Server page's
-// searchable dropdown. It falls back to fallbackTimezones when timedatectl cannot
-// list them.
-func timezones(ctx context.Context) []string {
+// timezoneOption is one entry in the timezone dropdown.
+type timezoneOption struct {
+	Value string // IANA name, e.g. "America/New_York"
+	Label string // "(GMT-05:00) New York"
+}
+
+// timezoneGroup is one <optgroup> in the timezone dropdown.
+type timezoneGroup struct {
+	Label   string
+	Options []timezoneOption
+}
+
+// timezoneGroups returns every IANA timezone the host knows, grouped by region
+// for the Server page's dropdown. It falls back to fallbackTimezones when
+// timedatectl cannot list them.
+func timezoneGroups(ctx context.Context) []timezoneGroup {
 	out, err := execx.Output(ctx, systemCmdTimeout, "timedatectl", "list-timezones")
-	if err != nil {
-		return fallbackTimezones
-	}
 	var zones []string
-	for _, z := range strings.Split(string(out), "\n") {
-		if z = strings.TrimSpace(z); z != "" {
-			zones = append(zones, z)
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		zones = fallbackTimezones
+	} else {
+		for _, z := range strings.Split(string(out), "\n") {
+			if z = strings.TrimSpace(z); z != "" {
+				zones = append(zones, z)
+			}
 		}
 	}
-	if len(zones) == 0 {
-		return fallbackTimezones
+
+	now := time.Now()
+	grouped := map[string][]timezoneOption{}
+	for _, z := range zones {
+		region := regionOf(z)
+		grouped[region] = append(grouped[region], timezoneOption{Value: z, Label: zoneLabel(z, now)})
 	}
-	return zones
+
+	groups := make([]timezoneGroup, 0, len(grouped))
+	for region, opts := range grouped {
+		sort.Slice(opts, func(i, j int) bool {
+			if opts[i].Label != opts[j].Label {
+				return opts[i].Label < opts[j].Label
+			}
+			return opts[i].Value < opts[j].Value
+		})
+		groups = append(groups, timezoneGroup{Label: region, Options: opts})
+	}
+	sort.Slice(groups, func(i, j int) bool { return groups[i].Label < groups[j].Label })
+	return groups
+}
+
+// regionOf returns the top-level region (first path segment) of an IANA name,
+// folding the odd "Etc" pseudo-region under "Other".
+func regionOf(zone string) string {
+	if i := strings.IndexByte(zone, '/'); i >= 0 {
+		r := zone[:i]
+		if r == "Etc" {
+			return "Other"
+		}
+		return r
+	}
+	return "Other"
+}
+
+// zoneLabel builds "(GMT±HH:MM) Friendly Name" for a zone, using its current UTC
+// offset and a humanized name.
+func zoneLabel(zone string, now time.Time) string {
+	loc, err := time.LoadLocation(zone)
+	if err != nil {
+		return zone
+	}
+	_, offset := now.In(loc).Zone()
+	sign := "+"
+	if offset < 0 {
+		sign = "-"
+		offset = -offset
+	}
+	return fmt.Sprintf("(GMT%s%02d:%02d) %s", sign, offset/3600, (offset%3600)/60, humanizeZone(zone))
+}
+
+// humanizeZone turns an IANA name into a readable label: it drops the region
+// prefix and replaces underscores with spaces ("America/New_York" -> "New York").
+func humanizeZone(zone string) string {
+	if i := strings.IndexByte(zone, '/'); i >= 0 {
+		zone = zone[i+1:]
+	}
+	return strings.ReplaceAll(zone, "_", " ")
 }
 
 // timeStatusView reads the host's clock and NTP state via timedatectl. On a
