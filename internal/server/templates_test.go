@@ -26,6 +26,7 @@ var pageTemplateNames = []string{
 	"dashboard.html",
 	"users.html",
 	"user_detail.html",
+	"user_logs.html",
 	"domains.html",
 	"domain_detail.html",
 	"domain_dns.html",
