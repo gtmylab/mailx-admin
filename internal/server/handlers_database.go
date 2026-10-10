@@ -41,9 +41,14 @@ type databaseMigrateResult struct {
 }
 
 func (s *Server) handleDatabasePage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, 200, "database.html", s.newPageData(w, r, "Database", "database", map[string]any{
+	data := map[string]any{
 		"DB": databaseInfo{Driver: s.dbDriver, SQLitePath: s.cfg.DB.SQLite.Path},
-	}))
+		"PG": s.cfg.DB.Postgres,
+	}
+	if s.dbDriver == "postgres" {
+		data["PGStatus"] = postgresStatusView(r.Context())
+	}
+	s.render(w, 200, "database.html", s.newPageData(w, r, "Database", "database", data))
 }
 
 // handleDatabaseTest opens and pings the target Postgres, so the operator can
@@ -205,6 +210,19 @@ func savePostgresConfig(path string, pg config.PostgresConfig) error {
 		return err
 	}
 	cfg.DB.Driver = "postgres"
+	cfg.DB.Postgres = pg
+	return config.Save(path, cfg)
+}
+
+// savePostgresCredentials writes the connection details to admin.toml without
+// flipping the driver. Used by the one-click provision so the migration form is
+// pre-filled, while the panel keeps serving from SQLite until the operator
+// commits the migration.
+func savePostgresCredentials(path string, pg config.PostgresConfig) error {
+	cfg, err := config.Load(path)
+	if err != nil {
+		return err
+	}
 	cfg.DB.Postgres = pg
 	return config.Save(path, cfg)
 }

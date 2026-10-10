@@ -58,4 +58,51 @@
   </div>
 </form>
 <div id="settings-result"></div>
+
+<div class="card mt-4">
+  <div class="card-header"><h2>Time &amp; date</h2></div>
+  <div class="card-body">
+    <div id="time-result">
+      <div class="grid grid-cols-2 gap-4">
+        <div class="kv"><span class="kv-label">Current time</span><span class="kv-value mono">{{.Data.Time.Now}}</span></div>
+        <div class="kv"><span class="kv-label">Timezone</span><span class="kv-value mono">{{.Data.Time.Timezone}}</span></div>
+        <div class="kv"><span class="kv-label">NTP sync</span><span class="kv-value">{{if .Data.Time.NTPActive}}enabled{{else}}disabled{{end}}</span></div>
+        <div class="kv"><span class="kv-label">Clock synchronized</span><span class="kv-value">{{if .Data.Time.NTPSync}}yes{{else}}no{{end}}</span></div>
+      </div>
+    </div>
+
+    <form class="form mt-3" hx-post="/system/server/time" hx-target="#time-result" hx-swap="innerHTML">
+      <div class="grid grid-cols-2 gap-4">
+        <label class="field">
+          <span class="field-label">Timezone</span>
+          <input class="input" type="text" name="timezone" list="tz-list" value="{{.Data.Time.Timezone}}" placeholder="UTC">
+          <datalist id="tz-list">{{range .Data.Timezones}}<option value="{{.}}">{{.}}</option>{{end}}</datalist>
+          <span class="field-hint">IANA zone name, e.g. Europe/London or UTC.</span>
+        </label>
+        <label class="field">
+          <span class="field-label">NTP sync</span>
+          <select class="select" name="ntp">
+            <option value="">Leave unchanged</option>
+            <option value="on">Enable</option>
+            <option value="off">Disable</option>
+          </select>
+          <span class="field-hint">Keep NTP enabled for automatic sync.</span>
+        </label>
+        <label class="field">
+          <span class="field-label">Date (YYYY-MM-DD)</span>
+          <input class="input" type="text" name="date" placeholder="2026-10-08 (optional)">
+        </label>
+        <label class="field">
+          <span class="field-label">Time (HH:MM:SS)</span>
+          <input class="input" type="text" name="time" placeholder="12:00:00 (optional)">
+          <span class="field-hint">Setting the time disables NTP; re-enable it after.</span>
+        </label>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn" hx-post="/system/server/time/sync" hx-target="#time-result" hx-swap="innerHTML">Sync now</button>
+        <button type="submit" class="btn btn-primary">Save time</button>
+      </div>
+    </form>
+  </div>
+</div>
 {{end}}

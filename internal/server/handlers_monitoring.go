@@ -392,8 +392,9 @@ func (s *Server) handleAPISettingsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, http.StatusOK, "api_settings.html", s.newPageData(w, r, "API & Webhooks", "api", map[string]any{
-		"Keys":     keys,
-		"Webhooks": hooks,
+		"Keys":                 keys,
+		"Webhooks":             hooks,
+		"TransactionalEnabled": s.transactionalEnabled(),
 	}))
 }
 

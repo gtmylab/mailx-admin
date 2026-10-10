@@ -24,7 +24,9 @@ type serverSettings struct {
 
 func (s *Server) handleServerSettingsPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, 200, "server_settings.html", s.newPageData(w, r, "Server", "server", map[string]any{
-		"Settings": s.serverSettingsView(),
+		"Settings":  s.serverSettingsView(),
+		"Time":      timeStatusView(r.Context()),
+		"Timezones": commonTimezones,
 	}))
 }
 

@@ -1,0 +1,14 @@
+{{define "database_provision_result"}}
+{{if eq .Status "running"}}
+<div class="alert alert-warn" role="status"
+     hx-get="/system/database/provision/status" hx-trigger="load delay:2s" hx-target="this" hx-swap="outerHTML">
+  <strong>Installing PostgreSQL…</strong>
+  <p class="text-sm">Installing the server package and creating the mailx role and database. This can take a few minutes.</p>
+</div>
+{{else if eq .Status "error"}}
+<div class="alert alert-err" role="alert">
+  <strong>Provisioning failed.</strong>
+  <p class="text-sm mono">{{.Error}}</p>
+</div>
+{{end}}
+{{end}}

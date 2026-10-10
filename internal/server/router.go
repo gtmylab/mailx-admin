@@ -178,6 +178,9 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("POST /system/database/test", s.handleDatabaseTest)
 	protected.HandleFunc("POST /system/database/migrate", s.handleDatabaseMigrate)
 	protected.HandleFunc("GET /system/database/status", s.handleDatabaseStatus)
+	protected.HandleFunc("POST /system/database/provision", s.handleDatabaseProvision)
+	protected.HandleFunc("GET /system/database/provision/status", s.handleDatabaseProvisionStatus)
+	protected.HandleFunc("POST /system/database/service/restart", s.handleDatabaseServiceRestart)
 
 	// Mail import
 	protected.HandleFunc("GET /system/import", s.handleMailImportPage)
@@ -195,6 +198,8 @@ func (s *Server) buildRouter() http.Handler {
 	// Server configuration (hostname, resolver, webmail mail host)
 	protected.HandleFunc("GET /system/server", s.handleServerSettingsPage)
 	protected.HandleFunc("POST /system/server", s.handleServerSettingsSave)
+	protected.HandleFunc("POST /system/server/time", s.handleServerTimeSave)
+	protected.HandleFunc("POST /system/server/time/sync", s.handleServerTimeSync)
 
 	// Firewall rules (ufw/firewalld)
 	protected.HandleFunc("GET /system/firewall", s.handleFirewallPage)
@@ -251,6 +256,12 @@ func (s *Server) buildRouter() http.Handler {
 	api.HandleFunc("POST /api/v1/suppressions", s.handleAPISuppressionCreate)
 	api.HandleFunc("DELETE /api/v1/suppressions/{email}", s.handleAPISuppressionDelete)
 	api.HandleFunc("POST /api/v1/messages", s.handleAPIMessages)
+	api.HandleFunc("GET /api/v1/messages", s.handleAPIMessagesList)
+	api.HandleFunc("GET /api/v1/messages/{id}", s.handleAPIMessageGet)
+	api.HandleFunc("GET /api/v1/templates", s.handleAPITemplatesList)
+	api.HandleFunc("POST /api/v1/templates", s.handleAPITemplateCreate)
+	api.HandleFunc("GET /api/v1/templates/{name}", s.handleAPITemplateGet)
+	api.HandleFunc("DELETE /api/v1/templates/{name}", s.handleAPITemplateDelete)
 	mux.Handle("/api/v1/", s.requireAPIKey(s.requestTimeout(api)))
 
 	// Every protected request gets a deadline *and* a guaranteed answer (see

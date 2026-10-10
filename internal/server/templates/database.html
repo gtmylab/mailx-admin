@@ -18,6 +18,18 @@
 
 {{if eq .Data.DB.Driver "sqlite"}}
 <div class="card mt-4">
+  <div class="card-header"><h2>Install PostgreSQL automatically</h2></div>
+  <div class="card-body">
+    <p class="text-sm dim mb-3">Installs PostgreSQL locally, creates a dedicated <span class="mono">mailx</span> role (with a generated password) and database, then pre-fills the migration form below. The panel keeps running on SQLite until you migrate.</p>
+    <button class="btn btn-primary" hx-post="/system/database/provision" hx-target="#database-provision-result" hx-swap="innerHTML"
+            hx-confirm="Install and configure PostgreSQL? This can take a few minutes.">
+      Install &amp; configure PostgreSQL
+    </button>
+    <div id="database-provision-result" class="mt-3"></div>
+  </div>
+</div>
+
+<div class="card mt-4">
   <div class="card-header"><h2>Migrate to Postgres</h2></div>
   <div class="card-body">
     <p class="text-sm dim mb-4">The migration creates the schema on the target Postgres, copies every table (preserving ids and history), then switches the panel over and restarts. Keep the SQLite file as a fallback.</p>
@@ -26,30 +38,30 @@
       <div class="grid grid-cols-2 gap-4">
         <label class="field">
           <span class="field-label">Host</span>
-          <input class="input" type="text" name="host" value="127.0.0.1" placeholder="127.0.0.1">
+          <input class="input" type="text" name="host" value="{{if .Data.PG.Host}}{{.Data.PG.Host}}{{else}}127.0.0.1{{end}}" placeholder="127.0.0.1">
         </label>
         <label class="field">
           <span class="field-label">Port</span>
-          <input class="input" type="number" name="port" value="5432">
+          <input class="input" type="number" name="port" value="{{if .Data.PG.Port}}{{.Data.PG.Port}}{{else}}5432{{end}}">
         </label>
         <label class="field">
           <span class="field-label">User</span>
-          <input class="input" type="text" name="user" value="postgres">
+          <input class="input" type="text" name="user" value="{{if .Data.PG.User}}{{.Data.PG.User}}{{else}}postgres{{end}}">
         </label>
         <label class="field">
           <span class="field-label">Password</span>
-          <input class="input" type="password" name="password" autocomplete="new-password">
+          <input class="input" type="password" name="password" value="{{.Data.PG.Password}}" autocomplete="new-password">
         </label>
         <label class="field">
           <span class="field-label">Database</span>
-          <input class="input" type="text" name="dbname" placeholder="mailx">
+          <input class="input" type="text" name="dbname" value="{{if .Data.PG.DBName}}{{.Data.PG.DBName}}{{else}}mailx{{end}}" placeholder="mailx">
         </label>
         <label class="field">
           <span class="field-label">SSL mode</span>
           <select class="select" name="sslmode">
-            <option value="disable">disable</option>
-            <option value="prefer" selected>prefer</option>
-            <option value="require">require</option>
+            <option value="disable" {{if eq .Data.PG.SSLMode "disable"}}selected{{end}}>disable</option>
+            <option value="prefer" {{if or (eq .Data.PG.SSLMode "") (eq .Data.PG.SSLMode "prefer")}}selected{{end}}>prefer</option>
+            <option value="require" {{if eq .Data.PG.SSLMode "require"}}selected{{end}}>require</option>
           </select>
         </label>
       </div>
@@ -60,6 +72,21 @@
     </form>
     <div id="database-test-result"></div>
     <div id="database-migrate-result"></div>
+  </div>
+</div>
+{{else}}
+<div class="card mt-4">
+  <div class="card-header"><h2>PostgreSQL</h2></div>
+  <div class="card-body">
+    <div class="grid grid-cols-2 gap-4">
+      <div class="kv"><span class="kv-label">Service</span><span class="kv-value">{{if .Data.PGStatus.Active}}<span class="badge ok">active</span>{{else}}<span class="badge err">inactive</span>{{end}}</span></div>
+      <div class="kv"><span class="kv-label">Database size</span><span class="kv-value mono">{{.Data.PGStatus.DBSize}}</span></div>
+      <div class="kv"><span class="kv-label">Active connections</span><span class="kv-value mono">{{.Data.PGStatus.Connections}}</span></div>
+      <div class="kv"><span class="kv-label">Version</span><span class="kv-value mono text-xs">{{.Data.PGStatus.Version}}</span></div>
+    </div>
+    <div class="form-actions mt-3">
+      <button class="btn" hx-post="/system/database/service/restart" hx-confirm="Restart PostgreSQL?">Restart service</button>
+    </div>
   </div>
 </div>
 {{end}}

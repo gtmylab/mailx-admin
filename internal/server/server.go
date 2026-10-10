@@ -68,6 +68,12 @@ type Server struct {
 	dbMigrateTotal  int64
 	dbMigrateTables int
 
+	// dbProvisionMu guards the state of an in-flight Postgres install + provision
+	// (apt install can take minutes, so it runs in the background too).
+	dbProvisionMu    sync.Mutex
+	dbProvisionState string // "", "running", "done", "error"
+	dbProvisionErr   string
+
 	// importQueue runs background mail-import jobs, one at a time, and keeps
 	// their live status for the Mail import page. Jobs live in memory for the
 	// lifetime of the process.

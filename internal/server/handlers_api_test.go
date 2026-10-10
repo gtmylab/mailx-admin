@@ -91,13 +91,19 @@ func TestAPIStringListUnmarshal(t *testing.T) {
 }
 
 func TestBuildTransactionalMessage(t *testing.T) {
-	msg := buildTransactionalMessage(
+	msg, err := buildTransactionalMessage(
+		"<msg-id@example.com>",
 		"sender@example.com",
 		[]string{"a@example.com", "b@example.com"},
+		nil, nil, "",
 		"Hello",
 		"plain body",
 		"<b>html</b>",
+		nil, nil,
 	)
+	if err != nil {
+		t.Fatalf("buildTransactionalMessage: %v", err)
+	}
 	s := string(msg)
 
 	for _, want := range []string{
@@ -118,13 +124,19 @@ func TestBuildTransactionalMessage(t *testing.T) {
 }
 
 func TestBuildTransactionalMessageSanitizesHeaders(t *testing.T) {
-	msg := buildTransactionalMessage(
+	msg, err := buildTransactionalMessage(
+		"<msg-id@example.com>",
 		"from@example.com",
 		[]string{"a@example.com"},
+		nil, nil, "",
 		"Hi\r\nBcc: evil@example.com",
 		"body",
 		"",
+		nil, nil,
 	)
+	if err != nil {
+		t.Fatalf("buildTransactionalMessage: %v", err)
+	}
 	s := string(msg)
 
 	if strings.Contains(s, "\nBcc:") || strings.Contains(s, "\r\nBcc:") {

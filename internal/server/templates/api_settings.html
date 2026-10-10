@@ -6,6 +6,19 @@
   </div>
 </div>
 
+<div class="card mb-4">
+  <div class="card-header"><h2>Transactional email</h2></div>
+  <div class="card-body">
+    {{if .Data.TransactionalEnabled}}
+    <span class="badge ok">enabled</span>
+    <p class="text-sm dim mt-2">Send mail with <code class="mono">POST /api/v1/messages</code>, manage named templates via <code class="mono">/api/v1/templates</code>, and query history via <code class="mono">GET /api/v1/messages</code>.</p>
+    {{else}}
+    <span class="badge warn">disabled</span>
+    <p class="text-sm dim mt-2">Transactional email requires PostgreSQL — SQLite is single-writer and unsuitable for high-volume message logging. <a href="/system/database">Migrate to Postgres</a> to enable it.</p>
+    {{end}}
+  </div>
+</div>
+
 <div class="card">
   <div class="card-header"><h2>API keys</h2></div>
   <form class="form-row" hx-post="/settings/api/keys" hx-target="#key-reveal" hx-swap="innerHTML">

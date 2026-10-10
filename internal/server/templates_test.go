@@ -80,6 +80,7 @@ var fragmentTemplateNames = []string{
 	"update_result",
 	"database_test_result",
 	"database_migrate_result",
+	"database_provision_result",
 	"mail_import_jobs",
 	"mail_import_entry",
 	"mail_import_add_result",
@@ -95,6 +96,7 @@ var fragmentTemplateNames = []string{
 	"service_ports_result",
 	"cron_form",
 	"cron_log",
+	"time_result",
 }
 
 func newTestServer(t *testing.T, tmpl *templateSet) *Server {

@@ -1,0 +1,8 @@
+{{define "time_result"}}
+<div class="grid grid-cols-2 gap-4">
+  <div class="kv"><span class="kv-label">Current time</span><span class="kv-value mono">{{.View.Now}}</span></div>
+  <div class="kv"><span class="kv-label">Timezone</span><span class="kv-value mono">{{.View.Timezone}}</span></div>
+  <div class="kv"><span class="kv-label">NTP sync</span><span class="kv-value">{{if .View.NTPActive}}enabled{{else}}disabled{{end}}</span></div>
+  <div class="kv"><span class="kv-label">Clock synchronized</span><span class="kv-value">{{if .View.NTPSync}}yes{{else}}no{{end}}</span></div>
+</div>
+{{end}}
