@@ -79,6 +79,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	// Brute-force lockout: too many recent failures for this username.
 	if n, _ := s.store.CountRecentFailedLogins(ctx, username, time.Now().Add(-loginLockoutWindow)); n >= loginLockoutMax {
 		s.auditLogin(ctx, username, "error", "locked out")
+		go s.dispatchNotifications(context.Background(), "auth.lockout", map[string]string{"username": username, "ip": ip})
 		s.renderLogin(w, r, http.StatusTooManyRequests, "Too many failed attempts. Try again in a few minutes.", false)
 		return
 	}
@@ -113,6 +114,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	if err != nil || !ok {
 		_ = s.store.RecordLoginAttempt(ctx, username, ip, false)
 		s.auditLogin(ctx, username, "error", "bad password")
+		go s.dispatchNotifications(context.Background(), "auth.login_failed", map[string]string{"username": username, "ip": ip})
 		s.renderLogin(w, r, http.StatusUnauthorized, "Invalid credentials", false)
 		return
 	}
@@ -126,6 +128,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		if !totpSecret.Valid || !auth.VerifyTOTP(totpSecret.String, totp) {
 			_ = s.store.RecordLoginAttempt(ctx, username, ip, false)
 			s.auditLogin(ctx, username, "error", "bad totp")
+			go s.dispatchNotifications(context.Background(), "auth.login_failed", map[string]string{"username": username, "ip": ip})
 			s.renderLogin(w, r, http.StatusUnauthorized, "Invalid 2FA code", true)
 			return
 		}

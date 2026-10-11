@@ -56,6 +56,7 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("POST /account/session-ttl", s.handleAccountSessionTTL)
 	protected.HandleFunc("POST /account/notifications", s.handleAccountNotificationAdd)
 	protected.HandleFunc("POST /account/notifications/{id}/toggle", s.handleAccountNotificationToggle)
+	protected.HandleFunc("POST /account/notifications/{id}/test", s.handleAccountNotificationTest)
 	protected.HandleFunc("DELETE /account/notifications/{id}", s.handleAccountNotificationDelete)
 	protected.HandleFunc("DELETE /account/sessions/{id}", s.handleAccountSessionRevoke)
 	protected.HandleFunc("POST /account/sessions/revoke-others", s.handleAccountSessionsRevokeOthers)

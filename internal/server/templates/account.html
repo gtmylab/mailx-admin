@@ -90,6 +90,7 @@
             <td data-label="Status">{{if .Active}}<span class="badge ok">on</span>{{else}}<span class="badge dim">off</span>{{end}}</td>
             <td class="table-actions" data-label="">
               <div class="btn-group">
+                <button class="btn btn-sm" hx-post="/account/notifications/{{.ID}}/test">Test</button>
                 <button class="btn btn-sm" hx-post="/account/notifications/{{.ID}}/toggle">{{if .Active}}Disable{{else}}Enable{{end}}</button>
                 <button class="btn btn-sm btn-danger" hx-delete="/account/notifications/{{.ID}}" hx-confirm="Remove this notification?">Remove</button>
               </div>
@@ -111,9 +112,10 @@
         <option value="webhook">Webhook</option>
       </select>
       <input class="input" type="text" name="target" placeholder="Webhook URL / chat ID / email" required>
-      <input class="input" type="text" name="events" placeholder="auth.login_failed, blocklist.listed">
+      <input class="input" type="text" name="events" placeholder="auth.lockout, ssl.failed, backup.completed">
       <button type="submit" class="btn btn-primary">Add</button>
     </form>
+    <p class="field-hint mt-2">Events (comma-separated): auth.lockout, auth.login_failed, ssl.failed, ssl.renewed, backup.completed, backup.failed. Telegram target is <span class="mono">&lt;bot_token&gt;|&lt;chat_id&gt;</span>.</p>
   </div>
 </div>
 

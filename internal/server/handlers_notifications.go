@@ -117,6 +117,46 @@ func (s *Server) handleAccountNotificationDelete(w http.ResponseWriter, r *http.
 	w.WriteHeader(http.StatusOK)
 }
 
+// handleAccountNotificationTest sends a test message to one handle so an admin
+// can verify a provider is reachable before relying on it.
+func (s *Server) handleAccountNotificationTest(w http.ResponseWriter, r *http.Request) {
+	sess := auth.SessionFromContext(r.Context())
+	if sess == nil {
+		s.renderError(w, http.StatusUnauthorized, "Not signed in")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.renderFormError(w, "Invalid notification ID")
+		return
+	}
+	if !s.ownNotification(r, sess.AdminUserID, id) {
+		s.renderFormError(w, "Notification not found")
+		return
+	}
+
+	notes, _ := s.store.ListAdminNotifications(r.Context(), sess.AdminUserID)
+	var note *models.AdminNotification
+	for i := range notes {
+		if notes[i].ID == id {
+			note = &notes[i]
+			break
+		}
+	}
+	if note == nil {
+		s.renderFormError(w, "Notification not found")
+		return
+	}
+
+	if err := s.sendNotification(r.Context(), *note, "notification.test",
+		map[string]string{"message": "This is a test from mailx-admin"}); err != nil {
+		s.renderFormError(w, "Send failed: "+err.Error())
+		return
+	}
+	w.Header().Set("HX-Redirect", "/account?flash="+encodeFlash("Test sent to "+note.Provider))
+	w.WriteHeader(http.StatusOK)
+}
+
 func splitAndTrim(s string) []string {
 	parts := strings.Split(s, ",")
 	out := make([]string, 0, len(parts))

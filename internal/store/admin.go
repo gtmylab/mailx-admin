@@ -203,6 +203,29 @@ func (s *Store) ListAdminNotifications(ctx context.Context, adminUserID int64) (
 	return out, rows.Err()
 }
 
+// ListActiveAdminNotifications returns every enabled notification handle across
+// all admins, used by the dispatcher to fan out events.
+func (s *Store) ListActiveAdminNotifications(ctx context.Context) ([]models.AdminNotification, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, admin_user_id, provider, target, events, active
+		FROM admin_user_notifications WHERE active = 1 ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list active admin notifications: %w", err)
+	}
+	defer rows.Close()
+	var out []models.AdminNotification
+	for rows.Next() {
+		var n models.AdminNotification
+		var active int
+		if err := rows.Scan(&n.ID, &n.AdminUserID, &n.Provider, &n.Target, &n.Events, &active); err != nil {
+			return nil, fmt.Errorf("scan admin notification: %w", err)
+		}
+		n.Active = active == 1
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) InsertAdminNotification(ctx context.Context, n models.AdminNotification) (int64, error) {
 	active := 0
 	if n.Active {
