@@ -119,6 +119,9 @@ func cmdServe() *cobra.Command {
 			jm.SetNotify(srv.DispatchNotifications)
 			jm.Start(ctx)
 
+			// Service health monitor: poll systemd and notify on up/down transitions.
+			go srv.StartServiceMonitor(ctx)
+
 			// One-time backfill of the envelope sender onto delivery events so the
 			// per-account deliverability view no longer self-joins mail_events. Runs
 			// in the background in bounded chunks; it must not block startup.
