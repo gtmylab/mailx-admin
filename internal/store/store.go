@@ -16,7 +16,16 @@ type Store struct {
 
 func New(d *db.DB) *Store { return &Store{db: d} }
 
-func (s *Store) listDomains(ctx context.Context, tx *sql.Tx) ([]models.Domain, error) {
+// queryer is the read surface shared by *sql.Tx (write/preview transactions)
+// and *sql.Conn (a dedicated connection running a deferred read transaction).
+// Snapshot runs on a *sql.Conn with a bare BEGIN so it does NOT take the SQLite
+// write lock; every other read inside a real transaction passes a *sql.Tx.
+type queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func (s *Store) listDomains(ctx context.Context, tx queryer) ([]models.Domain, error) {
 	rows, err := tx.QueryContext(ctx, `
         SELECT id, name, is_primary, dkim_selector,
                COALESCE(dkim_private_key_path, ''), COALESCE(dkim_public_record, ''),
@@ -93,7 +102,7 @@ func scanUsers(rows *sql.Rows) ([]models.User, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) listUsers(ctx context.Context, tx *sql.Tx) ([]models.User, error) {
+func (s *Store) listUsers(ctx context.Context, tx queryer) ([]models.User, error) {
 	rows, err := tx.QueryContext(ctx, `
         SELECT `+userColumns+`
         FROM users u
@@ -108,7 +117,7 @@ func (s *Store) listUsers(ctx context.Context, tx *sql.Tx) ([]models.User, error
 	return scanUsers(rows)
 }
 
-func (s *Store) listAliases(ctx context.Context, tx *sql.Tx) ([]models.Alias, error) {
+func (s *Store) listAliases(ctx context.Context, tx queryer) ([]models.Alias, error) {
 	rows, err := tx.QueryContext(ctx, `
         SELECT a.id, a.domain_id, a.source, a.destination, a.created_at, d.name
         FROM aliases a
@@ -135,7 +144,7 @@ func (s *Store) listAliases(ctx context.Context, tx *sql.Tx) ([]models.Alias, er
 	return out, rows.Err()
 }
 
-func (s *Store) listPorts(ctx context.Context, tx *sql.Tx) ([]models.PortListener, error) {
+func (s *Store) listPorts(ctx context.Context, tx queryer) ([]models.PortListener, error) {
 	rows, err := tx.QueryContext(ctx, `
         SELECT id, port, service, tls_mode, require_sasl, COALESCE(description,''), enabled
         FROM port_listeners ORDER BY port
@@ -159,7 +168,7 @@ func (s *Store) listPorts(ctx context.Context, tx *sql.Tx) ([]models.PortListene
 	return out, rows.Err()
 }
 
-func (s *Store) listSieveRules(ctx context.Context, tx *sql.Tx) (map[int64][]models.SieveRule, error) {
+func (s *Store) listSieveRules(ctx context.Context, tx queryer) (map[int64][]models.SieveRule, error) {
 	rows, err := tx.QueryContext(ctx, `
         SELECT id, user_id, rule_type, enabled, position, config, created_at, updated_at
         FROM sieve_rules ORDER BY user_id, position
@@ -300,12 +309,10 @@ func boolInt(b bool) int {
 // simply was not there, which is indistinguishable from "my user disappeared
 // again". The filter is opt-in so the default view stays short.
 func (s *Store) Users(ctx context.Context, includeInactive bool) ([]models.User, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, fmt.Errorf("begin users tx: %w", err)
-	}
-	defer tx.Rollback()
-
+	// A single SELECT needs no transaction: one statement is already atomic and,
+	// in WAL mode, never contends for the write lock. The old BeginTx(ReadOnly)
+	// path silently took the write lock (mattn ignores ReadOnly), the same
+	// contention bug Snapshot had.
 	query := `
         SELECT ` + userColumns + `
         FROM users u
@@ -316,7 +323,7 @@ func (s *Store) Users(ctx context.Context, includeInactive bool) ([]models.User,
 	}
 	query += ` ORDER BY d.name, u.username`
 
-	rows, err := tx.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -412,16 +419,31 @@ func stringSet(ctx context.Context, tx *sql.Tx, query string) (map[string]bool, 
 }
 
 // Snapshot loads the full state the reconciler needs, in one consistent read.
+//
+// It runs on a dedicated connection with a DEFERRED transaction (a bare BEGIN),
+// not BeginTx(ReadOnly). mattn/go-sqlite3 v1.14.x does not implement
+// driver.ConnBeginTx, so database/sql falls back to Begin(), which honors the
+// DSN's _txlock=immediate and would take the write lock for what is a read-only
+// snapshot. A read-only snapshot holding the write lock serializes against the
+// log ingester and every request-scoped write — the source of "database is
+// locked" on login/logout under load. The deferred BEGIN still yields one
+// consistent WAL snapshot, so the reconciler's semantics are unchanged.
 func (s *Store) Snapshot(ctx context.Context) (*models.Snapshot, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	conn, err := s.db.Conn(ctx)
 	if err != nil {
+		return nil, fmt.Errorf("snapshot conn: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "BEGIN"); err != nil {
 		return nil, fmt.Errorf("begin snapshot tx: %w", err)
 	}
-	defer tx.Rollback()
-	return s.SnapshotTx(ctx, tx)
+	defer conn.ExecContext(context.Background(), "ROLLBACK")
+
+	return s.SnapshotTx(ctx, conn)
 }
 
-func (s *Store) SnapshotTx(ctx context.Context, tx *sql.Tx) (*models.Snapshot, error) {
+func (s *Store) SnapshotTx(ctx context.Context, tx queryer) (*models.Snapshot, error) {
 	domains, err := s.listDomains(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -474,7 +496,7 @@ func (s *Store) SnapshotTx(ctx context.Context, tx *sql.Tx) (*models.Snapshot, e
 
 // settingTx reads one settings value inside a transaction, returning "" when the
 // key is absent.
-func (s *Store) settingTx(ctx context.Context, tx *sql.Tx, key string) (string, error) {
+func (s *Store) settingTx(ctx context.Context, tx queryer, key string) (string, error) {
 	var v string
 	err := tx.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
 	if err == sql.ErrNoRows {
@@ -485,7 +507,7 @@ func (s *Store) settingTx(ctx context.Context, tx *sql.Tx, key string) (string, 
 
 // loadRelayTx reads the outbound smarthost settings. A disabled relay (or one
 // with no host) returns an empty config, which means "deliver directly".
-func (s *Store) loadRelayTx(ctx context.Context, tx *sql.Tx) (*models.RelayConfig, error) {
+func (s *Store) loadRelayTx(ctx context.Context, tx queryer) (*models.RelayConfig, error) {
 	enabled, err := s.settingTx(ctx, tx, "relay_enabled")
 	if err != nil {
 		return nil, err

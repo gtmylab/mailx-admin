@@ -413,7 +413,7 @@ type DeliverabilityMetric struct {
 // internal/logs, so this is the single source of truth for the dashboard.
 // listOutboundIPsTx loads the outbound registry (with its rules) inside a
 // transaction, for the reconciler's snapshot.
-func (s *Store) listOutboundIPsTx(ctx context.Context, tx *sql.Tx) ([]models.OutboundIP, error) {
+func (s *Store) listOutboundIPsTx(ctx context.Context, tx queryer) ([]models.OutboundIP, error) {
 	rows, err := tx.QueryContext(ctx, `
         SELECT id, ip, mode, priority, active, ptr_ok, ptr_record, notes, created_at, updated_at
         FROM outbound_ips ORDER BY priority DESC, ip ASC`)
@@ -466,7 +466,7 @@ func (s *Store) listOutboundIPsTx(ctx context.Context, tx *sql.Tx) ([]models.Out
 }
 
 // listSuppressionsTx loads the suppression list inside a transaction.
-func (s *Store) listSuppressionsTx(ctx context.Context, tx *sql.Tx) ([]models.Suppression, error) {
+func (s *Store) listSuppressionsTx(ctx context.Context, tx queryer) ([]models.Suppression, error) {
 	rows, err := tx.QueryContext(ctx, `
         SELECT id, email, reason, source, notes, created_at, expires_at, direction, match_type
         FROM suppressions ORDER BY direction ASC, email ASC`)
