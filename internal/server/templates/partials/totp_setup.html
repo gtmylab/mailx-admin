@@ -1,11 +1,26 @@
 {{define "totp_setup"}}
-<div class="form mt-2">
-  <p class="text-sm dim mb-2">Scan the code with your authenticator app, or enter this secret manually:</p>
-  <div class="mono text-xs break-all mb-2">{{.Secret}}</div>
-  <form class="form-row" hx-post="/account/totp/confirm" hx-target="#account-result" hx-swap="innerHTML">
-    <input class="input" type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
-           placeholder="6-digit code" autocomplete="one-time-code" required>
-    <button type="submit" class="btn btn-primary">Verify &amp; enable</button>
+<div class="mt-3">
+  <div class="mb-3" style="background:#fff; padding:12px; border-radius:10px; display:inline-block; line-height:0;">
+    <img src="{{.QR}}" width="200" height="200" alt="Two-factor authentication QR code">
+  </div>
+  <div class="field mb-3">
+    <span class="field-label">Secret key</span>
+    <div class="input-group">
+      <input class="input mono text-xs" type="text" value="{{.Secret}}" readonly>
+      <button type="button" class="btn" data-copy-value="{{.Secret}}">Copy</button>
+    </div>
+    <span class="field-hint">Scan the QR code, or enter this key manually in your authenticator app.</span>
+  </div>
+  <form class="form" hx-post="/account/totp/confirm" hx-target="#account-result" hx-swap="innerHTML">
+    <label class="field">
+      <span class="field-label">6-digit code</span>
+      <input class="input" type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+             placeholder="123456" autocomplete="one-time-code" required>
+    </label>
+    <div class="form-actions">
+      <button type="button" class="btn" onclick="document.getElementById('totp-setup').innerHTML=''">Cancel</button>
+      <button type="submit" class="btn btn-primary">Verify &amp; enable</button>
+    </div>
   </form>
 </div>
 {{end}}

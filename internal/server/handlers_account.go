@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"net/http"
 	"strconv"
 	"strings"
@@ -101,7 +102,7 @@ func (s *Server) handleAccountTOTPSetup(w http.ResponseWriter, r *http.Request) 
 		s.renderFormError(w, err.Error())
 		return
 	}
-	uri, err := auth.TOTPProvisioningURI(sess.Username, "mailx-admin", secret)
+	qr, err := auth.TOTPQRPNG(sess.Username, "mailx-admin", secret, 200)
 	if err != nil {
 		s.renderFormError(w, err.Error())
 		return
@@ -111,7 +112,10 @@ func (s *Server) handleAccountTOTPSetup(w http.ResponseWriter, r *http.Request) 
 		s.renderFormError(w, err.Error())
 		return
 	}
-	s.renderPartial(w, "totp_setup", map[string]any{"URI": uri, "Secret": secret})
+	s.renderPartial(w, "totp_setup", map[string]any{
+		"QR":     "data:image/png;base64," + base64.StdEncoding.EncodeToString(qr),
+		"Secret": secret,
+	})
 }
 
 // handleAccountTOTPConfirm verifies the 6-digit code and enables 2FA.

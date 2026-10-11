@@ -38,12 +38,26 @@
   <div class="card">
     <div class="card-header"><h2>Two-factor authentication</h2></div>
     <div class="card-body">
-      <p class="text-sm dim mb-3">{{if .Data.Account.TotpEnabled}}Two-factor authentication is <strong>on</strong> for this account.{{else}}Two-factor authentication is <strong>off</strong>.{{end}}</p>
+      <div class="form-row mb-3">
+        {{if .Data.Account.TotpEnabled}}
+        <span class="badge ok">Enabled</span>
+        <span class="text-sm dim">Two-factor authentication protects this account.</span>
+        {{else}}
+        <span class="badge warn">Not enabled</span>
+        <span class="text-sm dim">Add an extra layer of security to this account.</span>
+        {{end}}
+      </div>
+
       <div id="totp-setup"></div>
+
       {{if .Data.Account.TotpEnabled}}
-      <button class="btn btn-danger" hx-post="/account/totp/disable" hx-confirm="Disable two-factor authentication?">Disable 2FA</button>
+      <div class="form-actions">
+        <button class="btn btn-danger" hx-post="/account/totp/disable" hx-confirm="Disable two-factor authentication?">Disable two-factor authentication</button>
+      </div>
       {{else}}
-      <button class="btn btn-primary" hx-post="/account/totp/setup" hx-target="#totp-setup" hx-swap="innerHTML">Enable 2FA</button>
+      <div class="form-actions">
+        <button class="btn btn-primary" hx-post="/account/totp/setup" hx-target="#totp-setup" hx-swap="innerHTML">Enable two-factor authentication</button>
+      </div>
       {{end}}
     </div>
   </div>

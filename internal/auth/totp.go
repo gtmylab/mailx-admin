@@ -1,9 +1,11 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base32"
 	"fmt"
+	"image/png"
 	"strings"
 
 	"github.com/pquerna/otp"
@@ -35,6 +37,31 @@ func TOTPProvisioningURI(accountName, issuer, secret string) (string, error) {
 		return "", fmt.Errorf("generate totp key: %w", err)
 	}
 	return key.URL(), nil
+}
+
+// TOTPQRPNG renders the provisioning URI for accountName/issuer/secret as a
+// square PNG QR code (size×size pixels), ready to embed as a data URI.
+func TOTPQRPNG(accountName, issuer, secret string, size int) ([]byte, error) {
+	key, err := totp.Generate(totp.GenerateOpts{
+		Issuer:      issuer,
+		AccountName: accountName,
+		Secret:      []byte(secret),
+		Period:      30,
+		Digits:      otp.DigitsSix,
+		Algorithm:   otp.AlgorithmSHA1,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("generate totp key: %w", err)
+	}
+	img, err := key.Image(size, size)
+	if err != nil {
+		return nil, fmt.Errorf("render totp qr: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("encode totp qr: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 // VerifyTOTP checks a 6-digit code with a ±1 window (30s skew tolerance).
