@@ -221,3 +221,45 @@ func (s *Store) DeleteAdminNotification(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM admin_user_notifications WHERE id = ?`, id)
 	return err
 }
+
+func (s *Store) SetAdminNotificationActive(ctx context.Context, id int64, active bool) error {
+	a := 0
+	if active {
+		a = 1
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE admin_user_notifications SET active = ? WHERE id = ?`, a, id)
+	return err
+}
+
+func (s *Store) GetAdminGroup(ctx context.Context, id int64) (*models.AdminGroup, error) {
+	var g models.AdminGroup
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, role, permissions FROM admin_groups WHERE id = ?`, id).
+		Scan(&g.ID, &g.Name, &g.Role, &g.Permissions)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get admin group: %w", err)
+	}
+	return &g, nil
+}
+
+func (s *Store) UpdateAdminGroup(ctx context.Context, g models.AdminGroup) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE admin_groups SET name = ?, role = ?, permissions = ? WHERE id = ?`,
+		g.Name, g.Role, g.Permissions, g.ID)
+	if err != nil {
+		return fmt.Errorf("update admin group: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) DeleteAdminGroup(ctx context.Context, id int64) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE admin_users SET group_id = NULL WHERE group_id = ?`, id); err != nil {
+		return fmt.Errorf("clear group members: %w", err)
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM admin_groups WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete admin group: %w", err)
+	}
+	return nil
+}

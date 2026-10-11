@@ -1,0 +1,38 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Sessions</h1>
+    <p class="page-sub">Active panel sign-ins across all admins.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h2>Active sessions <span class="badge">{{len .Data.Sessions}}</span></h2></div>
+  {{if .Data.Sessions}}
+  <div class="table-wrap">
+    <table class="table table-stack">
+      <thead><tr><th>Admin</th><th>Role</th><th>Device</th><th>IP</th><th>Signed in</th><th>Expires</th><th class="table-actions">Actions</th></tr></thead>
+      <tbody>
+        {{range .Data.Sessions}}
+        <tr>
+          <td data-label="Admin" class="mono">{{.Username}}</td>
+          <td data-label="Role"><span class="badge brand">{{.Role}}</span></td>
+          <td data-label="Device" class="mono text-xs">{{if .UserAgent}}{{.UserAgent}}{{else}}—{{end}}</td>
+          <td data-label="IP" class="mono text-xs">{{.RemoteIP}}</td>
+          <td data-label="Signed in">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+          <td data-label="Expires">{{.ExpiresAt.Format "2006-01-02 15:04"}}</td>
+          <td class="table-actions" data-label="">
+            <button class="btn btn-sm btn-danger" hx-delete="/system/sessions/{{.ID}}" hx-target="#form-error" hx-swap="innerHTML"
+                    hx-confirm="Revoke this session?">Revoke</button>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="empty"><span class="empty-title">No active sessions</span></div>
+  {{end}}
+</div>
+<div id="form-error" class="form-error-slot"></div>
+{{end}}

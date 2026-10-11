@@ -75,6 +75,78 @@
 </div>
 
 <div class="card mt-4">
+  <div class="card-header"><h2>Notifications</h2></div>
+  <div class="card-body">
+    {{if .Data.Account.Notifications}}
+    <div class="table-wrap mb-3">
+      <table class="table table-stack">
+        <thead><tr><th>Provider</th><th>Target</th><th>Events</th><th>Status</th><th class="table-actions">Actions</th></tr></thead>
+        <tbody>
+          {{range .Data.Account.Notifications}}
+          <tr>
+            <td data-label="Provider"><span class="badge">{{.Provider}}</span></td>
+            <td data-label="Target" class="mono text-xs">{{.Target}}</td>
+            <td data-label="Events" class="mono text-xs">{{.Events}}</td>
+            <td data-label="Status">{{if .Active}}<span class="badge ok">on</span>{{else}}<span class="badge dim">off</span>{{end}}</td>
+            <td class="table-actions" data-label="">
+              <div class="btn-group">
+                <button class="btn btn-sm" hx-post="/account/notifications/{{.ID}}/toggle">{{if .Active}}Disable{{else}}Enable{{end}}</button>
+                <button class="btn btn-sm btn-danger" hx-delete="/account/notifications/{{.ID}}" hx-confirm="Remove this notification?">Remove</button>
+              </div>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <p class="text-sm dim mb-3">No notification channels configured.</p>
+    {{end}}
+    <form class="form-row" hx-post="/account/notifications" hx-target="#account-result" hx-swap="innerHTML">
+      <select class="select" name="provider">
+        <option value="slack">Slack</option>
+        <option value="telegram">Telegram</option>
+        <option value="discord">Discord</option>
+        <option value="email">Email</option>
+        <option value="webhook">Webhook</option>
+      </select>
+      <input class="input" type="text" name="target" placeholder="Webhook URL / chat ID / email" required>
+      <input class="input" type="text" name="events" placeholder="auth.login_failed, blocklist.listed">
+      <button type="submit" class="btn btn-primary">Add</button>
+    </form>
+  </div>
+</div>
+
+<div class="card mt-4">
+  <div class="card-header"><h2>Sessions</h2></div>
+  <div class="card-body">
+    <div class="table-wrap mb-3">
+      <table class="table table-stack">
+        <thead><tr><th>Device</th><th>IP</th><th>Signed in</th><th>Expires</th><th class="table-actions">Actions</th></tr></thead>
+        <tbody>
+          {{range .Data.Account.Sessions}}
+          <tr>
+            <td data-label="Device" class="mono text-xs">{{if .UserAgent}}{{.UserAgent}}{{else}}—{{end}}</td>
+            <td data-label="IP" class="mono text-xs">{{.RemoteIP}}</td>
+            <td data-label="Signed in">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+            <td data-label="Expires">{{.ExpiresAt.Format "2006-01-02 15:04"}}</td>
+            <td class="table-actions" data-label="">
+              {{if eq .ID $.Data.Account.CurrentSessionID}}
+              <span class="badge ok">this device</span>
+              {{else}}
+              <button class="btn btn-sm btn-danger" hx-delete="/account/sessions/{{.ID}}" hx-confirm="Revoke this session?">Revoke</button>
+              {{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <button class="btn" hx-post="/account/sessions/revoke-others" hx-confirm="Sign out everywhere else?">Sign out everywhere else</button>
+  </div>
+</div>
+
+<div class="card mt-4">
   <div class="card-header"><h2>Change password</h2></div>
   <div class="card-body">
     <form class="form" hx-post="/account/password" hx-target="#account-result" hx-swap="innerHTML">

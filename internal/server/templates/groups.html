@@ -1,0 +1,41 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Groups</h1>
+    <p class="page-sub">Role and permission bundles for panel operators.</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-primary" hx-get="/system/groups/new" hx-target="#modal-host" hx-swap="innerHTML">Add group</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h2>Groups <span class="badge">{{len .Data.Groups}}</span></h2></div>
+  {{if .Data.Groups}}
+  <div class="table-wrap">
+    <table class="table table-stack">
+      <thead><tr><th>Name</th><th>Role</th><th>Permissions</th><th class="table-actions">Actions</th></tr></thead>
+      <tbody>
+        {{range .Data.Groups}}
+        <tr>
+          <td data-label="Name" class="mono">{{.Name}}</td>
+          <td data-label="Role"><span class="badge brand">{{.Role}}</span></td>
+          <td data-label="Permissions" class="mono text-xs">{{.Permissions}}</td>
+          <td class="table-actions" data-label="">
+            <div class="btn-group">
+              <button class="btn btn-sm" hx-get="/system/groups/{{.ID}}/edit" hx-target="#modal-host" hx-swap="innerHTML">Edit</button>
+              <button class="btn btn-sm btn-danger" hx-delete="/system/groups/{{.ID}}" hx-target="#form-error" hx-swap="innerHTML"
+                      hx-confirm="Delete group {{.Name}}? Members keep their role and simply lose the group.">Delete</button>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="empty"><span class="empty-title">No groups</span></div>
+  {{end}}
+</div>
+<div id="form-error" class="form-error-slot"></div>
+{{end}}

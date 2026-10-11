@@ -15,6 +15,9 @@ var adminRoles = []string{"superadmin", "admin", "operator", "readonly"}
 var adminAccountTypes = []string{"panel", "system", "both"}
 
 func (s *Server) handleAdminsPage(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePermission(w, r, "admin.manage") {
+		return
+	}
 	admins, err := s.store.ListAdminUsers(r.Context())
 	if err != nil {
 		s.renderError(w, 500, "Failed to load admin users")
@@ -28,10 +31,16 @@ func (s *Server) handleAdminsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminNew(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePermission(w, r, "admin.manage") {
+		return
+	}
 	s.renderAdminForm(w, r, models.AdminUser{Active: true, Role: "operator", AccountType: "panel"})
 }
 
 func (s *Server) handleAdminEdit(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePermission(w, r, "admin.manage") {
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.renderError(w, 400, "Invalid admin ID")
@@ -56,6 +65,9 @@ func (s *Server) renderAdminForm(w http.ResponseWriter, r *http.Request, a model
 }
 
 func (s *Server) handleAdminSave(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePermission(w, r, "admin.manage") {
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		s.renderFormError(w, "Invalid form")
 		return
@@ -141,6 +153,9 @@ func containsStr(list []string, v string) bool {
 }
 
 func (s *Server) handleAdminToggle(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePermission(w, r, "admin.manage") {
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.renderError(w, 400, "Invalid admin ID")
@@ -164,6 +179,9 @@ func (s *Server) handleAdminToggle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePermission(w, r, "admin.manage") {
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.renderError(w, 400, "Invalid admin ID")
@@ -187,6 +205,9 @@ func (s *Server) handleAdminDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminResetPasswordForm(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePermission(w, r, "admin.manage") {
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.renderError(w, 400, "Invalid admin ID")
@@ -196,6 +217,9 @@ func (s *Server) handleAdminResetPasswordForm(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) handleAdminResetPassword(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePermission(w, r, "admin.manage") {
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.renderError(w, 400, "Invalid admin ID")

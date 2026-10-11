@@ -12,6 +12,14 @@ import (
 	"github.com/gtmylab/mailx-admin/internal/auth"
 )
 
+const (
+	// loginLockoutMax is the number of failed attempts before a username is
+	// temporarily locked out.
+	loginLockoutMax = 5
+	// loginLockoutWindow is the period over which failures are counted.
+	loginLockoutWindow = 15 * time.Minute
+)
+
 func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	if auth.SessionFromContext(r.Context()) != nil {
 		http.Redirect(w, r, "/", http.StatusFound)
@@ -66,6 +74,14 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	ip := clientIP(r)
+
+	// Brute-force lockout: too many recent failures for this username.
+	if n, _ := s.store.CountRecentFailedLogins(ctx, username, time.Now().Add(-loginLockoutWindow)); n >= loginLockoutMax {
+		s.auditLogin(ctx, username, "error", "locked out")
+		s.renderLogin(w, r, http.StatusTooManyRequests, "Too many failed attempts. Try again in a few minutes.", false)
+		return
+	}
 
 	var (
 		id          int64
@@ -82,6 +98,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
     `, username).Scan(&id, &hash, &totpSecret, &totpEnabled, &active, &ttlMinutes)
 
 	if err == sql.ErrNoRows || active != 1 {
+		_ = s.store.RecordLoginAttempt(ctx, username, ip, false)
 		s.auditLogin(ctx, username, "error", "unknown user")
 		s.renderLogin(w, r, http.StatusUnauthorized, "Invalid credentials", false)
 		return
@@ -94,6 +111,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 
 	ok, err := auth.VerifyPassword(password, hash)
 	if err != nil || !ok {
+		_ = s.store.RecordLoginAttempt(ctx, username, ip, false)
 		s.auditLogin(ctx, username, "error", "bad password")
 		s.renderLogin(w, r, http.StatusUnauthorized, "Invalid credentials", false)
 		return
@@ -106,6 +124,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !totpSecret.Valid || !auth.VerifyTOTP(totpSecret.String, totp) {
+			_ = s.store.RecordLoginAttempt(ctx, username, ip, false)
 			s.auditLogin(ctx, username, "error", "bad totp")
 			s.renderLogin(w, r, http.StatusUnauthorized, "Invalid 2FA code", true)
 			return
@@ -113,7 +132,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create session (per-user TTL, then global setting, then the 24h default).
-	sess, err := s.sessions.CreateWithTTL(ctx, id, s.sessionTTL(ctx, ttlMinutes), r.UserAgent(), clientIP(r))
+	sess, err := s.sessions.CreateWithTTL(ctx, id, s.sessionTTL(ctx, ttlMinutes), r.UserAgent(), ip)
 	if err != nil {
 		s.logger.Error("create session", "err", err)
 		s.renderLogin(w, r, http.StatusInternalServerError, "Internal error", false)
@@ -123,6 +142,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	// Update last login
 	_, _ = s.db.ExecContext(ctx, `UPDATE admin_users SET last_login = ? WHERE id = ?`, time.Now(), id)
 
+	_ = s.store.RecordLoginAttempt(ctx, username, ip, true)
 	s.auditLogin(ctx, username, "ok", "")
 
 	http.SetCookie(w, &http.Cookie{

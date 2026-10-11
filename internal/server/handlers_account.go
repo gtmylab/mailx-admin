@@ -7,16 +7,20 @@ import (
 
 	"github.com/gtmylab/mailx-admin/internal/audit"
 	"github.com/gtmylab/mailx-admin/internal/auth"
+	"github.com/gtmylab/mailx-admin/internal/models"
 )
 
 // accountView is the model for the signed-in admin's own Account page.
 type accountView struct {
-	Username    string
-	Role        string
-	DisplayName string
-	Email       string
-	TotpEnabled bool
-	SessionTTL  int // global session_ttl_minutes (0 = default 24h)
+	Username         string
+	Role             string
+	DisplayName      string
+	Email            string
+	TotpEnabled      bool
+	SessionTTL       int // global session_ttl_minutes (0 = default 24h)
+	Notifications    []models.AdminNotification
+	Sessions         []auth.Session
+	CurrentSessionID string
 }
 
 func (s *Server) handleAccountPage(w http.ResponseWriter, r *http.Request) {
@@ -36,13 +40,19 @@ func (s *Server) handleAccountPage(w http.ResponseWriter, r *http.Request) {
 	_ = s.db.QueryRowContext(r.Context(), `SELECT value FROM settings WHERE key = 'session_ttl_minutes'`).Scan(&ttlStr)
 	ttl, _ := strconv.Atoi(strings.TrimSpace(ttlStr))
 
+	notifications, _ := s.store.ListAdminNotifications(r.Context(), sess.AdminUserID)
+	sessions, _ := s.sessions.List(r.Context(), sess.AdminUserID)
+
 	v := accountView{
-		Username:    sess.Username,
-		Role:        sess.Role,
-		DisplayName: a.DisplayName,
-		Email:       a.Email,
-		TotpEnabled: a.TotpEnabled,
-		SessionTTL:  ttl,
+		Username:         sess.Username,
+		Role:             sess.Role,
+		DisplayName:      a.DisplayName,
+		Email:            a.Email,
+		TotpEnabled:      a.TotpEnabled,
+		SessionTTL:       ttl,
+		Notifications:    notifications,
+		Sessions:         sessions,
+		CurrentSessionID: s.currentSessionID(r),
 	}
 	s.render(w, 200, "account.html", s.newPageData(w, r, "Account", "account", map[string]any{
 		"Account": v,
@@ -159,8 +169,8 @@ func (s *Server) handleAccountSessionTTL(w http.ResponseWriter, r *http.Request)
 		s.renderError(w, http.StatusUnauthorized, "Not signed in")
 		return
 	}
-	if sess.Role != "admin" && sess.Role != "superadmin" {
-		s.renderFormError(w, "Admin role required to change the session timeout")
+	if !s.hasPermission(r.Context(), sess, "settings.write") {
+		s.renderFormError(w, "You do not have permission to change the session timeout")
 		return
 	}
 	if err := r.ParseForm(); err != nil {

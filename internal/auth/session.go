@@ -120,3 +120,49 @@ func (s *SessionStore) CleanupExpired(ctx context.Context) (int64, error) {
 	}
 	return res.RowsAffected()
 }
+
+// List returns active (unexpired) sessions, optionally restricted to one admin.
+// Pass adminUserID == 0 for every admin.
+func (s *SessionStore) List(ctx context.Context, adminUserID int64) ([]Session, error) {
+	query := `
+		SELECT s.id, s.admin_user_id, a.username, a.role, s.expires_at, s.created_at, s.user_agent, s.remote_ip
+		FROM sessions s
+		JOIN admin_users a ON a.id = s.admin_user_id
+		WHERE s.expires_at > ?`
+	args := []any{time.Now()}
+	if adminUserID > 0 {
+		query += ` AND s.admin_user_id = ?`
+		args = append(args, adminUserID)
+	}
+	query += ` ORDER BY s.created_at DESC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Session
+	for rows.Next() {
+		var sess Session
+		var ua, ip sql.NullString
+		if err := rows.Scan(&sess.ID, &sess.AdminUserID, &sess.Username, &sess.Role,
+			&sess.ExpiresAt, &sess.CreatedAt, &ua, &ip); err != nil {
+			return nil, fmt.Errorf("scan session: %w", err)
+		}
+		sess.UserAgent = ua.String
+		sess.RemoteIP = ip.String
+		out = append(out, sess)
+	}
+	return out, rows.Err()
+}
+
+// DeleteForUser revokes every session for an admin except the one given (so a
+// user can "sign out everywhere else" without dropping their current session).
+func (s *SessionStore) DeleteForUser(ctx context.Context, adminUserID int64, exceptID string) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE admin_user_id = ? AND id <> ?`, adminUserID, exceptID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}

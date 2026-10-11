@@ -52,6 +52,8 @@ var pageTemplateNames = []string{
 	"cron.html",
 	"cron_form.html",
 	"admins.html",
+	"groups.html",
+	"sessions.html",
 }
 
 // fragmentTemplateNames are the HTMX fragments referenced by handlers via
@@ -102,6 +104,7 @@ var fragmentTemplateNames = []string{
 	"admin_form",
 	"admin_reset_password",
 	"totp_setup",
+	"group_form",
 }
 
 func newTestServer(t *testing.T, tmpl *templateSet) *Server {

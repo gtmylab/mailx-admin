@@ -54,6 +54,11 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("POST /account/totp/confirm", s.handleAccountTOTPConfirm)
 	protected.HandleFunc("POST /account/totp/disable", s.handleAccountTOTPDisable)
 	protected.HandleFunc("POST /account/session-ttl", s.handleAccountSessionTTL)
+	protected.HandleFunc("POST /account/notifications", s.handleAccountNotificationAdd)
+	protected.HandleFunc("POST /account/notifications/{id}/toggle", s.handleAccountNotificationToggle)
+	protected.HandleFunc("DELETE /account/notifications/{id}", s.handleAccountNotificationDelete)
+	protected.HandleFunc("DELETE /account/sessions/{id}", s.handleAccountSessionRevoke)
+	protected.HandleFunc("POST /account/sessions/revoke-others", s.handleAccountSessionsRevokeOthers)
 
 	// Users
 	protected.HandleFunc("GET /users", s.handleUsersList)
@@ -215,6 +220,17 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("DELETE /system/admins/{id}", s.handleAdminDelete)
 	protected.HandleFunc("GET /system/admins/{id}/reset-password", s.handleAdminResetPasswordForm)
 	protected.HandleFunc("POST /system/admins/{id}/reset-password", s.handleAdminResetPassword)
+
+	// Groups (role/permission bundles)
+	protected.HandleFunc("GET /system/groups", s.handleGroupsPage)
+	protected.HandleFunc("GET /system/groups/new", s.handleGroupNew)
+	protected.HandleFunc("GET /system/groups/{id}/edit", s.handleGroupEdit)
+	protected.HandleFunc("POST /system/groups", s.handleGroupSave)
+	protected.HandleFunc("DELETE /system/groups/{id}", s.handleGroupDelete)
+
+	// Sessions (active panel sign-ins)
+	protected.HandleFunc("GET /system/sessions", s.handleSessionsPage)
+	protected.HandleFunc("DELETE /system/sessions/{id}", s.handleSessionRevoke)
 
 	// Firewall rules (ufw/firewalld)
 	protected.HandleFunc("GET /system/firewall", s.handleFirewallPage)
