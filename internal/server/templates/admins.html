@@ -1,0 +1,47 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Admin users</h1>
+    <p class="page-sub">Panel operators, roles and access.</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-primary" hx-get="/system/admins/new" hx-target="#modal-host" hx-swap="innerHTML">Add admin</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h2>Admins <span class="badge">{{len .Data.Admins}}</span></h2></div>
+  {{if .Data.Admins}}
+  <div class="table-wrap">
+    <table class="table table-stack">
+      <thead><tr><th>Name</th><th>Username</th><th>Email</th><th>Role</th><th>Type</th><th>2FA</th><th>Status</th><th class="table-actions">Actions</th></tr></thead>
+      <tbody>
+        {{range .Data.Admins}}
+        <tr>
+          <td data-label="Name">{{if .DisplayName}}{{.DisplayName}}{{else}}—{{end}}</td>
+          <td data-label="Username" class="mono">{{.Username}}</td>
+          <td data-label="Email" class="mono text-xs">{{if .Email}}{{.Email}}{{else}}—{{end}}</td>
+          <td data-label="Role"><span class="badge brand">{{.Role}}</span></td>
+          <td data-label="Type"><span class="badge">{{.AccountType}}</span></td>
+          <td data-label="2FA">{{if .TotpEnabled}}<span class="badge ok">on</span>{{else}}<span class="badge dim">off</span>{{end}}</td>
+          <td data-label="Status">{{if .Active}}<span class="badge ok">active</span>{{else}}<span class="badge warn">disabled</span>{{end}}</td>
+          <td class="table-actions" data-label="">
+            <div class="btn-group">
+              <button class="btn btn-sm" hx-get="/system/admins/{{.ID}}/edit" hx-target="#modal-host" hx-swap="innerHTML">Edit</button>
+              <button class="btn btn-sm" hx-get="/system/admins/{{.ID}}/reset-password" hx-target="#modal-host" hx-swap="innerHTML">Reset password</button>
+              <button class="btn btn-sm" hx-post="/system/admins/{{.ID}}/toggle" hx-target="#form-error" hx-swap="innerHTML">{{if .Active}}Disable{{else}}Enable{{end}}</button>
+              <button class="btn btn-sm btn-danger" hx-delete="/system/admins/{{.ID}}" hx-target="#form-error" hx-swap="innerHTML"
+                      hx-confirm="Delete admin {{.Username}}?">Delete</button>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="empty"><span class="empty-title">No admin users</span></div>
+  {{end}}
+</div>
+<div id="form-error" class="form-error-slot"></div>
+{{end}}

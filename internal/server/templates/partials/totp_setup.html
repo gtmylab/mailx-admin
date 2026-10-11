@@ -1,0 +1,11 @@
+{{define "totp_setup"}}
+<div class="form mt-2">
+  <p class="text-sm dim mb-2">Scan the code with your authenticator app, or enter this secret manually:</p>
+  <div class="mono text-xs break-all mb-2">{{.Secret}}</div>
+  <form class="form-row" hx-post="/account/totp/confirm" hx-target="#account-result" hx-swap="innerHTML">
+    <input class="input" type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+           placeholder="6-digit code" autocomplete="one-time-code" required>
+    <button type="submit" class="btn btn-primary">Verify &amp; enable</button>
+  </form>
+</div>
+{{end}}

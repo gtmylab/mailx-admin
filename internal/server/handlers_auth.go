@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,12 +73,13 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		totpSecret  sql.NullString
 		totpEnabled int
 		active      int
+		ttlMinutes  sql.NullInt64
 	)
 
 	err := s.db.QueryRowContext(ctx, `
-        SELECT id, password_hash, totp_secret, totp_enabled, active
+        SELECT id, password_hash, totp_secret, totp_enabled, active, session_ttl_minutes
         FROM admin_users WHERE username = ?
-    `, username).Scan(&id, &hash, &totpSecret, &totpEnabled, &active)
+    `, username).Scan(&id, &hash, &totpSecret, &totpEnabled, &active, &ttlMinutes)
 
 	if err == sql.ErrNoRows || active != 1 {
 		s.auditLogin(ctx, username, "error", "unknown user")
@@ -110,8 +112,8 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Create session
-	sess, err := s.sessions.Create(ctx, id, r.UserAgent(), clientIP(r))
+	// Create session (per-user TTL, then global setting, then the 24h default).
+	sess, err := s.sessions.CreateWithTTL(ctx, id, s.sessionTTL(ctx, ttlMinutes), r.UserAgent(), clientIP(r))
 	if err != nil {
 		s.logger.Error("create session", "err", err)
 		s.renderLogin(w, r, http.StatusInternalServerError, "Internal error", false)
@@ -160,6 +162,20 @@ func (s *Server) auditLogin(ctx context.Context, username, result, reason string
 		Result:     result,
 		Detail:     map[string]any{"reason": reason},
 	})
+}
+
+// sessionTTL resolves the session lifetime for an admin: the per-user override
+// when set, otherwise the global session_ttl_minutes setting, otherwise 24h.
+func (s *Server) sessionTTL(ctx context.Context, perUser sql.NullInt64) time.Duration {
+	if perUser.Valid && perUser.Int64 > 0 {
+		return time.Duration(perUser.Int64) * time.Minute
+	}
+	var v string
+	_ = s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = 'session_ttl_minutes'`).Scan(&v)
+	if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+		return time.Duration(n) * time.Minute
+	}
+	return 24 * time.Hour
 }
 
 func clientIP(r *http.Request) string {

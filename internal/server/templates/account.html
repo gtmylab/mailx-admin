@@ -2,45 +2,99 @@
 <div class="page-header">
   <div>
     <h1>Account</h1>
-    <p class="page-sub">Your panel account and password.</p>
+    <p class="page-sub">Your profile, security and session settings.</p>
   </div>
 </div>
 
 <div class="grid grid-cols-2 gap-4">
   <div class="card">
-    <div class="card-header"><h2>Signed in as</h2></div>
-    <div class="card-body kv">
-      <span class="kv-label">Username</span>
-      <span class="kv-value mono">{{.Data.Account.Username}}</span>
-      <span class="kv-label">Role</span>
-      <span class="kv-value"><span class="badge brand">{{.Data.Account.Role}}</span></span>
-      <span class="kv-label">Two-factor</span>
-      <span class="kv-value">{{if .Data.Account.TotpEnabled}}<span class="badge ok">enabled</span>{{else}}<span class="badge">disabled</span>{{end}}</span>
+    <div class="card-header"><h2>Profile</h2></div>
+    <div class="card-body">
+      <form class="form" hx-post="/account/profile" hx-target="#account-result" hx-swap="innerHTML">
+        <label class="field">
+          <span class="field-label">Full name</span>
+          <input class="input" type="text" name="display_name" value="{{.Data.Account.DisplayName}}" placeholder="Jane Doe">
+        </label>
+        <label class="field">
+          <span class="field-label">Email address</span>
+          <input class="input" type="email" name="email" value="{{.Data.Account.Email}}" placeholder="jane@example.com">
+          <span class="field-hint">Used for notification emails.</span>
+        </label>
+        <div class="kv">
+          <span class="kv-label">Username</span>
+          <span class="kv-value mono">{{.Data.Account.Username}}</span>
+        </div>
+        <div class="kv">
+          <span class="kv-label">Role</span>
+          <span class="kv-value"><span class="badge brand">{{.Data.Account.Role}}</span></span>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Save profile</button>
+        </div>
+      </form>
     </div>
   </div>
 
   <div class="card">
-    <div class="card-header"><h2>Change password</h2></div>
+    <div class="card-header"><h2>Two-factor authentication</h2></div>
     <div class="card-body">
-      <form class="form" hx-post="/account/password" hx-target="#account-result" hx-swap="innerHTML">
-        <label class="field">
-          <span class="field-label">Current password</span>
-          <input class="input" type="password" name="current_password" autocomplete="current-password" required>
-        </label>
-        <label class="field">
-          <span class="field-label">New password</span>
-          <input class="input" type="password" name="new_password" autocomplete="new-password" required>
-        </label>
-        <label class="field">
-          <span class="field-label">Confirm new password</span>
-          <input class="input" type="password" name="confirm_password" autocomplete="new-password" required>
-        </label>
-        <div class="form-actions">
-          <button type="submit" class="btn btn-primary">Change password</button>
-        </div>
-      </form>
-      <div id="account-result"></div>
+      <p class="text-sm dim mb-3">{{if .Data.Account.TotpEnabled}}Two-factor authentication is <strong>on</strong> for this account.{{else}}Two-factor authentication is <strong>off</strong>.{{end}}</p>
+      <div id="totp-setup"></div>
+      {{if .Data.Account.TotpEnabled}}
+      <button class="btn btn-danger" hx-post="/account/totp/disable" hx-confirm="Disable two-factor authentication?">Disable 2FA</button>
+      {{else}}
+      <button class="btn btn-primary" hx-post="/account/totp/setup" hx-target="#totp-setup" hx-swap="innerHTML">Enable 2FA</button>
+      {{end}}
     </div>
   </div>
 </div>
+
+<div class="card mt-4">
+  <div class="card-header"><h2>Session timeout</h2></div>
+  <div class="card-body">
+    <form class="form" hx-post="/account/session-ttl" hx-target="#account-result" hx-swap="innerHTML">
+      <label class="field">
+        <span class="field-label">Default session lifetime</span>
+        <select class="select" name="session_ttl_minutes">
+          <option value="60" {{if eq .Data.Account.SessionTTL 60}}selected{{end}}>1 hour</option>
+          <option value="120" {{if eq .Data.Account.SessionTTL 120}}selected{{end}}>2 hours</option>
+          <option value="300" {{if eq .Data.Account.SessionTTL 300}}selected{{end}}>5 hours</option>
+          <option value="720" {{if eq .Data.Account.SessionTTL 720}}selected{{end}}>12 hours</option>
+          <option value="1440" {{if or (eq .Data.Account.SessionTTL 0) (eq .Data.Account.SessionTTL 1440)}}selected{{end}}>24 hours</option>
+          <option value="2880" {{if eq .Data.Account.SessionTTL 2880}}selected{{end}}>48 hours</option>
+          <option value="4320" {{if eq .Data.Account.SessionTTL 4320}}selected{{end}}>72 hours</option>
+          <option value="10080" {{if eq .Data.Account.SessionTTL 10080}}selected{{end}}>1 week</option>
+        </select>
+        <span class="field-hint">How long a signed-in session stays valid. Per-user overrides apply where set.</span>
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Save timeout</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card mt-4">
+  <div class="card-header"><h2>Change password</h2></div>
+  <div class="card-body">
+    <form class="form" hx-post="/account/password" hx-target="#account-result" hx-swap="innerHTML">
+      <label class="field">
+        <span class="field-label">Current password</span>
+        <input class="input" type="password" name="current_password" autocomplete="current-password" required>
+      </label>
+      <label class="field">
+        <span class="field-label">New password</span>
+        <input class="input" type="password" name="new_password" autocomplete="new-password" required>
+      </label>
+      <label class="field">
+        <span class="field-label">Confirm new password</span>
+        <input class="input" type="password" name="confirm_password" autocomplete="new-password" required>
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Change password</button>
+      </div>
+    </form>
+  </div>
+</div>
+<div id="account-result"></div>
 {{end}}

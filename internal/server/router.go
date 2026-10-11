@@ -49,6 +49,11 @@ func (s *Server) buildRouter() http.Handler {
 	// Account (self-service for the signed-in admin)
 	protected.HandleFunc("GET /account", s.handleAccountPage)
 	protected.HandleFunc("POST /account/password", s.handleChangePassword)
+	protected.HandleFunc("POST /account/profile", s.handleAccountProfile)
+	protected.HandleFunc("POST /account/totp/setup", s.handleAccountTOTPSetup)
+	protected.HandleFunc("POST /account/totp/confirm", s.handleAccountTOTPConfirm)
+	protected.HandleFunc("POST /account/totp/disable", s.handleAccountTOTPDisable)
+	protected.HandleFunc("POST /account/session-ttl", s.handleAccountSessionTTL)
 
 	// Users
 	protected.HandleFunc("GET /users", s.handleUsersList)
@@ -200,6 +205,16 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("POST /system/server", s.handleServerSettingsSave)
 	protected.HandleFunc("POST /system/server/time", s.handleServerTimeSave)
 	protected.HandleFunc("POST /system/server/time/sync", s.handleServerTimeSync)
+
+	// Admin users (panel operators, roles, session TTL, groups)
+	protected.HandleFunc("GET /system/admins", s.handleAdminsPage)
+	protected.HandleFunc("GET /system/admins/new", s.handleAdminNew)
+	protected.HandleFunc("GET /system/admins/{id}/edit", s.handleAdminEdit)
+	protected.HandleFunc("POST /system/admins", s.handleAdminSave)
+	protected.HandleFunc("POST /system/admins/{id}/toggle", s.handleAdminToggle)
+	protected.HandleFunc("DELETE /system/admins/{id}", s.handleAdminDelete)
+	protected.HandleFunc("GET /system/admins/{id}/reset-password", s.handleAdminResetPasswordForm)
+	protected.HandleFunc("POST /system/admins/{id}/reset-password", s.handleAdminResetPassword)
 
 	// Firewall rules (ufw/firewalld)
 	protected.HandleFunc("GET /system/firewall", s.handleFirewallPage)

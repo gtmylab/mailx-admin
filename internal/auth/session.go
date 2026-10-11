@@ -38,14 +38,27 @@ func NewSessionStore(db *sql.DB) *SessionStore {
 	}
 }
 
+// SetMaxAge changes the default session lifetime used by Create.
+func (s *SessionStore) SetMaxAge(d time.Duration) {
+	if d > 0 {
+		s.maxAge = d
+	}
+}
+
+// Create mints a session with the store's default lifetime.
 func (s *SessionStore) Create(ctx context.Context, adminUserID int64, ua, ip string) (*Session, error) {
+	return s.CreateWithTTL(ctx, adminUserID, s.maxAge, ua, ip)
+}
+
+// CreateWithTTL mints a session that expires after ttl.
+func (s *SessionStore) CreateWithTTL(ctx context.Context, adminUserID int64, ttl time.Duration, ua, ip string) (*Session, error) {
 	idBytes := make([]byte, 32)
 	if _, err := rand.Read(idBytes); err != nil {
 		return nil, fmt.Errorf("generate session id: %w", err)
 	}
 	id := base64.RawURLEncoding.EncodeToString(idBytes)
 
-	expiresAt := time.Now().Add(s.maxAge)
+	expiresAt := time.Now().Add(ttl)
 
 	_, err := s.db.ExecContext(ctx, `
         INSERT INTO sessions (id, admin_user_id, expires_at, created_at, user_agent, remote_ip)
