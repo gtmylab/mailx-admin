@@ -149,19 +149,46 @@ func (ing *Ingester) ingestOnce(ctx context.Context) error {
 		return ing.saveState(ctx, int64(currentInode), consumed, nil)
 	}
 
-	// Insert events in a transaction
+	// Insert in bounded chunks so no single transaction holds the SQLite write
+	// lock for long. A large backlog would otherwise starve request-scoped
+	// writes (e.g. "update admin user: database is locked") for the whole batch.
+	const ingestChunkSize = 200
+	var lastTs time.Time
+	for start := 0; start < len(events); start += ingestChunkSize {
+		end := start + ingestChunkSize
+		if end > len(events) {
+			end = len(events)
+		}
+		ts, err := ing.insertEvents(ctx, events[start:end])
+		if err != nil {
+			return err
+		}
+		if ts.After(lastTs) {
+			lastTs = ts
+		}
+	}
+
+	ing.logger.Debug("ingested events", "count", len(events), "up_to", lastTs)
+	return ing.saveState(ctx, int64(currentInode), consumed, &lastTs)
+}
+
+// insertEvents writes one chunk of parsed events in a single transaction and
+// returns the latest event timestamp it saw. Bounding the chunk keeps the
+// SQLite write lock held for milliseconds rather than the whole backlog.
+func (ing *Ingester) insertEvents(ctx context.Context, events []Event) (time.Time, error) {
 	tx, err := ing.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 	defer tx.Rollback()
 
 	var lastTs time.Time
-	for _, ev := range events {
+	for i := range events {
+		ev := &events[i]
 		if ev.Ts.After(lastTs) {
 			lastTs = ev.Ts
 		}
-		ing.fillSender(ctx, tx, &ev)
+		ing.fillSender(ctx, tx, ev)
 		_, err := tx.ExecContext(ctx, `
             INSERT INTO mail_events
               (ts, queue_id, service, action, status, from_addr, to_addr, domain,
@@ -173,7 +200,7 @@ func (ing *Ingester) ingestOnce(ctx context.Context) error {
 			nullInt(ev.SizeBytes), nullFloat(ev.DelaySec), nullStr(ev.DSN),
 			ev.Message, ev.Raw)
 		if err != nil {
-			return fmt.Errorf("insert event: %w", err)
+			return time.Time{}, fmt.Errorf("insert event: %w", err)
 		}
 
 		// A Dovecot login (webmail/IMAP/POP3) is the moment the mailbox owner
@@ -182,17 +209,15 @@ func (ing *Ingester) ingestOnce(ctx context.Context) error {
 		if ev.Action == "login" && ev.FromAddr != "" {
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE users SET last_login = ? WHERE LOWER(email) = LOWER(?)`, ev.Ts, ev.FromAddr); err != nil {
-				return fmt.Errorf("update last login: %w", err)
+				return time.Time{}, fmt.Errorf("update last login: %w", err)
 			}
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return err
+		return time.Time{}, err
 	}
-
-	ing.logger.Debug("ingested events", "count", len(events), "up_to", lastTs)
-	return ing.saveState(ctx, int64(currentInode), consumed, &lastTs)
+	return lastTs, nil
 }
 
 func (ing *Ingester) saveState(ctx context.Context, inode, offset int64, lastSeen *time.Time) error {

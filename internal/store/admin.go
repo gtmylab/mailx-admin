@@ -86,7 +86,7 @@ func (s *Store) InsertAdminUser(ctx context.Context, a models.AdminUser) (int64,
 	if a.GroupID > 0 {
 		groupID = a.GroupID
 	}
-	res, err := s.db.ExecContext(ctx, `
+	res, err := s.exec(ctx, `
 		INSERT INTO admin_users (username, password_hash, totp_secret, totp_enabled, role, active,
 		  display_name, email, account_type, session_ttl_minutes, group_id, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -110,7 +110,7 @@ func (s *Store) UpdateAdminUser(ctx context.Context, a models.AdminUser) error {
 	if a.GroupID > 0 {
 		groupID = a.GroupID
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.exec(ctx, `
 		UPDATE admin_users SET role = ?, active = ?, display_name = ?, email = ?,
 		  account_type = ?, session_ttl_minutes = ?, group_id = ? WHERE id = ?`,
 		a.Role, active, a.DisplayName, a.Email, a.AccountType, ttl, groupID, a.ID)
@@ -121,7 +121,7 @@ func (s *Store) UpdateAdminUser(ctx context.Context, a models.AdminUser) error {
 }
 
 func (s *Store) SetAdminUserPassword(ctx context.Context, id int64, hash string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE admin_users SET password_hash = ? WHERE id = ?`, hash, id)
+	_, err := s.exec(ctx, `UPDATE admin_users SET password_hash = ? WHERE id = ?`, hash, id)
 	return err
 }
 
@@ -134,7 +134,7 @@ func (s *Store) SetAdminUserTOTP(ctx context.Context, id int64, secret string, e
 	if secret != "" {
 		sec = secret
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE admin_users SET totp_secret = ?, totp_enabled = ? WHERE id = ?`, sec, e, id)
+	_, err := s.exec(ctx, `UPDATE admin_users SET totp_secret = ?, totp_enabled = ? WHERE id = ?`, sec, e, id)
 	return err
 }
 
@@ -143,12 +143,12 @@ func (s *Store) SetAdminUserActive(ctx context.Context, id int64, active bool) e
 	if active {
 		a = 1
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE admin_users SET active = ? WHERE id = ?`, a, id)
+	_, err := s.exec(ctx, `UPDATE admin_users SET active = ? WHERE id = ?`, a, id)
 	return err
 }
 
 func (s *Store) DeleteAdminUser(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM admin_users WHERE id = ?`, id)
+	_, err := s.exec(ctx, `DELETE FROM admin_users WHERE id = ?`, id)
 	return err
 }
 
@@ -172,7 +172,7 @@ func (s *Store) ListAdminGroups(ctx context.Context) ([]models.AdminGroup, error
 }
 
 func (s *Store) InsertAdminGroup(ctx context.Context, g models.AdminGroup) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO admin_groups (name, role, permissions) VALUES (?, ?, ?)`,
+	res, err := s.exec(ctx, `INSERT INTO admin_groups (name, role, permissions) VALUES (?, ?, ?)`,
 		g.Name, g.Role, g.Permissions)
 	if err != nil {
 		return 0, fmt.Errorf("insert admin group: %w", err)
@@ -231,7 +231,7 @@ func (s *Store) InsertAdminNotification(ctx context.Context, n models.AdminNotif
 	if n.Active {
 		active = 1
 	}
-	res, err := s.db.ExecContext(ctx, `
+	res, err := s.exec(ctx, `
 		INSERT INTO admin_user_notifications (admin_user_id, provider, target, events, active)
 		VALUES (?, ?, ?, ?, ?)`, n.AdminUserID, n.Provider, n.Target, n.Events, active)
 	if err != nil {
@@ -241,7 +241,7 @@ func (s *Store) InsertAdminNotification(ctx context.Context, n models.AdminNotif
 }
 
 func (s *Store) DeleteAdminNotification(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM admin_user_notifications WHERE id = ?`, id)
+	_, err := s.exec(ctx, `DELETE FROM admin_user_notifications WHERE id = ?`, id)
 	return err
 }
 
@@ -250,7 +250,7 @@ func (s *Store) SetAdminNotificationActive(ctx context.Context, id int64, active
 	if active {
 		a = 1
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE admin_user_notifications SET active = ? WHERE id = ?`, a, id)
+	_, err := s.exec(ctx, `UPDATE admin_user_notifications SET active = ? WHERE id = ?`, a, id)
 	return err
 }
 
@@ -268,7 +268,7 @@ func (s *Store) GetAdminGroup(ctx context.Context, id int64) (*models.AdminGroup
 }
 
 func (s *Store) UpdateAdminGroup(ctx context.Context, g models.AdminGroup) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE admin_groups SET name = ?, role = ?, permissions = ? WHERE id = ?`,
+	_, err := s.exec(ctx, `UPDATE admin_groups SET name = ?, role = ?, permissions = ? WHERE id = ?`,
 		g.Name, g.Role, g.Permissions, g.ID)
 	if err != nil {
 		return fmt.Errorf("update admin group: %w", err)
@@ -277,10 +277,10 @@ func (s *Store) UpdateAdminGroup(ctx context.Context, g models.AdminGroup) error
 }
 
 func (s *Store) DeleteAdminGroup(ctx context.Context, id int64) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE admin_users SET group_id = NULL WHERE group_id = ?`, id); err != nil {
+	if _, err := s.exec(ctx, `UPDATE admin_users SET group_id = NULL WHERE group_id = ?`, id); err != nil {
 		return fmt.Errorf("clear group members: %w", err)
 	}
-	_, err := s.db.ExecContext(ctx, `DELETE FROM admin_groups WHERE id = ?`, id)
+	_, err := s.exec(ctx, `DELETE FROM admin_groups WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete admin group: %w", err)
 	}

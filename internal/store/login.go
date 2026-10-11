@@ -12,7 +12,7 @@ func (s *Store) RecordLoginAttempt(ctx context.Context, username, ip string, suc
 	if success {
 		v = 1
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.exec(ctx, `
 		INSERT INTO login_attempts (username, remote_ip, success, attempted_at)
 		VALUES (?, ?, ?, ?)`, username, ip, v, time.Now())
 	return err
