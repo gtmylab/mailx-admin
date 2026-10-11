@@ -57,28 +57,19 @@ func (s *Server) handleUsersList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUserDetail(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	idStr := r.PathValue("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.renderError(w, 400, "Invalid user ID")
 		return
 	}
 
-	// The whole set: a disabled mailbox still has a page, and finding it must not
-	// depend on a filter.
-	users, err := s.store.Users(ctx, true)
+	found, err := s.store.GetUser(r.Context(), id)
 	if err != nil {
+		// Log the real cause: the old handler swallowed it, so "Failed to load
+		// user" gave the operator nothing to act on.
+		s.logger.Error("get user", "id", id, "err", err)
 		s.renderError(w, 500, "Failed to load user")
 		return
-	}
-
-	var found *models.User
-	for i := range users {
-		if users[i].ID == id {
-			found = &users[i]
-			break
-		}
 	}
 	if found == nil {
 		s.renderError(w, 404, "User not found")

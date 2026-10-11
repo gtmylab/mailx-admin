@@ -324,6 +324,37 @@ func (s *Store) Users(ctx context.Context, includeInactive bool) ([]models.User,
 	return scanUsers(rows)
 }
 
+// GetUser returns one mailbox by id, without the transaction the list views need,
+// so the detail page stays fast and cannot contend with the log ingester's
+// writes. It returns nil (not an error) when the id does not exist.
+func (s *Store) GetUser(ctx context.Context, id int64) (*models.User, error) {
+	var u models.User
+	var active, isAdmin int
+	var lastLogin sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT `+userColumns+`
+		FROM users u
+		JOIN domains d ON d.id = u.domain_id
+		WHERE u.id = ?`, id).Scan(
+		&u.ID, &u.DomainID, &u.Username, &u.Email, &u.DisplayName, &u.PasswordHash,
+		&u.QuotaMB, &active, &isAdmin, &lastLogin,
+		&u.CreatedAt, &u.UpdatedAt, &u.DomainName,
+		&u.Kind, &u.SysUID, &u.SysGID, &u.Home,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+	u.Active = active == 1
+	u.IsAdmin = isAdmin == 1
+	if lastLogin.Valid {
+		u.LastLogin = &lastLogin.Time
+	}
+	return &u, nil
+}
+
 // ExistingKeysTx returns the identifiers already in the database, for the
 // comparison the "Import from server" flow needs. It is read inside the caller's
 // transaction: adopt must decide on the same snapshot it writes to.
