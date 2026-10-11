@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/base64"
+	"html/template"
 	"net/http"
 	"strconv"
 	"strings"
@@ -113,7 +114,9 @@ func (s *Server) handleAccountTOTPSetup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.renderPartial(w, "totp_setup", map[string]any{
-		"QR":     "data:image/png;base64," + base64.StdEncoding.EncodeToString(qr),
+		// template.URL stops html/template from URL-escaping the base64 (which
+		// contains '+' and '/') and corrupting the data URI.
+		"QR":     template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(qr)),
 		"Secret": secret,
 	})
 }

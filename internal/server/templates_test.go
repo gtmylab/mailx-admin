@@ -107,6 +107,33 @@ var fragmentTemplateNames = []string{
 	"group_form",
 }
 
+// TestTOTPSetupRendersQRDataURI guards the QR data URI against html/template's
+// URL sanitizer. A data: URI is not in its safe-scheme list, so a plain string
+// is filtered to "#ZgotmplZ" and the QR image breaks. The handler therefore
+// passes a template.URL, which must survive. The '+' in the base64 may be
+// HTML-escaped to "&#43;" — the browser decodes that back to '+' before using
+// the src — so we only reject the filtered placeholder and require the prefix.
+func TestTOTPSetupRendersQRDataURI(t *testing.T) {
+	tmpl, err := parseTemplates()
+	if err != nil {
+		t.Fatalf("parseTemplates: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.fragments.ExecuteTemplate(&buf, "totp_setup", map[string]any{
+		"QR":     template.URL("data:image/png;base64,AB+C/D=="),
+		"Secret": "SECRET",
+	}); err != nil {
+		t.Fatalf("render totp_setup: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "ZgotmplZ") {
+		t.Fatalf("totp_setup filtered the QR data URI to #ZgotmplZ:\n%s", out)
+	}
+	if !strings.Contains(out, `data:image/png;base64,AB`) {
+		t.Fatalf("totp_setup lost the QR data URI prefix:\n%s", out)
+	}
+}
+
 func newTestServer(t *testing.T, tmpl *templateSet) *Server {
 	t.Helper()
 	return &Server{
