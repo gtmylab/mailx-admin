@@ -26,7 +26,8 @@ type Manager struct {
 	store    *store.Store
 	resolver string
 	logger   *slog.Logger
-	webhooks *webhooks.Dispatcher // optional; nil disables dispatch
+	webhooks *webhooks.Dispatcher                                              // optional; nil disables dispatch
+	notify   func(ctx context.Context, event string, fields map[string]string) // optional admin-notification hook
 }
 
 // New builds a Manager. An empty resolver falls back to the same public resolver
@@ -44,6 +45,11 @@ func New(st *store.Store, resolver string, logger *slog.Logger) *Manager {
 // SetWebhooks attaches an optional webhook dispatcher. When nil (the default),
 // event dispatch is a no-op.
 func (m *Manager) SetWebhooks(d *webhooks.Dispatcher) { m.webhooks = d }
+
+// SetNotify attaches an optional callback for admin-user notifications (the
+// per-admin Slack/Telegram/Discord/webhook/email handles). When nil, it is a
+// no-op.
+func (m *Manager) SetNotify(f func(context.Context, string, map[string]string)) { m.notify = f }
 
 func (m *Manager) dispatch(ctx context.Context, event string, data any) {
 	if m.webhooks != nil {
@@ -98,6 +104,14 @@ func (m *Manager) CheckBlocklists(ctx context.Context) error {
 					"zone":   bl.Zone,
 					"detail": detail,
 				})
+				if m.notify != nil {
+					m.notify(ctx, "blocklist.listed", map[string]string{
+						"ip":     ip.IP,
+						"list":   bl.Name,
+						"zone":   bl.Zone,
+						"detail": detail,
+					})
+				}
 			}
 		}
 	}

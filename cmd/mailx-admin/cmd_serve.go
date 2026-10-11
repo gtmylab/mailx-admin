@@ -116,6 +116,7 @@ func cmdServe() *cobra.Command {
 			// sample, daily PTR + outbound-IP discovery.
 			jm := jobs.New(st, cfg.DNS.Resolver, logger)
 			jm.SetWebhooks(webhooks.New(st, logger))
+			jm.SetNotify(srv.DispatchNotifications)
 			jm.Start(ctx)
 
 			// One-time backfill of the envelope sender onto delivery events so the

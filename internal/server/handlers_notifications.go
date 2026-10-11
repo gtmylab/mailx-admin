@@ -41,6 +41,19 @@ func (s *Server) handleAccountNotificationAdd(w http.ResponseWriter, r *http.Req
 		s.renderFormError(w, "Unknown provider")
 		return
 	}
+
+	// Telegram carries its bot token and chat id in two fields and stores them
+	// combined as "<token>|<chat_id>" so the schema stays provider-agnostic.
+	if provider == "telegram" {
+		token := strings.TrimSpace(r.FormValue("tg_token"))
+		chatID := strings.TrimSpace(r.FormValue("tg_chat_id"))
+		if token == "" || chatID == "" {
+			s.renderFormError(w, "Bot token and chat ID are required for Telegram")
+			return
+		}
+		target = token + "|" + chatID
+	}
+
 	if target == "" {
 		s.renderFormError(w, "Target is required")
 		return

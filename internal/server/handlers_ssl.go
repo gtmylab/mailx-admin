@@ -97,7 +97,7 @@ func (s *Server) handleSSLRenew(w http.ResponseWriter, r *http.Request) {
 	// If renewal succeeded and it's not a dry run, refresh cached cert info
 	if res.Success && !req.DryRun {
 		s.refreshCertCache(r.Context(), certName)
-		go s.dispatchNotifications(context.Background(), "ssl.renewed", map[string]string{"cert": certName})
+		go s.DispatchNotifications(context.Background(), "ssl.renewed", map[string]string{"cert": certName})
 	}
 
 	// Audit
@@ -288,7 +288,7 @@ func (s *Server) refreshCertCache(ctx context.Context, certName string) {
 
 // notifySSLFailure sends the admin email on renewal failure.
 func (s *Server) notifySSLFailure(ctx context.Context, certName, reason string) {
-	s.dispatchNotifications(ctx, "ssl.failed", map[string]string{"cert": certName, "reason": reason})
+	s.DispatchNotifications(ctx, "ssl.failed", map[string]string{"cert": certName, "reason": reason})
 
 	var adminEmail string
 	_ = s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = 'ssl_admin_email'`).Scan(&adminEmail)

@@ -17,10 +17,10 @@ import (
 // keeps a slow webhook from blocking an event source for long.
 var notifyHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
-// dispatchNotifications fans an event out to every enabled notification handle
+// DispatchNotifications fans an event out to every enabled notification handle
 // whose event list includes it. Delivery is best-effort: a failing handle is
 // logged and skipped, never fatal to the caller.
-func (s *Server) dispatchNotifications(ctx context.Context, event string, fields map[string]string) {
+func (s *Server) DispatchNotifications(ctx context.Context, event string, fields map[string]string) {
 	notes, err := s.store.ListActiveAdminNotifications(ctx)
 	if err != nil {
 		s.logger.Warn("list active notifications", "err", err)

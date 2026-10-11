@@ -91,7 +91,7 @@ func (s *Server) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 				Result: "error",
 				Detail: map[string]any{"error": err.Error()},
 			})
-			s.dispatchNotifications(bgCtx, "backup.failed", map[string]string{"error": err.Error()})
+			s.DispatchNotifications(bgCtx, "backup.failed", map[string]string{"error": err.Error()})
 			return
 		}
 
@@ -111,7 +111,7 @@ func (s *Server) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 				"size": result.SizeBytes,
 			},
 		})
-		s.dispatchNotifications(bgCtx, "backup.completed", map[string]string{
+		s.DispatchNotifications(bgCtx, "backup.completed", map[string]string{
 			"name": result.Name,
 			"size": strconv.FormatInt(result.SizeBytes, 10),
 		})

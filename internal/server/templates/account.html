@@ -103,7 +103,7 @@
     {{else}}
     <p class="text-sm dim mb-3">No notification channels configured.</p>
     {{end}}
-    <form class="form-row" hx-post="/account/notifications" hx-target="#account-result" hx-swap="innerHTML">
+    <form class="form-row" id="notification-add-form" hx-post="/account/notifications" hx-target="#account-result" hx-swap="innerHTML">
       <select class="select" name="provider">
         <option value="slack">Slack</option>
         <option value="telegram">Telegram</option>
@@ -112,10 +112,33 @@
         <option value="webhook">Webhook</option>
       </select>
       <input class="input" type="text" name="target" placeholder="Webhook URL / chat ID / email" required>
+      <input class="input" type="text" name="tg_token" placeholder="Bot token" hidden>
+      <input class="input" type="text" name="tg_chat_id" placeholder="Chat ID" hidden>
       <input class="input" type="text" name="events" placeholder="auth.lockout, ssl.failed, backup.completed">
       <button type="submit" class="btn btn-primary">Add</button>
     </form>
-    <p class="field-hint mt-2">Events (comma-separated): auth.lockout, auth.login_failed, ssl.failed, ssl.renewed, backup.completed, backup.failed. Telegram target is <span class="mono">&lt;bot_token&gt;|&lt;chat_id&gt;</span>.</p>
+    <p class="field-hint mt-2">Events (comma-separated): auth.lockout, auth.login_failed, ssl.failed, ssl.renewed, backup.completed, backup.failed, blocklist.listed, user.created, user.deleted.</p>
+    <script>
+    (function () {
+      var form = document.getElementById('notification-add-form');
+      if (!form) return;
+      var sel = form.querySelector('select[name=provider]');
+      var target = form.querySelector('input[name=target]');
+      var token = form.querySelector('input[name=tg_token]');
+      var chat = form.querySelector('input[name=tg_chat_id]');
+      function sync() {
+        var tg = sel.value === 'telegram';
+        target.hidden = tg;
+        target.required = !tg;
+        token.hidden = !tg;
+        token.required = tg;
+        chat.hidden = !tg;
+        chat.required = tg;
+      }
+      sel.addEventListener('change', sync);
+      sync();
+    })();
+    </script>
   </div>
 </div>
 

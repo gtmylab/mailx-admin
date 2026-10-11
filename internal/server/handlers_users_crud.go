@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -69,6 +70,7 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 
 	// Best-effort welcome mail, sent after the queued sync renders the mailbox.
 	go s.sendWelcomeEmailAfterSync(email)
+	go s.DispatchNotifications(context.Background(), "user.created", map[string]string{"email": email})
 
 	// Success: redirect the whole page and show a toast. Any warnings (for
 	// example a Roundcube seed that failed) ride along so the operator sees
@@ -182,6 +184,12 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 		s.renderFormError(w, err.Error())
 		return
 	}
+
+	email := ""
+	if user, err := s.store.GetUser(r.Context(), id); err == nil && user != nil {
+		email = user.Email
+	}
+	go s.DispatchNotifications(context.Background(), "user.deleted", map[string]string{"email": email, "id": strconv.FormatInt(id, 10)})
 
 	w.Header().Set("HX-Redirect", "/users?flash="+encodeFlash("User deleted"))
 	w.WriteHeader(http.StatusOK)
