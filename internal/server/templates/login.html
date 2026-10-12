@@ -44,12 +44,19 @@
     </label>
 
     {{if .TOTPRequired}}
-    <label class="field">
+    <div class="field">
       <span class="field-label">Two-factor code</span>
-      <input class="input" type="text" name="totp" inputmode="numeric" pattern="[0-9]{6}"
-             maxlength="6" autocomplete="one-time-code" placeholder="123456">
+      <div class="otp-inputs">
+        <input class="input otp-input" type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" autocomplete="one-time-code" aria-label="Digit 1">
+        <input class="input otp-input" type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" aria-label="Digit 2">
+        <input class="input otp-input" type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" aria-label="Digit 3">
+        <input class="input otp-input" type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" aria-label="Digit 4">
+        <input class="input otp-input" type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" aria-label="Digit 5">
+        <input class="input otp-input" type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" aria-label="Digit 6">
+        <input type="hidden" name="totp">
+      </div>
       <span class="field-hint">6-digit code from your authenticator app.</span>
-    </label>
+    </div>
     {{end}}
 
     <button type="submit" class="btn btn-primary btn-block btn-lg">Sign in</button>

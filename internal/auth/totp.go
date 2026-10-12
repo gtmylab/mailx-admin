@@ -22,17 +22,29 @@ func GenerateTOTPSecret() (string, error) {
 	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(secret), nil
 }
 
-// TOTPProvisioningURI returns the otpauth:// URI that QR code generators use.
-func TOTPProvisioningURI(accountName, issuer, secret string) (string, error) {
-	key, err := totp.Generate(totp.GenerateOpts{
+// totpKey builds an otp.Key from a base32-encoded secret. GenerateTOTPSecret
+// returns the secret already base32-encoded, so it must be decoded back to raw
+// bytes before totp.Generate — Generate treats its Secret field as raw bytes and
+// re-encodes it, which would otherwise make the QR/URI carry a different secret
+// than the one VerifyTOTP checks.
+func totpKey(accountName, issuer, secret string) (*otp.Key, error) {
+	raw, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
+	if err != nil {
+		return nil, fmt.Errorf("decode totp secret: %w", err)
+	}
+	return totp.Generate(totp.GenerateOpts{
 		Issuer:      issuer,
 		AccountName: accountName,
-		Secret:      []byte(secret),
-		SecretSize:  20,
+		Secret:      raw,
 		Period:      30,
 		Digits:      otp.DigitsSix,
 		Algorithm:   otp.AlgorithmSHA1,
 	})
+}
+
+// TOTPProvisioningURI returns the otpauth:// URI that QR code generators use.
+func TOTPProvisioningURI(accountName, issuer, secret string) (string, error) {
+	key, err := totpKey(accountName, issuer, secret)
 	if err != nil {
 		return "", fmt.Errorf("generate totp key: %w", err)
 	}
@@ -42,14 +54,7 @@ func TOTPProvisioningURI(accountName, issuer, secret string) (string, error) {
 // TOTPQRPNG renders the provisioning URI for accountName/issuer/secret as a
 // square PNG QR code (size×size pixels), ready to embed as a data URI.
 func TOTPQRPNG(accountName, issuer, secret string, size int) ([]byte, error) {
-	key, err := totp.Generate(totp.GenerateOpts{
-		Issuer:      issuer,
-		AccountName: accountName,
-		Secret:      []byte(secret),
-		Period:      30,
-		Digits:      otp.DigitsSix,
-		Algorithm:   otp.AlgorithmSHA1,
-	})
+	key, err := totpKey(accountName, issuer, secret)
 	if err != nil {
 		return nil, fmt.Errorf("generate totp key: %w", err)
 	}

@@ -12,11 +12,19 @@
     <span class="field-hint">Scan the QR code, or enter this key manually in your authenticator app.</span>
   </div>
   <form class="form" hx-post="/account/totp/confirm" hx-target="#account-result" hx-swap="innerHTML">
-    <label class="field">
+    <div class="field">
       <span class="field-label">6-digit code</span>
-      <input class="input" type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
-             placeholder="123456" autocomplete="one-time-code" required>
-    </label>
+      <div class="otp-inputs">
+        <input class="input otp-input" type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" autocomplete="one-time-code" aria-label="Digit 1">
+        <input class="input otp-input" type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" aria-label="Digit 2">
+        <input class="input otp-input" type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" aria-label="Digit 3">
+        <input class="input otp-input" type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" aria-label="Digit 4">
+        <input class="input otp-input" type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" aria-label="Digit 5">
+        <input class="input otp-input" type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" aria-label="Digit 6">
+        <input type="hidden" name="code">
+      </div>
+      <span class="field-hint">Enter the 6-digit code from your authenticator app.</span>
+    </div>
     <div class="form-actions">
       <button type="button" class="btn" onclick="document.getElementById('totp-setup').innerHTML=''">Cancel</button>
       <button type="submit" class="btn btn-primary">Verify &amp; enable</button>

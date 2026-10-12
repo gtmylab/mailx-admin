@@ -593,6 +593,52 @@
       document.body.removeChild(ta);
     });
 
+    // One-time code boxes: auto-advance, backspace-to-previous, paste, and
+    // mirror the six digits into the form's hidden "code"/"totp" field.
+    function otpBoxes(wrap) {
+      return Array.prototype.slice.call(wrap.querySelectorAll(".otp-input"));
+    }
+    function syncOtp(wrap) {
+      var code = otpBoxes(wrap).map(function (b) { return b.value; }).join("");
+      var hidden = wrap.querySelector("input[type=hidden]");
+      if (hidden) hidden.value = code;
+    }
+    document.addEventListener("input", function (evt) {
+      var box = evt.target;
+      if (!box.classList || !box.classList.contains("otp-input")) return;
+      var wrap = box.closest(".otp-inputs");
+      if (!wrap) return;
+      var boxes = otpBoxes(wrap);
+      var digits = box.value.replace(/\D/g, "");
+      if (digits.length > 1) {
+        // Paste: distribute the digits across the boxes.
+        var arr = digits.slice(0, boxes.length).split("");
+        boxes.forEach(function (b, i) { b.value = arr[i] || ""; });
+        boxes[Math.min(arr.length, boxes.length - 1)].focus();
+      } else {
+        box.value = digits;
+        var idx = Array.prototype.indexOf.call(boxes, box);
+        if (digits && boxes[idx + 1]) boxes[idx + 1].focus();
+      }
+      syncOtp(wrap);
+    });
+    document.addEventListener("keydown", function (evt) {
+      var box = evt.target;
+      if (!box.classList || !box.classList.contains("otp-input")) return;
+      var wrap = box.closest(".otp-inputs");
+      if (!wrap) return;
+      var boxes = otpBoxes(wrap);
+      if (evt.key === "Backspace" && !box.value) {
+        var idx = Array.prototype.indexOf.call(boxes, box);
+        if (boxes[idx - 1]) {
+          boxes[idx - 1].focus();
+          boxes[idx - 1].value = "";
+          evt.preventDefault();
+          syncOtp(wrap);
+        }
+      }
+    });
+
     // Native (non-htmx) forms: disable the submit button so a slow request
     // cannot be fired twice. The button is re-enabled if the browser stays on
     // the page (validation error, backing out).
