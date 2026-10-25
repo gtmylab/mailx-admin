@@ -41,6 +41,40 @@ type Domain struct {
 	Active             bool
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+
+	// Outbound rate limit for this domain, enforced by postfwd (see
+	// internal/reconciler/postfwd.go). OutboundRateLimit is messages per hour
+	// and 0 means "no limit" -- the default, and what every install that never
+	// set one keeps doing.
+	//
+	// OutboundRateBurst is how many extra messages may go out in a 60s window
+	// (0 = none), so a legitimate batch sender is not throttled by the hourly
+	// average alone. OutboundRateAction is what postfwd answers once the limit
+	// is reached: RateActionDefer (the sender retries later) or
+	// RateActionReject.
+	OutboundRateLimit  int
+	OutboundRateBurst  int
+	OutboundRateAction string
+}
+
+// What a domain's outgoing limit does when it is reached. Stored as text because
+// it is shown in the panel and written into postfwd's config verbatim.
+const (
+	RateActionDefer  = "defer"  // 450 4.7.1: temporary, the sender retries
+	RateActionReject = "reject" // 554 5.7.1: permanent
+)
+
+// RateLimited reports whether this domain has an outgoing rate limit at all.
+func (d Domain) RateLimited() bool { return d.OutboundRateLimit > 0 }
+
+// RateAction normalizes an unset action to the default, so a row written before
+// the column existed (or by hand) still renders a valid postfwd rule.
+func (d Domain) RateAction() string {
+	switch d.OutboundRateAction {
+	case RateActionDefer, RateActionReject:
+		return d.OutboundRateAction
+	}
+	return RateActionDefer
 }
 
 type User struct {

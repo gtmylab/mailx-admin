@@ -27,7 +27,7 @@ func TestBuildPlanHasEverythingMailNeeds(t *testing.T) {
 		"MX|example.com":                     "mx.example.com",
 		"TXT|example.com":                    "v=spf1 mx a ip4:203.0.113.10 ~all",
 		"TXT|default._domainkey.example.com": "v=DKIM1; h=sha256; k=rsa; p=MIIBIjANBgkq",
-		"TXT|_dmarc.example.com":             "v=DMARC1; p=quarantine; pct=100; rua=mailto:admin@example.com; ruf=mailto:admin@example.com; sp=quarantine; aspf=r; adkim=r",
+		"TXT|_dmarc.example.com":             "v=DMARC1; p=quarantine; pct=100; rua=mailto:postmaster@example.com; ruf=mailto:postmaster@example.com; sp=quarantine; aspf=r; adkim=r",
 		"PTR|10.113.0.203.in-addr.arpa":      "mx.example.com",
 		"A|admin.example.com":                "203.0.113.10",
 	}

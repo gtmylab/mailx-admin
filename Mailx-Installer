@@ -369,9 +369,55 @@ EOT
     log_info "Dovecot quota configuration complete."
 }
 
+# ensure_dovecot_managesieve makes the managesieved listener exist and be
+# reachable, on a fresh install and on a re-run alike.
+#
+# Two separate defects left Roundcube's Filters page dead:
+#   * `protocols` never contained `sieve`, and Dovecot only starts the daemons
+#     of the protocols it is listed under;
+#   * the 10-master.conf written below has no managesieve-login block, so
+#     nothing listens on 4190 even once the protocol is enabled.
+# Both are repaired in place and idempotently, because the rest of this
+# function skips on "already configured" -- an existing install would otherwise
+# keep the broken pair forever.
+ensure_dovecot_managesieve() {
+    local conf=/etc/dovecot/dovecot.conf
+    local master=/etc/dovecot/conf.d/10-master.conf
+
+    if [ -f "$conf" ]; then
+        if ! grep -qE '^protocols[[:space:]]*=' "$conf"; then
+            echo "protocols = imap pop3 lmtp sieve" >> "$conf"
+            log_info "Enabled the dovecot sieve protocol"
+        elif ! grep -qE '^protocols[[:space:]]*=.*[[:space:]]sieve([[:space:]]|$)' "$conf"; then
+            sed -i -E 's/^protocols[[:space:]]*=.*/protocols = imap pop3 lmtp sieve/' "$conf"
+            log_info "Enabled the dovecot sieve protocol"
+        fi
+    fi
+
+    if [ -f "$master" ] && ! grep -qE '^[[:space:]]*service[[:space:]]+managesieve-login' "$master"; then
+        cat >> "$master" <<'EOF'
+
+service managesieve-login {
+  inet_listener sieve {
+    port = 4190
+    # Loopback only. Roundcube runs on this host, and this install sets
+    # disable_plaintext_auth = no, so a world-reachable plaintext port would
+    # hand over passwords in the clear.
+    address = 127.0.0.1
+  }
+}
+EOF
+        log_info "Added the managesieved listener on 127.0.0.1:4190"
+    fi
+}
+
 configure_dovecot_sasl() {
     if [ -f "/etc/dovecot/conf.d/10-master.conf" ] && [ -S "/var/spool/postfix/private/auth" ]; then
         log_info "Dovecot SASL already configured, skipping..."
+        # Not a full skip: managesieved has to be listening here too, or
+        # Roundcube's Filters page stays dead on every install made before
+        # this check existed.
+        ensure_dovecot_managesieve
         return 0
     fi
 
@@ -478,11 +524,7 @@ plugin {
 }
 EOF
 
-    if ! grep -qE '^protocols\s*=' /etc/dovecot/dovecot.conf; then
-        echo "protocols = imap pop3 lmtp" >> /etc/dovecot/dovecot.conf
-    else
-        sed -i 's/^protocols\s*=.*/protocols = imap pop3 lmtp/' /etc/dovecot/dovecot.conf
-    fi
+    ensure_dovecot_managesieve
 
     if ! dovecot -n 2>/dev/null; then
         log_warning "Dovecot configuration validation failed, but continuing..."
@@ -653,6 +695,87 @@ EOF
 # PHPMyAdmin Installation
 # ============================================================================
 
+# configure_postfwd installs the policy daemon the panel's per-domain outgoing
+# rate limits are enforced by.
+#
+# The panel writes /etc/postfwd.cf and points Postfix at it through
+# smtpd_end_of_data_restrictions (see RenderPostfixMainCF); this function
+# provides the daemon, the account it runs as and a unit that reloads instead of
+# restarting. There is no limit by default: an install that never sets one still
+# gets a postfwd that answers DUNNO to everything, which costs a policy lookup
+# per message and changes no behaviour.
+#
+# Two flags matter:
+#   --keep_rates  keeps the counters across a reload. The panel reloads postfwd
+#                 whenever the config changes, and without this every rate
+#                 limit would silently reset at that moment.
+#   --interface/--port keep it on the loopback address, where Postfix expects it
+#                 (smtpd_end_of_data_restrictions in main.cf) and where nobody
+#                 else can talk to it.
+configure_postfwd() {
+    log_info "Configuring postfwd (outgoing rate limits)..."
+
+    apt_install postfwd
+
+    if ! command_exists postfwd; then
+        log_warning "postfwd is not available; outgoing rate limits will not be enforced"
+        return 0
+    fi
+
+    if ! getent group postfw >/dev/null 2>&1; then
+        groupadd -r postfw 2>/dev/null || true
+    fi
+    if ! id postfw >/dev/null 2>&1; then
+        useradd -r -g postfw -d /var/lib/postfwd -s /usr/sbin/nologin postfw 2>/dev/null || true
+    fi
+    install -d -o postfw -g postfw -m 0750 /var/lib/postfwd 2>/dev/null || true
+
+    # The panel replaces this file on the first sync that has a limit to render.
+    # Until then it has to exist and be valid, or postfwd refuses to start.
+    if [ ! -f /etc/postfwd.cf ]; then
+        cat > /etc/postfwd.cf <<'EOF'
+# Managed by mailx-admin -- replaced on the first sync that has a rate limit.
+id=DEFAULT; action=dunno
+EOF
+        chmod 0644 /etc/postfwd.cf
+    fi
+
+    cat > /etc/systemd/system/postfwd.service <<'EOF'
+[Unit]
+Description=postfwd - Postfix policy daemon (outgoing rate limits)
+After=network.target postfix.service
+Wants=postfix.service
+
+[Service]
+# postfwd forks itself into the background, which is what Type=forking tracks.
+Type=forking
+ExecStart=/usr/sbin/postfwd --file /etc/postfwd.cf --user postfw --group postfw --interface 127.0.0.1 --port 10040 --keep_rates
+# The panel reloads postfwd after writing the config; SIGHUP re-reads the rules
+# and keeps the counters (--keep_rates).
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+
+    systemctl enable postfwd >/dev/null 2>&1 || true
+    systemctl restart postfwd >/dev/null 2>&1 || true
+
+    sleep 1
+    if systemctl is-active --quiet postfwd; then
+        log_info "postfwd listening on 127.0.0.1:10040"
+    else
+        log_warning "postfwd did not start; check: journalctl -u postfwd -n 30"
+    fi
+}
+
+# setup_phpmyadmin installs (or verifies) phpMyAdmin.
 setup_phpmyadmin() {
     if [ -d "/var/www/html/phpmyadmin" ] && [ -f "/var/www/html/phpmyadmin/config.inc.php" ]; then
         log_info "PHPMyAdmin already installed, skipping..."
@@ -2012,7 +2135,7 @@ DNS RECORDS TO ADD (CRITICAL FOR EMAIL DELIVERY):
 3. DMARC Record (Optional but recommended):
    Type: TXT
    Host: _dmarc.$DOMAIN
-   Value: \"v=DMARC1; p=none; rua=mailto:admin@$DOMAIN\"
+   Value: \"v=DMARC1; p=none; rua=mailto:postmaster@$DOMAIN\"
 
 4. MX Record (Mail exchange):
    Type: MX
@@ -2112,7 +2235,39 @@ rc_enable_plugin() {
         return 0
     fi
 
+    # Older Roundcube samples use array(...) instead of [...]; appending a
+    # second assignment would silently disable every plugin the operator had
+    # enabled, so extend the existing call instead.
+    if grep -qF "\$config['plugins'] = array(" "$file"; then
+        sed -i "s|[$]config\['plugins'\] = array(|\$config['plugins'] = array(\n    '$plugin',|" "$file"
+        return 0
+    fi
+
     printf '%s\n' "\$config['plugins'] = ['$plugin'];" >> "$file"
+}
+
+# rc_configure_managesieve points Roundcube at the managesieved this installer
+# starts, and enables the plugin that talks to it.
+#
+# Both halves were missing and either one breaks the Filters page: without the
+# plugin there is no UI at all, and with the plugin but no host/port Roundcube
+# defaults to STARTTLS on port 4190, which this managesieved does not offer --
+# saving a filter then fails with "Unable to connect".
+#
+# It is a function rather than two lines inline because install_roundcube_application
+# returns early for an existing installation, and that early return is exactly
+# where an upgrade has to be able to repair the configuration.
+rc_configure_managesieve() {
+    local file=$1
+
+    [ -f "$file" ] || return 1
+
+    rc_set_config "$file" managesieve_host "'127.0.0.1'"
+    rc_set_config "$file" managesieve_port "4190"
+    rc_set_config "$file" managesieve_usetls "false"
+    rc_enable_plugin "$file" managesieve
+
+    log_info "Roundcube managesieve plugin enabled (127.0.0.1:4190)"
 }
 
 install_roundcube_application() {
@@ -2143,6 +2298,9 @@ install_roundcube_application() {
         log_info "Roundcube already installed, verifying configuration..."
         if grep -q "db_dsnw" roundcube/config/config.inc.php 2>/dev/null; then
             log_info "Roundcube already properly configured, skipping..."
+            # Not a full skip: earlier versions of this installer never
+            # enabled the managesieve plugin, so a re-run has to repair it.
+            rc_configure_managesieve roundcube/config/config.inc.php
             cd "$CURRENT_DIR" 2>/dev/null || true
             return 0
         else
@@ -2251,6 +2409,12 @@ EOF
     rc_set_config config/config.inc.php smtp_port "25"
     rc_set_config config/config.inc.php support_url "'mailto:$ROUNDCUBE_ADMIN_EMAIL'"
     rc_set_config config/config.inc.php mail_domain "'$EMAIL_DOMAIN'"
+
+    # Filters: Roundcube talks to managesieved on the loopback address. The
+    # panel writes the sieve files itself, but a user who wants to edit them in
+    # the webmail needs the plugin that speaks ManageSieve, and it is useless
+    # without the host/port/TLS it should use.
+    rc_configure_managesieve config/config.inc.php
 
     if grep -qE "^[[:space:]]*//?[[:space:]]*[$]config\['des_key'\][[:space:]]*=[[:space:]]*'';" config/config.inc.php; then
         local DES_KEY=$(openssl rand -base64 24)
@@ -3157,7 +3321,7 @@ show_dkim_record() {
     echo "3. DMARC Record:"
     echo "   Type:  TXT"
     echo "   Host:  _dmarc.$DOMAIN"
-    echo "   Value: \"v=DMARC1; p=none; rua=mailto:admin@$DOMAIN\""
+    echo "   Value: \"v=DMARC1; p=none; rua=mailto:postmaster@$DOMAIN\""
     echo
     echo "4. MX Record:"
     echo "   Type:     MX"
@@ -3234,7 +3398,7 @@ DKIM & DNS Records for $DOMAIN
 3. DMARC Record:
    Type: TXT
    Host: _dmarc.$DOMAIN
-   Value: \"v=DMARC1; p=none; rua=mailto:admin@$DOMAIN\"
+   Value: \"v=DMARC1; p=none; rua=mailto:postmaster@$DOMAIN\"
 
 4. MX Record:
    Type: MX
@@ -3948,6 +4112,12 @@ EOF
         test_sasl_authentication soft
 
         mark_stage_complete "mail_server_installation"
+    fi
+
+    if ! is_stage_completed "postfwd_installation"; then
+        log_info "=== Stage 4b: Outgoing rate limits (postfwd) ==="
+        configure_postfwd
+        mark_stage_complete "postfwd_installation"
     fi
 
     if ! is_stage_completed "apache_installation"; then

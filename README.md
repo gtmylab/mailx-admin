@@ -63,6 +63,9 @@ phpMyAdmin, Let's Encrypt certificates, and finally the panel itself.
 - Domain create/edit/delete (with a delete-preview that shows what would be removed).
 - Primary-domain selection and per-domain DKIM key regeneration.
 - DNS records and live checks for MX, A/AAAA, PTR, SPF, DKIM and DMARC, with copy/export.
+- A `postmaster@` mailbox per domain, so the address the DMARC record names actually exists.
+- Optional per-domain outgoing rate limit (messages per hour plus a burst allowance),
+  enforced by **postfwd** and answered with a deferral or a rejection.
 
 ### Mailboxes, users & aliases
 - Virtual and system mailboxes, quota, per-user usage and per-user mail logs.

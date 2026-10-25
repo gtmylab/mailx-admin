@@ -16,6 +16,9 @@
   </div>
   <div class="page-actions">
     <a class="btn btn-sm" href="/domains/{{$d.ID}}/dns">DNS records</a>
+    <button class="btn btn-sm" hx-get="/domains/{{$d.ID}}/rate-limit" hx-target="#modal-host" hx-swap="innerHTML">
+      Rate limit
+    </button>
     <button class="btn btn-sm" hx-get="/domains/{{$d.ID}}/edit" hx-target="#modal-host" hx-swap="innerHTML">
       Rename
     </button>
@@ -36,7 +39,7 @@
   </div>
 </div>
 
-<div class="grid grid-cols-4 gap-4 mb-4">
+<div class="grid grid-cols-5 gap-4 mb-4">
   <div class="stat">
     <span class="stat-label">Mailboxes</span>
     <span class="stat-value">{{len .Data.Users}}</span>
@@ -49,6 +52,17 @@
     <span class="stat-label">DKIM</span>
     <span class="stat-value">{{if $d.DKIMPrivateKeyPath}}ready{{else}}missing{{end}}</span>
     <span class="stat-hint">{{if $d.DKIMCreatedAt}}created {{humanTime $d.DKIMCreatedAt}}{{else}}no key generated yet{{end}}</span>
+  </div>
+  <div class="stat {{if $d.RateLimited}}stat-ok{{end}}">
+    <span class="stat-label">Outgoing limit</span>
+    <span class="stat-value">{{if $d.RateLimited}}{{$d.OutboundRateLimit}}<small>/hour</small>{{else}}none{{end}}</span>
+    <span class="stat-hint">
+      {{if $d.RateLimited}}
+        {{if $d.OutboundRateBurst}}burst {{$d.OutboundRateBurst}}/minute, {{end}}{{if eq $d.RateAction "reject"}}rejecting{{else}}deferring{{end}} over the limit
+      {{else}}
+        no cap on mail sent from this domain
+      {{end}}
+    </span>
   </div>
   <div class="stat">
     <span class="stat-label">Domain ID</span>
@@ -82,7 +96,13 @@
       <tbody>
         {{range .Data.Users}}
         <tr>
-          <td data-label="Address"><a href="/users/{{.ID}}" class="strong">{{.Email}}</a></td>
+          <td data-label="Address">
+            <a href="/users/{{.ID}}" class="strong">{{.Email}}</a>
+            {{/* The mailbox the panel creates with the domain: DMARC and TLS
+                 reports land here, so it is not an ordinary user and should
+                 not be deleted as one. */}}
+            {{if eq .Username "postmaster"}}<span class="badge info">report inbox</span>{{end}}
+          </td>
           <td data-label="Quota" class="dim">{{.QuotaMB}} MB</td>
           <td data-label="Status">
             {{if .Active}}<span class="badge ok">active</span>{{else}}<span class="badge warn">disabled</span>{{end}}

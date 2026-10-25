@@ -343,7 +343,7 @@ func TestApplyCommitsBeforeSyncingConfig(t *testing.T) {
 		_, err := svc.Apply(ctx, Actor{Name: "admin:test"}, "domain.create",
 			map[string]any{"domain": "example.test"},
 			func(tx *sql.Tx) error {
-				return applyCreateDomainTx(ctx, tx, CreateDomainInput{Name: "example.test"}, "", "")
+				return applyCreateDomainTx(ctx, tx, CreateDomainInput{Name: "example.test"}, "", "", postmasterPreviewHash)
 			})
 		return err
 	})
@@ -383,7 +383,7 @@ func TestPreviewIsADryRun(t *testing.T) {
 		_, err := svc.Apply(ctx, Actor{Name: "admin:test"}, "domain.create",
 			map[string]any{"domain": "example.test"},
 			func(tx *sql.Tx) error {
-				return applyCreateDomainTx(ctx, tx, CreateDomainInput{Name: "example.test"}, "", "")
+				return applyCreateDomainTx(ctx, tx, CreateDomainInput{Name: "example.test"}, "", "", postmasterPreviewHash)
 			})
 		return err
 	})
@@ -399,7 +399,7 @@ func TestPreviewIsADryRun(t *testing.T) {
 	err := mustReturn(t, 30*time.Second, func() error {
 		var previewErr error
 		res, previewErr = svc.Preview(ctx, func(tx *sql.Tx) error {
-			return applyCreateDomainTx(ctx, tx, CreateDomainInput{Name: "preview.test"}, "", "")
+			return applyCreateDomainTx(ctx, tx, CreateDomainInput{Name: "preview.test"}, "", "", postmasterPreviewHash)
 		})
 		return previewErr
 	})

@@ -449,6 +449,31 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 	}
 
 	// ------------------------------------------------------------------
+	// Outgoing rate limits (postfwd).
+	//
+	// The file is written on every sync, not only when a limit exists: rendering
+	// it unconditionally is what stops a removed limit from leaving its old
+	// rules behind in a file an operator may still read. With no limits it holds
+	// nothing but the DEFAULT rule.
+	//
+	// The policy hook in main.cf is conditional (see RenderPostfixMainCF), so an
+	// install that never sets a limit does not ask a daemon it does not run.
+	// ------------------------------------------------------------------
+	postfwdPath := filepath.Join(filepath.Dir(r.cfg.PostfixConfDir), "postfwd.cf")
+	// Write when a limit exists, and also when the file is already one of ours:
+	// removing the last limit has to clear its rules instead of leaving them in
+	// a file an operator may still read. A postfwd.cf somebody else wrote is
+	// only replaced once the panel actually has a limit to put in it.
+	if hasRateLimits(snap) || isManagedPostfwdConfig(postfwdPath) {
+		files = append(files, managedFile{
+			path:    postfwdPath,
+			content: RenderPostfwdConf(snap.Domains),
+			mode:    0o644,
+			service: "postfwd",
+		})
+	}
+
+	// ------------------------------------------------------------------
 	// Per-user Sieve scripts.
 	//
 	// Rules are optional — a user with no rules has no managed script.
@@ -471,6 +496,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 			path:    UserSievePath(u),
 			content: content,
 			mode:    0o600,
+			// Without an owner this file is created root:root, and 0600
+			// root:root is a script neither managesieved nor the LMTP
+			// delivery process (vmail, or the account itself for a system
+			// mailbox) can read or replace: Roundcube's Filters page saves
+			// and nothing runs.
+			owner:   sieveOwner(u),
 			service: "dovecot",
 		})
 	}
@@ -569,6 +600,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 	}
 
 	// ------------------------------------------------------------------
+	// Sieve script ownership.
+	//
+	// Same failure as the DKIM keys below, one directory over: the scripts
+	// used to be written with no owner at all, so they landed 0600
+	// root:root. Dovecot's managesieved (running as the mailbox's own
+	// account) can then neither read the script it is asked to list nor
+	// write a new one, and delivery as vmail cannot execute the rules. The
+	// writer above sets the owner from now on; this pass heals the files an
+	// earlier version left behind, which WriteFileOwned never revisits once
+	// the content matches.
+	// ------------------------------------------------------------------
+	if !r.cfg.DryRun {
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
+		res.Warnings = append(res.Warnings, ensureSieveOwnership(ctx, snap)...)
+	}
+
+	// ------------------------------------------------------------------
 	// DKIM key ownership.
 	//
 	// The OpenDKIM daemon runs as opendkim:opendkim; it must be able to
@@ -625,15 +675,27 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 	//
 	// OpenDKIM first so the milter socket exists before Postfix starts
 	// trying to connect to it. Dovecot next (SASL socket for Postfix).
-	// Postfix last.
+	// postfwd before Postfix: main.cf points at it, and the new rules should
+	// already be loaded when Postfix starts asking. Postfix last.
+	//
+	// postfwd is optional -- installs that never set a rate limit do not have
+	// it, and a failed `systemctl reload` must not turn a config change into an
+	// error. Its absence is a warning, and only when it actually had something
+	// to reload.
 	// ------------------------------------------------------------------
 	if !r.cfg.SkipServiceReload && !r.cfg.DryRun {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
-		order := []string{"opendkim", "dovecot", "postfix"}
+		order := []string{"opendkim", "dovecot", "postfwd", "postfix"}
 		for _, svc := range order {
 			if !servicesToReload[svc] {
+				continue
+			}
+			if svc == "postfwd" && !serviceUnitExists(ctx, svc) {
+				res.Warnings = append(res.Warnings,
+					"postfwd is not installed as a systemd service, so the new rate limits are written but not enforced. "+
+						"Install it (the installer does) or run it against /etc/postfwd.cf.")
 				continue
 			}
 			if err := runCmd(ctx, reloadTimeout, "systemctl", "reload-or-restart", svc); err != nil {

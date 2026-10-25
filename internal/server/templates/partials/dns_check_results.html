@@ -11,7 +11,18 @@
 </div></div>
 {{else}}
 <div class="table-wrap">
-  <table class="table table-stack">
+  <table class="table table-stack table-dns">
+    {{/* Fixed column widths (see .table-dns in app.css): without them a 200+
+         character DKIM key stretched the Value column and pushed Actions off
+         the card. */}}
+    <colgroup>
+      <col style="width: 19%">
+      <col style="width: 7%">
+      <col style="width: 20%">
+      <col style="width: 30%">
+      <col style="width: 12%">
+      <col style="width: 12%">
+    </colgroup>
     <thead>
       <tr>
         <th>What it is for</th>
@@ -43,8 +54,8 @@
           {{else if eq .Status "error"}}<span class="badge err">? lookup failed</span>
           {{else if eq .Status "manual"}}<span class="badge info">set at provider</span>
           {{else}}<span class="badge">not checked</span>{{end}}
-          {{if .Message}}<div class="text-xs {{if eq .Status "ok"}}dim{{else if eq .Status "mismatch"}}warn-text{{else if eq .Status "unchecked"}}dim{{else}}err-text{{end}}">{{.Message}}</div>{{end}}
-          {{if .Observed}}<div class="dim text-xs">published: <span class="mono">{{range .Observed}}{{.}} {{end}}</span></div>{{end}}
+          {{if .Message}}<div class="text-xs break-all {{if eq .Status "ok"}}dim{{else if eq .Status "mismatch"}}warn-text{{else if eq .Status "unchecked"}}dim{{else}}err-text{{end}}">{{.Message}}</div>{{end}}
+          {{if .Observed}}<div class="dim text-xs break-all">published: <span class="mono">{{range .Observed}}{{.}} {{end}}</span></div>{{end}}
         </td>
         <td class="table-actions" data-label="">
           <div class="btn-group">

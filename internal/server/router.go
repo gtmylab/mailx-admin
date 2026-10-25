@@ -85,6 +85,9 @@ func (s *Server) buildRouter() http.Handler {
 	protected.HandleFunc("POST /domains/{id}/set-primary", s.handleDomainSetPrimary)
 	protected.HandleFunc("POST /domains/{id}/regenerate-dkim", s.handleDomainRegenerateDKIM)
 	protected.HandleFunc("POST /domains/{id}/preview-delete", s.handlePreviewDomainDelete)
+	// Outgoing rate limit: the form is a modal, the PATCH applies it.
+	protected.HandleFunc("GET /domains/{id}/rate-limit", s.handleDomainRateLimitForm)
+	protected.HandleFunc("PATCH /domains/{id}/rate-limit", s.handleDomainRateLimitUpdate)
 
 	// Aliases
 	protected.HandleFunc("POST /domains/{id}/aliases", s.handleAliasCreate)

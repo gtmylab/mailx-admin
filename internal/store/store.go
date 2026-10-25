@@ -29,7 +29,9 @@ func (s *Store) listDomains(ctx context.Context, tx queryer) ([]models.Domain, e
 	rows, err := tx.QueryContext(ctx, `
         SELECT id, name, is_primary, dkim_selector,
                COALESCE(dkim_private_key_path, ''), COALESCE(dkim_public_record, ''),
-               dkim_created_at, active, created_at, updated_at
+               dkim_created_at, active, created_at, updated_at,
+               COALESCE(outbound_rate_limit, 0), COALESCE(outbound_rate_burst, 0),
+               COALESCE(outbound_rate_action, 'defer')
         FROM domains
         WHERE active = 1
         ORDER BY is_primary DESC, name ASC
@@ -49,6 +51,7 @@ func (s *Store) listDomains(ctx context.Context, tx queryer) ([]models.Domain, e
 			&d.ID, &d.Name, &isPrimary, &d.DKIMSelector,
 			&d.DKIMPrivateKeyPath, &d.DKIMPublicRecord,
 			&dkimCreated, &active, &d.CreatedAt, &d.UpdatedAt,
+			&d.OutboundRateLimit, &d.OutboundRateBurst, &d.OutboundRateAction,
 		); err != nil {
 			return nil, fmt.Errorf("scan domain: %w", err)
 		}

@@ -170,12 +170,17 @@ func BuildPlan(domain models.Domain, serverIP, hostname string) *RecordPlan {
 	}
 
 	// ---- DMARC ----------------------------------------------------------
-	dmarc := fmt.Sprintf("v=DMARC1; p=quarantine; pct=100; rua=mailto:admin@%s; ruf=mailto:admin@%s; sp=quarantine; aspf=r; adkim=r", name, name)
+	// The reports go to postmaster@, not admin@: a new domain has no admin@
+	// mailbox, so every aggregate report DMARC receivers send would bounce —
+	// which is how an operator ends up with a policy that is being evaluated
+	// but no data about it. The panel creates postmaster@<domain> with the
+	// domain (see mutations.applyCreateDomainTx), so this address exists.
+	dmarc := fmt.Sprintf("v=DMARC1; p=quarantine; pct=100; rua=mailto:postmaster@%s; ruf=mailto:postmaster@%s; sp=quarantine; aspf=r; adkim=r", name, name)
 	add(Record{
 		Type: TypeTXT, Name: "_dmarc." + name,
 		Value:    dmarc,
 		Purpose:  "DMARC (policy + reports)",
-		Note:     "Quarantines mail that fails DMARC and sends aggregate + forensic reports to admin@" + name + ".",
+		Note:     "Quarantines mail that fails DMARC and sends aggregate + forensic reports to postmaster@" + name + ".",
 		Required: false, Checkable: true,
 		Expected: Expected{Type: TypeTXT, Name: "_dmarc." + name, Value: dmarc, Purpose: "DMARC", Required: false},
 	})

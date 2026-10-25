@@ -594,6 +594,19 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 1rem 0; }
 .table-actions { text-align: right; white-space: nowrap; }
 .table-compact th, .table-compact td { padding: 0.4rem 0.6rem; }
 
+/* DNS record tables. A DKIM public key, an SPF string or a DMARC record is one
+   unbroken token of 200+ characters, and under the default `table-layout: auto`
+   that token sets the table's min-content width: the Value column ate the whole
+   row and pushed the Actions buttons out of the card. Fixed layout plus the
+   <colgroup> in domain_dns.html pins each column to the width it deserves, and
+   `overflow-wrap: anywhere` (which, unlike `word-break: break-word`, is taken
+   into account when the browser computes intrinsic widths) makes the token wrap
+   instead of widening the table. */
+.table-dns { table-layout: fixed; }
+.table-dns th, .table-dns td { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.table-dns .table-actions { white-space: normal; }
+.table-dns .btn-group { flex-wrap: wrap; justify-content: flex-end; }
+
 .list { display: flex; flex-direction: column; }
 .list-row {
   display: flex;

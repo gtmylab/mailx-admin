@@ -3,10 +3,12 @@ package doctor
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gtmylab/mailx-admin/internal/dovecot"
 	"github.com/gtmylab/mailx-admin/internal/roundcube"
@@ -398,4 +400,111 @@ func firstFew(items []string, n int) string {
 		return strings.Join(items, ", ")
 	}
 	return strings.Join(items[:n], ", ") + fmt.Sprintf(" (+%d more)", len(items)-n)
+}
+
+// managesieveCheck reports whether the ManageSieve service is there at all.
+//
+// Filters are the one part of the panel whose failure mode is silence. The
+// panel writes ~/sieve/managesieve.sieve itself, so a rule created here looks
+// saved, and delivery reads the script — but Roundcube's Filters page talks to
+// managesieved over port 4190, and that daemon only starts when the protocol is
+// listed in `protocols`. An install whose `protocols` line was
+// "imap pop3 lmtp" therefore shows a Filters page that cannot connect, with
+// nothing anywhere saying why. Roundcube additionally needs the managesieve
+// plugin enabled and pointing at the port, which is checked here too.
+func managesieveCheck(opts Options) Check {
+	const name = "managesieved (filters)"
+
+	if opts.Config == nil {
+		return Check{}
+	}
+	confDir := opts.Config.Mail.DovecotConfDir
+	conf := filepath.Join(confDir, "dovecot.conf")
+
+	src, err := os.ReadFile(conf)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Check{
+				Name:   name,
+				Status: Info,
+				Detail: "there is no " + conf + " on this host",
+			}
+		}
+		return Check{Name: name, Status: Warn, Detail: err.Error()}
+	}
+
+	if !protocolsIncludeSieve(string(src)) {
+		return Check{
+			Name:   name,
+			Status: Warn,
+			Detail: "`protocols` in " + conf + " does not list `sieve`, so managesieved never starts",
+			Hint: "Roundcube's Filters page cannot connect and every filter saved from it is lost; " +
+				"set `protocols = imap pop3 lmtp sieve` (re-running the installer does it) and restart Dovecot",
+			Command: "systemctl restart dovecot",
+		}
+	}
+
+	// The protocol being enabled is not the same as a listener existing: the
+	// installer used to write a 10-master.conf with no managesieve-login block.
+	if master, err := os.ReadFile(filepath.Join(confDir, "conf.d", "10-master.conf")); err == nil {
+		if !strings.Contains(string(master), "managesieve-login") {
+			return Check{
+				Name:   name,
+				Status: Warn,
+				Detail: "`sieve` is enabled but 10-master.conf has no managesieve-login block, so nothing listens on 4190",
+				Hint:   "add `service managesieve-login { inet_listener sieve { port = 4190 } }` and restart Dovecot (the installer does this too)",
+			}
+		}
+	}
+
+	// Finally, ask the socket. Config files can say one thing and the running
+	// daemon another, which is exactly the state that is hardest to diagnose.
+	if !opts.SkipServices {
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:4190", 2*time.Second)
+		if err != nil {
+			return Check{
+				Name:    name,
+				Status:  Warn,
+				Detail:  "configured, but nothing accepts a connection on 127.0.0.1:4190",
+				Hint:    "the daemon may not be running, or it failed to start; `journalctl -u dovecot -n 30` says which",
+				Command: "systemctl status dovecot",
+			}
+		}
+		_ = conn.Close()
+		return Check{Name: name, Status: OK, Detail: "listening on 127.0.0.1:4190"}
+	}
+
+	return Check{Name: name, Status: OK, Detail: "`sieve` is enabled in " + conf}
+}
+
+// protocolsIncludeSieve answers whether Dovecot's `protocols` setting enables
+// the sieve protocol, which is what starts managesieved.
+//
+// The last assignment wins (Dovecot reads the file top to bottom), comments are
+// ignored, and the value is a whitespace-separated list — Dovecot accepts
+// `protocols=imap pop3 lmtp sieve` as readily as one with spaces around the `=`.
+func protocolsIncludeSieve(conf string) bool {
+	enabled := false
+	for _, raw := range strings.Split(conf, "\n") {
+		line := strings.TrimSpace(raw)
+		if i := strings.IndexByte(line, '#'); i >= 0 {
+			line = strings.TrimSpace(line[:i])
+		}
+		if !strings.HasPrefix(line, "protocols") {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(line, "protocols"))
+		if !strings.HasPrefix(rest, "=") {
+			// `protocols` on its own is not an assignment (and `protocol
+			// imap {` in a different file never reaches here).
+			continue
+		}
+		enabled = false
+		for _, p := range strings.Fields(strings.TrimPrefix(rest, "=")) {
+			if p == "sieve" {
+				enabled = true
+			}
+		}
+	}
+	return enabled
 }

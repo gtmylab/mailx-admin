@@ -3,7 +3,10 @@ package doctor
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -84,6 +87,78 @@ func serviceCheck(ctx context.Context, opts Options) Check {
 		}
 	}
 	return Check{Name: "services", Status: OK, Detail: "postfix, dovecot and opendkim are active"}
+}
+
+// rateLimitCheck answers "is the thing I configured actually running?" for the
+// per-domain outgoing rate limits.
+//
+// The failure it exists for is a limit that looks configured in the panel and is
+// silently not enforced: the row is in the database, /etc/postfwd.cf is written,
+// main.cf tells Postfix to consult it -- and postfwd is not installed, not
+// running, or listening elsewhere. Nothing else in the panel shows that, and
+// Postfix's DUNNO fallback means mail keeps flowing, so the operator's only clue
+// is a limit that never triggers.
+func rateLimitCheck(ctx context.Context, opts Options) Check {
+	const name = "outgoing rate limits"
+	if opts.Store == nil {
+		return Check{}
+	}
+
+	snap, err := opts.Store.Snapshot(ctx)
+	if err != nil {
+		return Check{Name: name, Status: Warn, Detail: "the configured limits could not be read: " + err.Error()}
+	}
+
+	var limited []string
+	for _, d := range snap.Domains {
+		if d.Active && d.RateLimited() {
+			limited = append(limited, fmt.Sprintf("%s (%d/h)", d.Name, d.OutboundRateLimit))
+		}
+	}
+	if len(limited) == 0 {
+		return Check{Name: name, Status: Info, Detail: "no domain has an outgoing rate limit"}
+	}
+	sort.Strings(limited)
+	detail := fmt.Sprintf("%d domain(s): %s", len(limited), firstFew(limited, 4))
+
+	if opts.SkipServices {
+		return Check{Name: name, Status: Info, Detail: detail}
+	}
+	if _, err := exec.LookPath("postfwd"); err != nil {
+		return Check{
+			Name:    name,
+			Status:  Warn,
+			Detail:  detail + ", but postfwd is not installed",
+			Hint:    "the limits are written and Postfix asks for them, but nothing answers: install postfwd (re-running the installer does it)",
+			Command: "apt-get install postfwd",
+		}
+	}
+	if out, err := execx.Output(ctx, 10*time.Second, "systemctl", "is-active", "postfwd"); err != nil {
+		return Check{
+			Name:    name,
+			Status:  Warn,
+			Detail:  detail + ", but the postfwd service is " + strings.TrimSpace(string(out)),
+			Hint:    "Postfix falls back to DUNNO, so mail flows and nothing is limited; journalctl -u postfwd says why",
+			Command: "systemctl status postfwd",
+		}
+	}
+
+	// Postfix is configured to ask for a policy decision only when a limit
+	// exists; a main.cf without that hook means the sync never ran.
+	if opts.Config != nil {
+		mainCF := filepath.Join(opts.Config.Mail.PostfixConfDir, "main.cf")
+		if src, err := os.ReadFile(mainCF); err == nil && !strings.Contains(string(src), "check_policy_service inet:127.0.0.1:10040") {
+			return Check{
+				Name:    name,
+				Status:  Warn,
+				Detail:  detail + ", and postfwd is running, but " + mainCF + " never asks it",
+				Hint:    "the queue accepts mail without consulting the limits; run `mailx-admin sync` to render main.cf",
+				Command: "mailx-admin sync",
+			}
+		}
+	}
+
+	return Check{Name: name, Status: OK, Detail: detail + ", enforced by postfwd"}
 }
 
 // lastSyncCheck reports what the panel's own sync history says, which is the

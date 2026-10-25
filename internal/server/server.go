@@ -48,10 +48,17 @@ type Server struct {
 	syncer     *syncer.Syncer
 	sessions   *auth.SessionStore
 	csrf       *auth.CSRFManager
-	auditor    *audit.Logger
-	templates  *templateSet
-	logger     *slog.Logger
-	metrics    *metrics.Collector
+
+	// pending holds password-verified sign-ins that are waiting for their
+	// second factor (see pending_login.go). Lazily created, so a Server built
+	// by hand in a test still works.
+	pendingOnce sync.Once
+	pending     *pendingLogins
+
+	auditor   *audit.Logger
+	templates *templateSet
+	logger    *slog.Logger
+	metrics   *metrics.Collector
 
 	// updater checks for and applies releases. The cached status feeds the
 	// update banner and the Updates page; updateMu guards updateState.

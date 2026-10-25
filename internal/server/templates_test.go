@@ -64,6 +64,7 @@ var fragmentTemplateNames = []string{
 	"password_form",
 	"password_reveal",
 	"domain_form",
+	"domain_rate_limit_form",
 	"preview_diff",
 	"form_error",
 	"audit_table",

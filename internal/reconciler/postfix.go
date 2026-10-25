@@ -115,6 +115,21 @@ func RenderPostfixMainCF(snap *models.Snapshot, hostname string) []byte {
 	b.WriteString("\n# Suppression checks\n")
 	b.WriteString("smtpd_sender_restrictions = check_sender_access hash:/etc/postfix/suppressions_in\n")
 
+	// The postfwd rules themselves are in /etc/postfwd.cf (see
+	// RenderPostfwdConf); this is the hook that makes Postfix ask. It is emitted
+	// only when a limit exists, so an install that never set one does not gain a
+	// dependency on a daemon it does not run.
+	if hasRateLimits(snap) {
+		b.WriteString("\n# Outgoing rate limits (postfwd)\n")
+		// end-of-data is the point at which the envelope is complete and the
+		// message has been received: what postfwd counts.
+		b.WriteString("smtpd_end_of_data_restrictions = check_policy_service inet:127.0.0.1:10040\n")
+		b.WriteString("smtpd_policy_service_timeout = 10s\n")
+		// DUNNO, not REJECT: if postfwd is down or slow, mail has to keep
+		// flowing. A rate limiter that becomes an outage is worse than none.
+		b.WriteString("smtpd_policy_service_default_action = DUNNO\n")
+	}
+
 	b.WriteString("\n# END mailx-admin managed block\n")
 	return b.Bytes()
 }
