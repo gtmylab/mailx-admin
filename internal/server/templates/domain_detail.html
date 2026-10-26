@@ -54,11 +54,16 @@
     <span class="stat-hint">{{if $d.DKIMCreatedAt}}created {{humanTime $d.DKIMCreatedAt}}{{else}}no key generated yet{{end}}</span>
   </div>
   <div class="stat {{if $d.RateLimited}}stat-ok{{end}}">
-    <span class="stat-label">Outgoing limit</span>
-    <span class="stat-value">{{if $d.RateLimited}}{{$d.OutboundRateLimit}}<small>/hour</small>{{else}}none{{end}}</span>
+    <span class="stat-label">Outgoing caps</span>
+    <span class="stat-value">
+      {{if not $d.RateLimited}}none
+      {{else if $d.OutboundRateLimit}}{{$d.OutboundRateLimit}}<small>/hour</small>
+      {{else if $d.OutboundRateDaily}}{{$d.OutboundRateDaily}}<small>/day</small>
+      {{else}}{{$d.OutboundRateMonthly}}<small>/month</small>{{end}}
+    </span>
     <span class="stat-hint">
       {{if $d.RateLimited}}
-        {{if $d.OutboundRateBurst}}burst {{$d.OutboundRateBurst}}/minute, {{end}}{{if eq $d.RateAction "reject"}}rejecting{{else}}deferring{{end}} over the limit
+        {{if $d.OutboundRateDaily}}{{$d.OutboundRateDaily}}/day{{if $d.OutboundRateMonthly}} · {{end}}{{end}}{{if $d.OutboundRateMonthly}}{{$d.OutboundRateMonthly}}/month{{end}}{{if $d.OutboundRateBurst}}{{if or $d.OutboundRateDaily $d.OutboundRateMonthly}} · {{end}}burst {{$d.OutboundRateBurst}}/minute{{end}} · {{if eq $d.RateAction "reject"}}rejecting{{else}}deferring{{end}} over a cap
       {{else}}
         no cap on mail sent from this domain
       {{end}}
@@ -67,6 +72,44 @@
   <div class="stat">
     <span class="stat-label">Domain ID</span>
     <span class="stat-value mono">{{$d.ID}}</span>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">
+    <h2>Sending</h2>
+    <span class="dim text-xs">rolling windows, from the mail log</span>
+  </div>
+  <div class="card-body">
+    {{with .Data.Usage}}
+    <div class="grid grid-cols-3 gap-4">
+      <div class="stat {{if and $d.OutboundRateLimit (ge .LastHour $d.OutboundRateLimit)}}stat-warn{{end}}">
+        <span class="stat-label">Last 60 minutes</span>
+        <span class="stat-value">{{.LastHour}}</span>
+        <span class="stat-hint">{{if $d.OutboundRateLimit}}cap {{$d.OutboundRateLimit}}/hour{{else}}no hourly cap{{end}}</span>
+      </div>
+      <div class="stat {{if and $d.OutboundRateDaily (ge .LastDay $d.OutboundRateDaily)}}stat-warn{{end}}">
+        <span class="stat-label">Last 24 hours</span>
+        <span class="stat-value">{{.LastDay}}</span>
+        <span class="stat-hint">{{if $d.OutboundRateDaily}}cap {{$d.OutboundRateDaily}}/day{{else}}no daily cap{{end}}</span>
+      </div>
+      <div class="stat {{if and $d.OutboundRateMonthly (ge .LastMonth $d.OutboundRateMonthly)}}stat-warn{{end}}">
+        <span class="stat-label">Last 30 days</span>
+        <span class="stat-value">{{.LastMonth}}</span>
+        <span class="stat-hint">{{if $d.OutboundRateMonthly}}cap {{$d.OutboundRateMonthly}}/month{{else}}no monthly cap{{end}}</span>
+      </div>
+    </div>
+    <p class="text-xs dim mt-3">
+      One row per message (by queue id), recorded by the log ingester, so these can lag slightly
+      behind postfwd. The caps are enforced over the last 3600 seconds, 24 hours and 30 days —
+      not over calendar hours, days or months.
+    </p>
+    {{else}}
+    <p class="text-sm dim">
+      Sending counts are unavailable: the mail event log could not be read. The caps are
+      enforced by postfwd either way.
+    </p>
+    {{end}}
   </div>
 </div>
 

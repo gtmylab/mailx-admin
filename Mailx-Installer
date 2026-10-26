@@ -394,7 +394,15 @@ ensure_dovecot_managesieve() {
         fi
     fi
 
-    if [ -f "$master" ] && ! grep -qE '^[[:space:]]*service[[:space:]]+managesieve-login' "$master"; then
+    # The listener may already live in its own drop-in (conf.d/20-managesieve.conf
+    # is the conventional place). Appending a second block for the same port
+    # makes Dovecot refuse to start, so check the whole directory, not just
+    # 10-master.conf.
+    if grep -qE '^[[:space:]]*service[[:space:]]+managesieve-login' /etc/dovecot/conf.d/*.conf 2>/dev/null; then
+        return 0
+    fi
+
+    if [ -f "$master" ]; then
         cat >> "$master" <<'EOF'
 
 service managesieve-login {
@@ -409,6 +417,26 @@ service managesieve-login {
 EOF
         log_info "Added the managesieved listener on 127.0.0.1:4190"
     fi
+}
+
+# ms_probe_greeting prints the first line the ManageSieve port sends, or nothing
+# when nothing answers.
+#
+# This is the check that separates the two failures which both surface in
+# Roundcube as "Unable to connect to managesieve server": no listener at all
+# (empty output) versus the listener being up but not speaking ManageSieve
+# (output that is not a greeting). A configuration-only check cannot tell them
+# apart, and they have completely different fixes.
+ms_probe_greeting() {
+    local host=${1:-127.0.0.1} port=${2:-4190} wait=${3:-3}
+
+    # The greeting ends in CRLF; `tr` drops the CR so the caller can match the
+    # line and log it without a stray carriage return.
+    timeout $((wait + 2)) bash -c "
+        exec 3<>/dev/tcp/${host}/${port} || exit 1
+        IFS= read -r -t ${wait} line <&3
+        printf '%s' \"\$line\"
+    " 2>/dev/null | tr -d '\r' || true
 }
 
 configure_dovecot_sasl() {
@@ -2201,6 +2229,33 @@ EOF
 # Roundcube Installation
 # ============================================================================
 
+# mailx_insert_before_close inserts one line of PHP before the closing "?>".
+#
+# sed's `i` command would be shorter, but it needs the inserted text to begin
+# with a literal "\$", and bash folds that escape away: "\\$config" becomes a
+# backslash followed by an *empty* $config, so the file gains
+# "\['managesieve_host'] = ..." -- a PHP parse error that blanks the webmail.
+# awk takes the line as a value and prints it verbatim.
+#
+# Returns 1 when the file has no closing tag (the caller appends instead), and 2
+# when awk could not write the temporary file.
+mailx_insert_before_close() {
+    local file=$1 line=$2
+    local tmp="$file.mailx.tmp"
+
+    grep -qF '?>' "$file" || return 1
+
+    if ! awk -v line="$line" '/^[[:space:]]*[?]>/ && !done { print line; done = 1 } { print }' "$file" > "$tmp"; then
+        rm -f "$tmp"
+        return 2
+    fi
+    # cat > file keeps the original inode and mode; mv would not.
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
+    return 0
+}
+
+
 rc_set_config() {
     local file=$1 key=$2 value=$3
 
@@ -2209,11 +2264,10 @@ rc_set_config() {
         return
     fi
 
-    if grep -qF '?>' "$file"; then
-        sed -i -E "/^[?]>/i \$config['$key'] = $value;" "$file"
-    else
-        printf '%s\n' "\$config['$key'] = $value;" >> "$file"
+    if mailx_insert_before_close "$file" "\$config['$key'] = $value;"; then
+        return
     fi
+    printf '%s\n' "\$config['$key'] = $value;" >> "$file"
 }
 
 rc_enable_plugin() {
@@ -2221,29 +2275,68 @@ rc_enable_plugin() {
 
     [ -f "$file" ] || return 1
 
-    if grep -qF "'$plugin'" "$file"; then
+    # Some Roundcube samples ship the plugin list commented out. Uncomment the
+    # *empty* forms before editing: inserting into "// $config['plugins'] = ["
+    # leaves a bare "'managesieve',];" line behind, which is a PHP parse error
+    # and takes the whole webmail down instead of just the Filters page. A
+    # populated commented-out sample is deliberately left alone -- uncommenting
+    # that would override the operator's own list with the example one.
+    # Two expressions rather than one alternation: `|` is the s delimiter, and
+    # an alternation inside the pattern makes sed read it as the end of the
+    # command ("unknown option to s").
+    sed -i -E "s|^[[:space:]]*//[[:space:]]*([$]config\['plugins'\][[:space:]]*=[[:space:]]*array\(\)[[:space:]]*;)|\1|" "$file"
+    sed -i -E "s|^[[:space:]]*//[[:space:]]*([$]config\['plugins'\][[:space:]]*=[[:space:]]*\[\][[:space:]]*;)|\1|" "$file"
+
+    # Already enabled? Only a non-comment mention counts, so the sample config's
+    # commented examples cannot make this look done when it is not.
+    if grep -vE "^[[:space:]]*(//|/\*|\*)" "$file" | grep -qF "'$plugin'"; then
         return 0
     fi
 
-    if grep -qF "\$config['plugins'] = array();" "$file"; then
-        sed -i "s|[$]config\['plugins'\] = array();|\$config['plugins'] = ['$plugin'];|" "$file"
+    if grep -qE "^[[:space:]]*[$]config\['plugins'\][[:space:]]*=[[:space:]]*array\(\);" "$file"; then
+        sed -i -E "s|^[[:space:]]*[$]config\['plugins'\][[:space:]]*=[[:space:]]*array\(\);|\$config['plugins'] = array('$plugin');|" "$file"
         return 0
     fi
 
-    if grep -qF "\$config['plugins'] = [" "$file"; then
-        sed -i "s|[$]config\['plugins'\] = \[|\$config['plugins'] = [\n    '$plugin',|" "$file"
+    # An empty list is the common case (Roundcube 1.6's sample): replace it
+    # wholesale, which keeps the file to a single assignment.
+    if grep -qE "^[[:space:]]*[$]config\['plugins'\][[:space:]]*=[[:space:]]*\[\];" "$file"; then
+        sed -i -E "s|^[[:space:]]*[$]config\['plugins'\][[:space:]]*=[[:space:]]*\[\];|\$config['plugins'] = ['$plugin'];|" "$file"
+        return 0
+    fi
+
+    # A populated list is extended in place. The plugin goes on its own line with
+    # a trailing comma, which is valid for both spellings and keeps the
+    # operator's own entries readable.
+    if grep -qE "^[[:space:]]*[$]config\['plugins'\][[:space:]]*=[[:space:]]*\[" "$file"; then
+        sed -i -E "s|^([[:space:]]*[$]config\['plugins'\][[:space:]]*=[[:space:]]*\[)|\$config['plugins'] = [\n    '$plugin',\n    |" "$file"
         return 0
     fi
 
     # Older Roundcube samples use array(...) instead of [...]; appending a
     # second assignment would silently disable every plugin the operator had
     # enabled, so extend the existing call instead.
-    if grep -qF "\$config['plugins'] = array(" "$file"; then
-        sed -i "s|[$]config\['plugins'\] = array(|\$config['plugins'] = array(\n    '$plugin',|" "$file"
+    if grep -qE "^[[:space:]]*[$]config\['plugins'\][[:space:]]*=[[:space:]]*array\(" "$file"; then
+        sed -i -E "s|^([[:space:]]*[$]config\['plugins'\][[:space:]]*=[[:space:]]*array\()|\$config['plugins'] = array(\n    '$plugin',\n    |" "$file"
         return 0
     fi
 
-    printf '%s\n' "\$config['plugins'] = ['$plugin'];" >> "$file"
+    # No active plugins line at all. Insert before "?>" when there is one:
+    # appending after it would put the assignment outside PHP, where it is
+    # printed as text and every plugin stays disabled.
+    #
+    # awk rather than sed's `i` command: sed needs the text to start with a
+    # literal "\$", and the obvious shell spelling of that expands $config to
+    # nothing, leaving "\['plugins'] = ..." -- a PHP parse error.
+    local line="\$config['plugins'] = ['$plugin'];"
+    if grep -qF '?>' "$file"; then
+        local tmp="$file.mailx.tmp"
+        awk -v line="$line" '/^[[:space:]]*[?]>/ && !done { print line; done = 1 } { print }' "$file" > "$tmp" &&
+            cat "$tmp" > "$file"
+        rm -f "$tmp"
+    else
+        printf '%s\n' "$line" >> "$file"
+    fi
 }
 
 # rc_configure_managesieve points Roundcube at the managesieved this installer
@@ -2267,7 +2360,92 @@ rc_configure_managesieve() {
     rc_set_config "$file" managesieve_usetls "false"
     rc_enable_plugin "$file" managesieve
 
+    # The plugin code lives in Roundcube's "complete" package. A --no-plugins
+    # tarball or a hand-rolled install can have this config and still show no
+    # Filters tab, and that looks exactly like a broken connection.
+    local rc_root
+    rc_root=$(cd "$(dirname "$file")/.." 2>/dev/null && pwd)
+    if [ -n "$rc_root" ] && [ ! -d "$rc_root/plugins/managesieve" ]; then
+        log_warning "Roundcube has no plugins/managesieve directory — reinstall Roundcube to get the Filters tab"
+    fi
+
     log_info "Roundcube managesieve plugin enabled (127.0.0.1:4190)"
+}
+
+# repair_webmail_filters makes webmail filters work end to end, and is
+# deliberately outside every stage gate.
+#
+# This is the fix for "Unable to connect to managesieve server!" surviving
+# several releases. Every other repair path is wrapped in
+# `is_stage_completed`, and those markers are written by successful installs --
+# so on exactly the servers that need repairing (an existing install, where
+# stage 4 returns early because Dovecot SASL is already configured and stage 9
+# returns early because config.inc.php already exists) none of it ever ran:
+#
+#   * dovecot-managesieved was installed only on the fresh path, so
+#     `protocols = ... sieve` had no daemon to start and 4190 stayed closed;
+#   * nothing restarted Dovecot after the protocol/listener repair, so even a
+#     corrected config was not loaded;
+#   * nothing ever asked the port whether it answers.
+#
+# The Dovecot restart is unconditional: a ManageSieve repair that does not reload
+# the daemon is exactly the bug this function exists to fix, and the install and
+# update paths restart Dovecot right afterwards anyway, so it costs no extra
+# downtime there.
+#
+# Runs on every install, on `./Mailx-Installer update`, and from menu option 26.
+repair_webmail_filters() {
+    local rc_root=/var/www/html/roundcube
+    local rc_conf="$rc_root/config/config.inc.php"
+
+    log_info "=== Webmail filters (ManageSieve) repair ==="
+
+    if [ ! -d /etc/dovecot ]; then
+        log_warning "Dovecot is not installed — skipping the ManageSieve repair"
+        return 0
+    fi
+
+    local pkg
+    for pkg in dovecot-sieve dovecot-managesieved; do
+        if ! is_package_installed "$pkg"; then
+            log_info "Installing $pkg (ManageSieve needs it)..."
+            apt_install "$pkg" || log_warning "Could not install $pkg"
+        fi
+    done
+
+    ensure_dovecot_managesieve
+
+    if ! dovecot -n >/dev/null 2>&1; then
+        log_warning "Dovecot rejects its own configuration; run 'dovecot -n' and fix the error it prints"
+    fi
+
+    systemctl restart dovecot 2>/dev/null || \
+        log_warning "dovecot restart failed: journalctl -u dovecot -n 40"
+
+    if [ -f "$rc_conf" ]; then
+        rc_configure_managesieve "$rc_conf"
+    else
+        log_warning "Roundcube is not installed at $rc_root — filters stay unavailable in webmail"
+    fi
+
+    local greeting
+    greeting=$(ms_probe_greeting 127.0.0.1 4190 3)
+
+    if printf '%s' "$greeting" | grep -qi 'IMPLEMENTATION'; then
+        log_info "ManageSieve OK (127.0.0.1:4190, Roundcube plugin enabled)"
+        return 0
+    fi
+
+    if [ -z "$greeting" ]; then
+        log_error "Nothing answered on 127.0.0.1:4190 — the webmail Filters page will fail with"
+        log_error "\"Unable to connect to managesieve server\". Check: journalctl -u dovecot -n 40"
+        log_error "and: ss -ltnp | grep 4190"
+        return 1
+    fi
+
+    log_error "Port 4190 answered, but not with a ManageSieve greeting: $greeting"
+    log_error "Something else is bound to the port: ss -ltnp | grep 4190"
+    return 1
 }
 
 install_roundcube_application() {
@@ -3824,6 +4002,12 @@ update_mailx_admin() {
 
     log_info "mailx-admin updated: $old_version -> $new_version"
     "$ADMIN_BINARY_PATH" --version
+
+    # An update is the natural moment to repair webmail filters: the panel and
+    # the installer ship together, and the server has just proved it can be
+    # changed. Best effort — a broken ManageSieve must not fail the update.
+    repair_webmail_filters || \
+        log_warning "Webmail filters are still not working — see the errors above or re-run menu option 26"
 }
 
 write_roundcube_ssl_vhost() {
@@ -4321,6 +4505,12 @@ EOF
     systemctl restart opendkim 2>/dev/null || true
     sleep 2
     systemctl restart apache2 dovecot postfix 2>/dev/null || true
+
+    # Not inside a stage: the stage markers exist on every server installed
+    # before this function did, and those are the servers with a dead Filters
+    # page. Runs last, so the restart above is not undone.
+    repair_webmail_filters || \
+        log_warning "Webmail filters are still not working — fix the errors above, then use menu option 26"
 
     if [ -x "$ADMIN_BINARY_PATH" ] && [ -f "$ADMIN_CONFIG_FILE" ]; then
         log_info "Running post-install reconcile (dry-run)..."
@@ -4913,6 +5103,11 @@ menu_install_plugins() {
     read -p "Press Enter..." _
 }
 
+menu_repair_webmail_filters() {
+    repair_webmail_filters
+    read -p "Press Enter..." _
+}
+
 # ============================================================================
 # Main menu
 # ============================================================================
@@ -5013,6 +5208,7 @@ main_menu() {
         echo -e "${BOLD}  ROUNDCUBE${NC}"
         echo "   23)  Setup Composer & Roundcube user"
         echo "   24)  Install Roundcube plugins"
+        echo "   26)  Repair webmail filters (ManageSieve)"
         echo ""
         echo -e "${BOLD}  FIREWALL (UFW)${NC}"
         echo "   25)  Manage UFW ports (list / add / remove / ranges)"
@@ -5046,6 +5242,7 @@ main_menu() {
             23) menu_setup_composer ;;
             24) menu_install_plugins ;;
             25) menu_firewall ;;
+            26) menu_repair_webmail_filters ;;
             0)  echo "Exiting."; exit 0 ;;
             *)  log_warning "Invalid option: '$choice'"; sleep 1 ;;
         esac

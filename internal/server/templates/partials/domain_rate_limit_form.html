@@ -16,8 +16,8 @@
 
       <p class="text-sm muted">
         Mail sent from <span class="mono">{{.Domain.Name}}</span> is counted by postfwd and
-        answered with a temporary failure once the limit is reached. Leave the hourly limit at
-        <span class="mono">0</span> for no limit.
+        answered with a temporary failure once a cap is reached. Set a window to
+        <span class="mono">0</span> (or leave it empty) for no cap in that window.
       </p>
 
       <label class="field">
@@ -25,7 +25,30 @@
         <input class="input" type="number" name="per_hour" min="0" max="100000" step="1"
                value="{{.Domain.OutboundRateLimit}}" required>
         <span class="field-hint">
-          Counted per hour, per sender domain, for authenticated submissions. 0 disables the limit.
+          Counted over the last 60 minutes, per sender domain, for authenticated submissions.
+          0 disables the hourly cap.
+        </span>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Messages per day</span>
+        <input class="input" type="number" name="per_day" min="0" max="2400000" step="1"
+               value="{{if .Domain.OutboundRateDaily}}{{.Domain.OutboundRateDaily}}{{end}}"
+               placeholder="0">
+        <span class="field-hint">
+          A rolling 24 hours (not midnight to midnight). Cannot be lower than the hourly cap.
+          Leave empty for none.
+        </span>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Messages per month</span>
+        <input class="input" type="number" name="per_month" min="0" max="74400000" step="1"
+               value="{{if .Domain.OutboundRateMonthly}}{{.Domain.OutboundRateMonthly}}{{end}}"
+               placeholder="0">
+        <span class="field-hint">
+          A rolling 30 days (not a calendar month). Cannot be lower than the daily cap.
+          Leave empty for none.
         </span>
       </label>
 
@@ -35,8 +58,8 @@
                value="{{if .Domain.OutboundRateBurst}}{{.Domain.OutboundRateBurst}}{{end}}"
                placeholder="0">
         <span class="field-hint">
-          Extra messages allowed in any 60 seconds, on top of the hourly limit — a newsletter
-          should not be throttled by the hourly average. Needs an hourly limit.
+          Extra messages allowed in any 60 seconds, on top of the caps above — a newsletter
+          should not be throttled by the hourly average. Needs at least one cap.
         </span>
       </label>
 

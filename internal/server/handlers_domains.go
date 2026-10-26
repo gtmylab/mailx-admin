@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gtmylab/mailx-admin/internal/models"
+	"github.com/gtmylab/mailx-admin/internal/store"
 )
 
 func (s *Server) handleDomainsList(w http.ResponseWriter, r *http.Request) {
@@ -97,10 +99,19 @@ func (s *Server) handleDomainDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Sending counters are advisory, the page is not: a log-ingestion problem
+	// must not blank the domain. nil renders as "unavailable" rather than as
+	// zero, which would read as "this domain sent nothing".
+	var usage *store.DomainSendUsage
+	if u, err := s.store.DomainSendUsage(ctx, found.Name, time.Now()); err == nil {
+		usage = &u
+	}
+
 	s.render(w, 200, "domain_detail.html", s.newPageData(w, r, found.Name, "domains", map[string]any{
 		"Domain":   found,
 		"Users":    users,
 		"Aliases":  aliases,
 		"CatchAll": catchAll,
+		"Usage":    usage,
 	}))
 }

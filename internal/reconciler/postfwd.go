@@ -9,11 +9,18 @@ import (
 	"github.com/gtmylab/mailx-admin/internal/models"
 )
 
-// postfwdRateWindow is the window the hourly limit is counted over, and
-// postfwdBurstWindow the one a burst allowance is counted over.
+// postfwdRateWindow is the window the hourly cap is counted over,
+// postfwdDailyWindow and postfwdMonthlyWindow the day and month ones, and
+// postfwdBurstWindow the window a burst allowance is counted over.
+//
+// The day and month windows are 86400 and 2592000 seconds, not calendar
+// periods: postfwd counts a sliding interval and has no way to reset a counter
+// at midnight. The panel says "rolling" wherever the difference is visible.
 const (
-	postfwdRateWindow  = 3600
-	postfwdBurstWindow = 60
+	postfwdRateWindow    = 3600
+	postfwdDailyWindow   = 86400
+	postfwdMonthlyWindow = 2592000 // 30 days
+	postfwdBurstWindow   = 60
 )
 
 // isManagedPostfwdConfig reports whether path does not exist yet (so the panel
@@ -51,21 +58,27 @@ func hasRateLimits(snap *models.Snapshot) bool {
 	return false
 }
 
-// RenderPostfwdConf produces /etc/postfwd.cf: one rate rule per domain that has
-// an outgoing limit, and a final DUNNO so everything else is untouched.
+// RenderPostfwdConf produces /etc/postfwd.cf: one rate rule per cap and domain,
+// and a final DUNNO so everything else is untouched.
 //
-// The syntax is postfwd's, not Postfix's:
+// The syntax is postfwd's, not Postfix's, and it is the documented four-argument
+// form (postfwd.org/example-cfg.txt):
 //
-//	id=RL_0001
+//	id=RL_0001_H
 //	  sender_domain==example.com
 //	  sasl_username=~.+
-//	  action=rate(RL_0001/500/3600/450 4.7.1 ...)
+//	  action=rate(RL_0001_H/500/3600/450 4.7.1 ...)
 //
 // `rate(<key>/<count>/<seconds>/<reply>)` counts messages per key and answers
-// <reply> once <count> messages arrived within <seconds>. The key is the rule's
-// own id: it has to be one token (no `/`, because `/` separates the rate
-// arguments), and it must differ between the hourly rule and its burst sibling,
-// or the two would share one counter and the burst rule could never fire.
+// <reply> once <count> messages arrived within <seconds>; below <count> the
+// action is DUNNO, so the next rule still runs. That is what makes several
+// windows for one domain possible: the message has to pass the hourly, daily and
+// monthly rule in turn, and any one of them can stop it.
+//
+// The key is the rule's own id. It has to be one token (no `/`, because `/`
+// separates the rate arguments) and unique per rule: sharing a key between two
+// windows would put the hourly and the daily count in one bucket, and whichever
+// limit came first would consume the other's allowance.
 //
 // `sasl_username=~.+` restricts the rule to authenticated submissions. Without
 // it the limit would also count *inbound* mail whose envelope sender happens to
@@ -73,6 +86,9 @@ func hasRateLimits(snap *models.Snapshot) bool {
 // mail. It also means the limit only sees port 587/465 traffic: locally
 // generated bounces and cron mail never pass an smtpd, so they are not counted
 // (they are also not what these limits exist for).
+//
+// The daily and monthly numbers are the panel's, not postfwd's: a marketing
+// domain needs a cap that a single bad afternoon cannot exhaust.
 //
 // Domains are sorted by name so the file is stable: postfwd's counters survive a
 // reload (--keep_rates), and an unstable file would make every sync look like a
@@ -82,7 +98,8 @@ func RenderPostfwdConf(domains []models.Domain) []byte {
 	b.WriteString("# Managed by mailx-admin -- DO NOT EDIT\n")
 	b.WriteString("# Outgoing rate limits per sender domain, asked by Postfix through\n")
 	b.WriteString("# smtpd_end_of_data_restrictions (see main.cf).\n")
-	b.WriteString("# Counter keys are the sender domains; --keep_rates keeps them across reloads.\n\n")
+	b.WriteString("# Windows are rolling (3600/86400/2592000s); the key is the rule id and\n")
+	b.WriteString("# --keep_rates keeps counters across reloads.\n\n")
 
 	limited := make([]models.Domain, 0, len(domains))
 	for _, d := range domains {
@@ -94,7 +111,18 @@ func RenderPostfwdConf(domains []models.Domain) []byte {
 
 	for _, d := range limited {
 		id := postfwdRuleID("RL", d.ID)
-		writePostfwdRule(&b, id, d, d.OutboundRateLimit, postfwdRateWindow, "hour")
+		// Each window gets its own id and its own counter. Shortest first, so
+		// the cheapest rejection (the hourly cap) is asked before the day and
+		// month counters are touched.
+		if d.OutboundRateLimit > 0 {
+			writePostfwdRule(&b, id+"_H", d, d.OutboundRateLimit, postfwdRateWindow, "hour")
+		}
+		if d.OutboundRateDaily > 0 {
+			writePostfwdRule(&b, id+"_D", d, d.OutboundRateDaily, postfwdDailyWindow, "day")
+		}
+		if d.OutboundRateMonthly > 0 {
+			writePostfwdRule(&b, id+"_M", d, d.OutboundRateMonthly, postfwdMonthlyWindow, "month")
+		}
 		if d.OutboundRateBurst > 0 {
 			writePostfwdRule(&b, id+"_BURST", d, d.OutboundRateBurst, postfwdBurstWindow, "minute")
 		}

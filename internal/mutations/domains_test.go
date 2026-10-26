@@ -93,6 +93,20 @@ func TestValidateRateLimit(t *testing.T) {
 		{"burst above the ceiling", SetDomainRateLimitInput{PerHour: 10, Burst: rateLimitMaxBurst + 1}, false, ""},
 		{"burst without a limit", SetDomainRateLimitInput{Burst: 10}, false, ""},
 		{"unknown action", SetDomainRateLimitInput{PerHour: 10, Action: "drop"}, false, ""},
+
+		// The day and month windows. Each can stand alone, and a shorter window
+		// may never allow less than a longer one -- that pair renders two rules
+		// where one can never fire, and the UI would show a cap that is a lie.
+		{"daily only", SetDomainRateLimitInput{PerDay: 4000}, true, models.RateActionDefer},
+		{"monthly only", SetDomainRateLimitInput{PerMonth: 60000}, true, models.RateActionDefer},
+		{"all three windows", SetDomainRateLimitInput{PerHour: 500, PerDay: 4000, PerMonth: 60000}, true, models.RateActionDefer},
+		{"burst with a daily cap", SetDomainRateLimitInput{PerDay: 4000, Burst: 50}, true, models.RateActionDefer},
+		{"negative daily cap", SetDomainRateLimitInput{PerDay: -1}, false, ""},
+		{"daily above the ceiling", SetDomainRateLimitInput{PerDay: rateLimitMaxPerDay + 1}, false, ""},
+		{"monthly above the ceiling", SetDomainRateLimitInput{PerMonth: rateLimitMaxPerMonth + 1}, false, ""},
+		{"daily below the hourly cap", SetDomainRateLimitInput{PerHour: 500, PerDay: 100}, false, ""},
+		{"monthly below the daily cap", SetDomainRateLimitInput{PerDay: 4000, PerMonth: 1000}, false, ""},
+		{"monthly below the hourly cap", SetDomainRateLimitInput{PerHour: 5000, PerMonth: 1000}, false, ""},
 	}
 
 	for _, c := range cases {
@@ -124,7 +138,8 @@ func TestSetDomainRateLimitReachesThePostfwdConfig(t *testing.T) {
 	}
 
 	if _, err := svc.SetDomainRateLimit(ctx, Actor{Name: "cli:test"}, SetDomainRateLimitInput{
-		DomainID: id, PerHour: 250, Burst: 25, Action: models.RateActionReject,
+		DomainID: id, PerHour: 250, PerDay: 1000, PerMonth: 20000, Burst: 25,
+		Action: models.RateActionReject,
 	}); err != nil {
 		t.Fatalf("SetDomainRateLimit: %v", err)
 	}
@@ -142,16 +157,25 @@ func TestSetDomainRateLimitReachesThePostfwdConfig(t *testing.T) {
 	if got == nil {
 		t.Fatal("the domain is missing from the snapshot the reconciler renders")
 	}
-	if got.OutboundRateLimit != 250 || got.OutboundRateBurst != 25 || got.RateAction() != models.RateActionReject {
-		t.Fatalf("stored limit = %d/h burst %d action %q", got.OutboundRateLimit, got.OutboundRateBurst, got.RateAction())
+	if got.OutboundRateLimit != 250 || got.OutboundRateDaily != 1000 ||
+		got.OutboundRateMonthly != 20000 || got.OutboundRateBurst != 25 ||
+		got.RateAction() != models.RateActionReject {
+		t.Fatalf("stored caps = %d/h %d/d %d/mo burst %d action %q",
+			got.OutboundRateLimit, got.OutboundRateDaily, got.OutboundRateMonthly,
+			got.OutboundRateBurst, got.RateAction())
 	}
 
 	conf := string(reconciler.RenderPostfwdConf(snap.Domains))
+	rule := fmt.Sprintf("RL_%04d", id)
 	for _, want := range []string{
-		fmt.Sprintf("id=RL_%04d", id),
-		fmt.Sprintf("id=RL_%04d_BURST", id),
 		"sender_domain==bulk.test",
-		"action=rate(RL_" + fmt.Sprintf("%04d", id) + "/250/3600/554 5.7.1",
+		"id=" + rule + "_H",
+		"id=" + rule + "_D",
+		"id=" + rule + "_M",
+		"id=" + rule + "_BURST",
+		"action=rate(" + rule + "_H/250/3600/554 5.7.1",
+		"action=rate(" + rule + "_D/1000/86400/554 5.7.1",
+		"action=rate(" + rule + "_M/20000/2592000/554 5.7.1",
 	} {
 		if !strings.Contains(conf, want) {
 			t.Errorf("postfwd config is missing %q:\n%s", want, conf)

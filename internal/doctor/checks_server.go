@@ -111,9 +111,25 @@ func rateLimitCheck(ctx context.Context, opts Options) Check {
 
 	var limited []string
 	for _, d := range snap.Domains {
-		if d.Active && d.RateLimited() {
-			limited = append(limited, fmt.Sprintf("%s (%d/h)", d.Name, d.OutboundRateLimit))
+		if !d.Active || !d.RateLimited() {
+			continue
 		}
+		// Name the windows, not just one number: with day and month caps a
+		// bare "500/h" reads as the whole policy when it is one third of it.
+		var parts []string
+		if d.OutboundRateLimit > 0 {
+			parts = append(parts, fmt.Sprintf("%d/h", d.OutboundRateLimit))
+		}
+		if d.OutboundRateDaily > 0 {
+			parts = append(parts, fmt.Sprintf("%d/d", d.OutboundRateDaily))
+		}
+		if d.OutboundRateMonthly > 0 {
+			parts = append(parts, fmt.Sprintf("%d/mo", d.OutboundRateMonthly))
+		}
+		if d.OutboundRateBurst > 0 {
+			parts = append(parts, fmt.Sprintf("burst %d/min", d.OutboundRateBurst))
+		}
+		limited = append(limited, fmt.Sprintf("%s (%s)", d.Name, strings.Join(parts, " ")))
 	}
 	if len(limited) == 0 {
 		return Check{Name: name, Status: Info, Detail: "no domain has an outgoing rate limit"}
@@ -158,7 +174,39 @@ func rateLimitCheck(ctx context.Context, opts Options) Check {
 		}
 	}
 
+	// postfwd's own parser is the authority on the rendered rules. A rule it
+	// rejects is one Postfix asks about and postfwd answers DUNNO to, which is
+	// a limit that reads as configured and enforces nothing. `-C` parses the
+	// file and exits without touching the running daemon.
+	if opts.Config != nil {
+		conf := filepath.Join(filepath.Dir(opts.Config.Mail.PostfixConfDir), "postfwd.cf")
+		if _, err := os.Stat(conf); err == nil {
+			if out, err := execx.Output(ctx, 10*time.Second, "postfwd", "-C", "-f", conf); err != nil {
+				return Check{
+					Name:    name,
+					Status:  Warn,
+					Detail:  detail + ", but postfwd rejects " + conf + ": " + firstLine(string(out)),
+					Hint:    "a rule postfwd cannot parse is a rule it does not enforce; the file is rendered by the last sync",
+					Command: "postfwd -C -f " + conf,
+				}
+			}
+		}
+	}
+
 	return Check{Name: name, Status: OK, Detail: detail + ", enforced by postfwd"}
+}
+
+// firstLine keeps a command's complaint to one line, so a parser error does not
+// turn a doctor check into a wall of text.
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	if s == "" {
+		return "(no output)"
+	}
+	return s
 }
 
 // lastSyncCheck reports what the panel's own sync history says, which is the

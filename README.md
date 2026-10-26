@@ -64,8 +64,10 @@ phpMyAdmin, Let's Encrypt certificates, and finally the panel itself.
 - Primary-domain selection and per-domain DKIM key regeneration.
 - DNS records and live checks for MX, A/AAAA, PTR, SPF, DKIM and DMARC, with copy/export.
 - A `postmaster@` mailbox per domain, so the address the DMARC record names actually exists.
-- Optional per-domain outgoing rate limit (messages per hour plus a burst allowance),
-  enforced by **postfwd** and answered with a deferral or a rejection.
+- Optional per-domain outgoing caps per hour, per day and per month, plus a burst
+  allowance, enforced by **postfwd** and answered with a deferral or a rejection.
+  All windows are rolling (the last 3600 s / 24 h / 30 days), and the domain page
+  shows what the mail log says the domain has actually sent in each one.
 
 ### Mailboxes, users & aliases
 - Virtual and system mailboxes, quota, per-user usage and per-user mail logs.

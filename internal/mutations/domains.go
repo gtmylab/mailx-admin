@@ -221,22 +221,35 @@ func (s *Service) DeleteDomain(ctx context.Context, actor Actor, domainID int64)
 
 // SetDomainRateLimitInput is the outgoing rate limit for one domain, as the
 // operator entered it.
+//
+// Three windows share one action: a message is refused when it would exceed any
+// of the caps that are set, so the operator can bound a domain per hour, per day
+// and per month independently. The windows are rolling (the last 3600, 86400 and
+// 2592000 seconds), because postfwd counts intervals, not calendar periods.
 type SetDomainRateLimitInput struct {
 	DomainID int64
-	// PerHour is messages per hour; 0 disables the limit.
+	// PerHour is messages per hour; 0 disables the hourly cap.
 	PerHour int
+	// PerDay is messages per rolling day; 0 disables it.
+	PerDay int
+	// PerMonth is messages per rolling month (30 days); 0 disables it.
+	PerMonth int
 	// Burst is the extra allowance in a 60s window (0 = none).
 	Burst int
 	// Action is models.RateActionDefer or models.RateActionReject.
 	Action string
 }
 
-// rateLimitCeiling is the highest hourly limit the panel accepts. Above this the
-// limit is not a limit: it exists to protect the server's reputation, and a
-// number this large cannot be reached by accident.
+// rateLimitCeiling is the highest limit the panel accepts, per window. Above
+// this the limit is not a limit: it exists to protect the server's reputation,
+// and a number this large cannot be reached by accident. Day and month ceilings
+// are derived from the hourly one rather than invented, so a daily cap can
+// always be raised to "an hour's worth per hour, all day".
 const (
-	rateLimitMaxPerHour = 100000
-	rateLimitMaxBurst   = 10000
+	rateLimitMaxPerHour  = 100000
+	rateLimitMaxPerDay   = rateLimitMaxPerHour * 24
+	rateLimitMaxPerMonth = rateLimitMaxPerDay * 31
+	rateLimitMaxBurst    = 10000
 )
 
 func validateRateLimit(in *SetDomainRateLimitInput) error {
@@ -253,14 +266,37 @@ func validateRateLimit(in *SetDomainRateLimitInput) error {
 	if in.PerHour < 0 || in.PerHour > rateLimitMaxPerHour {
 		return fmt.Errorf("%w: messages per hour has to be between 0 and %d", ErrInvalidInput, rateLimitMaxPerHour)
 	}
+	if in.PerDay < 0 || in.PerDay > rateLimitMaxPerDay {
+		return fmt.Errorf("%w: messages per day has to be between 0 and %d", ErrInvalidInput, rateLimitMaxPerDay)
+	}
+	if in.PerMonth < 0 || in.PerMonth > rateLimitMaxPerMonth {
+		return fmt.Errorf("%w: messages per month has to be between 0 and %d", ErrInvalidInput, rateLimitMaxPerMonth)
+	}
 	if in.Burst < 0 || in.Burst > rateLimitMaxBurst {
 		return fmt.Errorf("%w: the burst allowance has to be between 0 and %d", ErrInvalidInput, rateLimitMaxBurst)
 	}
-	if in.PerHour == 0 && in.Burst > 0 {
-		// A burst allowance without an hourly limit is not a limit at all: it
-		// would allow Burst messages per minute forever. Refuse instead of
-		// silently storing something that reads as "limited" in the panel.
-		return fmt.Errorf("%w: a burst allowance needs an hourly limit", ErrInvalidInput)
+	if in.PerHour == 0 && in.PerDay == 0 && in.PerMonth == 0 && in.Burst > 0 {
+		// A burst allowance without any cap is not a limit at all: it would
+		// allow Burst messages per minute forever. Refuse instead of silently
+		// storing something that reads as "limited" in the panel.
+		return fmt.Errorf("%w: a burst allowance needs at least one cap", ErrInvalidInput)
+	}
+
+	// A shorter window cannot allow more than a longer one: a daily cap of 50
+	// with an hourly cap of 100 means the day is exhausted in the first hour and
+	// the hourly number is a lie in the UI. Refuse the pair rather than render
+	// two rules where one is dead.
+	if in.PerHour > 0 && in.PerDay > 0 && in.PerDay < in.PerHour {
+		return fmt.Errorf("%w: the daily cap (%d) cannot be lower than the hourly cap (%d)",
+			ErrInvalidInput, in.PerDay, in.PerHour)
+	}
+	if in.PerDay > 0 && in.PerMonth > 0 && in.PerMonth < in.PerDay {
+		return fmt.Errorf("%w: the monthly cap (%d) cannot be lower than the daily cap (%d)",
+			ErrInvalidInput, in.PerMonth, in.PerDay)
+	}
+	if in.PerHour > 0 && in.PerMonth > 0 && in.PerMonth < in.PerHour {
+		return fmt.Errorf("%w: the monthly cap (%d) cannot be lower than the hourly cap (%d)",
+			ErrInvalidInput, in.PerMonth, in.PerHour)
 	}
 	return nil
 }
@@ -289,14 +325,17 @@ func (s *Service) SetDomainRateLimit(ctx context.Context, actor Actor, in SetDom
 		"domain_id": in.DomainID,
 		"domain":    name,
 		"per_hour":  in.PerHour,
+		"per_day":   in.PerDay,
+		"per_month": in.PerMonth,
 		"burst":     in.Burst,
 		"action":    in.Action,
 	}, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE domains
-			SET outbound_rate_limit = ?, outbound_rate_burst = ?, outbound_rate_action = ?
+			SET outbound_rate_limit = ?, outbound_rate_daily = ?, outbound_rate_monthly = ?,
+			    outbound_rate_burst = ?, outbound_rate_action = ?
 			WHERE id = ?
-		`, in.PerHour, in.Burst, in.Action, in.DomainID)
+		`, in.PerHour, in.PerDay, in.PerMonth, in.Burst, in.Action, in.DomainID)
 		return err
 	})
 	if err != nil {

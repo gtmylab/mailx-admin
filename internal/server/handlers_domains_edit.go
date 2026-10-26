@@ -115,8 +115,24 @@ func (s *Server) handleDomainRateLimitUpdate(w http.ResponseWriter, r *http.Requ
 
 	perHour, err := strconv.Atoi(strings.TrimSpace(r.FormValue("per_hour")))
 	if err != nil {
-		s.renderFormError(w, "Messages per hour has to be a number; use 0 for no limit.")
+		s.renderFormError(w, "Messages per hour has to be a number; use 0 for no cap.")
 		return
+	}
+	perDay := 0
+	if v := strings.TrimSpace(r.FormValue("per_day")); v != "" {
+		perDay, err = strconv.Atoi(v)
+		if err != nil {
+			s.renderFormError(w, "Messages per day has to be a number; leave it empty for no cap.")
+			return
+		}
+	}
+	perMonth := 0
+	if v := strings.TrimSpace(r.FormValue("per_month")); v != "" {
+		perMonth, err = strconv.Atoi(v)
+		if err != nil {
+			s.renderFormError(w, "Messages per month has to be a number; leave it empty for no cap.")
+			return
+		}
 	}
 	burst := 0
 	if v := strings.TrimSpace(r.FormValue("burst")); v != "" {
@@ -135,6 +151,8 @@ func (s *Server) handleDomainRateLimitUpdate(w http.ResponseWriter, r *http.Requ
 	if _, err := s.mutations.SetDomainRateLimit(r.Context(), actor, mutations.SetDomainRateLimitInput{
 		DomainID: id,
 		PerHour:  perHour,
+		PerDay:   perDay,
+		PerMonth: perMonth,
 		Burst:    burst,
 		Action:   r.FormValue("action"),
 	}); err != nil {
@@ -142,9 +160,25 @@ func (s *Server) handleDomainRateLimitUpdate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	msg := "Outgoing rate limit removed"
+	// Say which caps are now in force: "set to 500 messages per hour" is wrong
+	// once a day or month cap is also present, and an operator who cannot see
+	// the result of their edit assumes it did not happen.
+	var parts []string
 	if perHour > 0 {
-		msg = fmt.Sprintf("Outgoing rate limit set to %d messages per hour", perHour)
+		parts = append(parts, fmt.Sprintf("%d/hour", perHour))
+	}
+	if perDay > 0 {
+		parts = append(parts, fmt.Sprintf("%d/day", perDay))
+	}
+	if perMonth > 0 {
+		parts = append(parts, fmt.Sprintf("%d/month", perMonth))
+	}
+	msg := "Outgoing rate limit removed"
+	if len(parts) > 0 {
+		msg = "Outgoing caps set to " + strings.Join(parts, ", ")
+		if burst > 0 {
+			msg += fmt.Sprintf(" with a %d/minute burst", burst)
+		}
 	}
 	w.Header().Set("HX-Redirect", "/domains/"+strconv.FormatInt(id, 10)+"?flash="+encodeFlash(msg))
 	w.WriteHeader(http.StatusOK)

@@ -1,12 +1,16 @@
 package doctor
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -446,21 +450,32 @@ func managesieveCheck(opts Options) Check {
 
 	// The protocol being enabled is not the same as a listener existing: the
 	// installer used to write a 10-master.conf with no managesieve-login block.
-	if master, err := os.ReadFile(filepath.Join(confDir, "conf.d", "10-master.conf")); err == nil {
-		if !strings.Contains(string(master), "managesieve-login") {
-			return Check{
-				Name:   name,
-				Status: Warn,
-				Detail: "`sieve` is enabled but 10-master.conf has no managesieve-login block, so nothing listens on 4190",
-				Hint:   "add `service managesieve-login { inet_listener sieve { port = 4190 } }` and restart Dovecot (the installer does this too)",
-			}
+	if !managesieveListenerConfigured(confDir) {
+		return Check{
+			Name:   name,
+			Status: Warn,
+			Detail: "`sieve` is enabled but no configuration file has a managesieve-login block, so nothing listens on 4190",
+			Hint:   "add `service managesieve-login { inet_listener sieve { port = 4190 } }` and restart Dovecot (the installer does this too)",
+		}
+	}
+
+	// `protocols` and the listener can both be right while nothing can start:
+	// the daemon only exists in the dovecot-managesieved package, which the
+	// installer used to install on the fresh path only.
+	if !managesieveBinaryInstalled() {
+		return Check{
+			Name:    name,
+			Status:  Warn,
+			Detail:  "`sieve` is configured but the dovecot-managesieved package is not installed, so nothing listens on 4190",
+			Hint:    "`protocols = ... sieve` has no daemon to start without the package",
+			Command: "apt-get install -y dovecot-sieve dovecot-managesieved && systemctl restart dovecot",
 		}
 	}
 
 	// Finally, ask the socket. Config files can say one thing and the running
 	// daemon another, which is exactly the state that is hardest to diagnose.
 	if !opts.SkipServices {
-		conn, err := net.DialTimeout("tcp", "127.0.0.1:4190", 2*time.Second)
+		greeting, err := managesieveGreeting("127.0.0.1:4190")
 		if err != nil {
 			return Check{
 				Name:    name,
@@ -470,11 +485,202 @@ func managesieveCheck(opts Options) Check {
 				Command: "systemctl status dovecot",
 			}
 		}
-		_ = conn.Close()
-		return Check{Name: name, Status: OK, Detail: "listening on 127.0.0.1:4190"}
+		// A port that accepts and stays silent, or answers with something else,
+		// is not ManageSieve. Roundcube reports that as the same "Unable to
+		// connect" as a closed port, so the two are separated here.
+		if !strings.Contains(greeting, "IMPLEMENTATION") {
+			return Check{
+				Name:    name,
+				Status:  Warn,
+				Detail:  "port 4190 answered " + strconv.Quote(greeting) + ", which is not a ManageSieve greeting",
+				Hint:    "something else is bound to the port; `ss -ltnp | grep 4190` names the process",
+				Command: "ss -ltnp | grep 4190",
+			}
+		}
+
+		// Dovecot is answering, so anything still broken is Roundcube's half:
+		// the plugin not enabled, pointed elsewhere, or the plugin directory
+		// missing. That is where the operator's error message actually comes
+		// from, and it has nothing to do with the mail server.
+		if problem, found := roundcubeFiltersProblem(defaultRoundcubeRoot); found && problem != "" {
+			return Check{
+				Name:   name,
+				Status: Warn,
+				Detail: "127.0.0.1:4190 speaks ManageSieve, but " + problem,
+				Hint:   "re-run the installer and choose \"Repair webmail filters (ManageSieve)\" (option 26); it rewrites host/port/TLS and enables the plugin",
+			}
+		}
+
+		return Check{Name: name, Status: OK, Detail: "listening on 127.0.0.1:4190, Roundcube managesieve plugin enabled"}
 	}
 
 	return Check{Name: name, Status: OK, Detail: "`sieve` is enabled in " + conf}
+}
+
+// defaultRoundcubeRoot is where the installer puts Roundcube. The panel has no
+// configuration key for it because the panel never writes into it; the path
+// matches Mailx-Installer's, and it is only read when it exists.
+const defaultRoundcubeRoot = "/var/www/html/roundcube"
+
+// managesieveBinaryInstalled answers whether the managesieve daemons are on
+// disk. Distributions ship `managesieve` and `managesieve-login` next to the
+// other Dovecot binaries, so the glob covers both without pinning a name.
+func managesieveBinaryInstalled() bool {
+	matches, err := filepath.Glob("/usr/lib/dovecot/managesieve*")
+	return err == nil && len(matches) > 0
+}
+
+// managesieveListenerConfigured looks for a managesieve-login service block in
+// every file Dovecot reads.
+//
+// Only 10-master.conf used to be checked, which is wrong in both directions:
+// the listener may equally live in its own conf.d/20-managesieve.conf (the
+// conventional place for a drop-in) or anywhere else in conf.d. Reading the
+// whole directory reports the port that actually exists.
+func managesieveListenerConfigured(confDir string) bool {
+	files, err := filepath.Glob(filepath.Join(confDir, "conf.d", "*.conf"))
+	if err != nil {
+		return false
+	}
+	files = append(files, filepath.Join(confDir, "dovecot.conf"))
+
+	for _, file := range files {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(src), "managesieve-login") {
+			return true
+		}
+	}
+	return false
+}
+
+// managesieveGreeting returns the first line the server sends when the port is
+// opened, and an error when nothing answers.
+//
+// The greeting is the only way to tell "no daemon" from "not a ManageSieve
+// daemon": a plain TCP connect succeeds against any listener, and Roundcube
+// shows the same message for both.
+func managesieveGreeting(addr string) (string, error) {
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		return "", err
+	}
+
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if line == "" {
+		if err == nil {
+			err = io.ErrUnexpectedEOF
+		}
+		return "", err
+	}
+
+	// Close the session politely: an abandoned one is logged by managesieved
+	// as an error, and that noise lands in the journal the operator is about to
+	// be told to read.
+	_, _ = fmt.Fprint(conn, "LOGOUT\r\n")
+
+	return strings.TrimSpace(line), nil
+}
+
+// roundcubeFiltersProblem reports what stops Roundcube's Filters page from
+// reaching the local managesieved.
+//
+// found is false when Roundcube is not installed at root, so the check stays
+// silent on a server without webmail. problem is empty when the configuration
+// looks right; only *set* values are judged, because the plugin already
+// defaults to localhost:4190 without TLS and an unset key is not a defect.
+func roundcubeFiltersProblem(root string) (problem string, found bool) {
+	src, err := os.ReadFile(filepath.Join(root, "config", "config.inc.php"))
+	if err != nil {
+		return "", false
+	}
+	conf := string(src)
+	settings := phpSettings(conf)
+
+	if host, ok := settings["managesieve_host"]; ok {
+		if h := strings.Trim(host, "'\" "); h != "127.0.0.1" && h != "localhost" {
+			return "Roundcube points the managesieve plugin at " + strconv.Quote(h) + " instead of this host", true
+		}
+	}
+	if port, ok := settings["managesieve_port"]; ok {
+		if p := strings.Trim(port, "'\" "); p != "4190" {
+			return "Roundcube's managesieve_port is " + strconv.Quote(p) + ", not 4190", true
+		}
+	}
+	if tls, ok := settings["managesieve_usetls"]; ok {
+		if t := strings.Trim(tls, "'\" "); t != "false" && t != "0" {
+			return "Roundcube asks for STARTTLS on 4190, which the local managesieved does not offer", true
+		}
+	}
+	if !strings.Contains(nonCommentLines(conf), "'managesieve'") {
+		return "the managesieve plugin is not enabled in $config['plugins']", true
+	}
+	if _, err := os.Stat(filepath.Join(root, "plugins", "managesieve")); err != nil {
+		return "Roundcube has no plugins/managesieve directory (the 'complete' package has it)", true
+	}
+
+	return "", true
+}
+
+// phpAssignment matches an active `$config['key'] = value;` line. `.` does not
+// cross a newline in Go's regexp, so one match stays on one line.
+var phpAssignment = regexp.MustCompile(`(?m)^[ \t]*\$config\['([A-Za-z0-9_]+)'\][ \t]*=[ \t]*(.+);[ \t]*$`)
+
+// phpSettings parses the active assignments out of a Roundcube config file.
+// The last assignment wins, as it does in PHP.
+func phpSettings(src string) map[string]string {
+	settings := make(map[string]string)
+	for _, m := range phpAssignment.FindAllStringSubmatch(src, -1) {
+		settings[m[1]] = strings.TrimSpace(m[2])
+	}
+	return settings
+}
+
+// nonCommentLines drops `//`, `#` and `/* */` comments, so a commented-out
+// example cannot be mistaken for an active setting.
+func nonCommentLines(src string) string {
+	var out []string
+	inBlock := false
+	for _, raw := range strings.Split(src, "\n") {
+		line := strings.TrimSpace(raw)
+		if inBlock {
+			i := strings.Index(line, "*/")
+			if i < 0 {
+				continue
+			}
+			inBlock = false
+			line = strings.TrimSpace(line[i+2:])
+		}
+		// Strip a block comment that opens and closes on this line, and
+		// remember one that runs past the end of it.
+		for {
+			i := strings.Index(line, "/*")
+			if i < 0 {
+				break
+			}
+			j := strings.Index(line[i+2:], "*/")
+			if j < 0 {
+				inBlock = true
+				line = strings.TrimSpace(line[:i])
+				break
+			}
+			line = strings.TrimSpace(line[:i] + " " + line[i+2+j+2:])
+		}
+		if strings.HasPrefix(line, "//") || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // protocolsIncludeSieve answers whether Dovecot's `protocols` setting enables

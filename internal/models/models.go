@@ -43,18 +43,25 @@ type Domain struct {
 	UpdatedAt          time.Time
 
 	// Outbound rate limit for this domain, enforced by postfwd (see
-	// internal/reconciler/postfwd.go). OutboundRateLimit is messages per hour
-	// and 0 means "no limit" -- the default, and what every install that never
-	// set one keeps doing.
+	// internal/reconciler/postfwd.go). OutboundRateLimit is messages per hour,
+	// OutboundRateDaily per rolling day and OutboundRateMonthly per rolling
+	// month; 0 means "no cap" for that window, and all three at 0 is what every
+	// install that never set one keeps doing.
+	//
+	// The windows are rolling (3600/86400/2592000 seconds), not calendar. The UI
+	// labels them "per hour", "per day" and "per month" and says "rolling" where
+	// it matters: postfwd has no way to reset a counter at midnight, and a reset
+	// would be a free bypass of the cap.
 	//
 	// OutboundRateBurst is how many extra messages may go out in a 60s window
 	// (0 = none), so a legitimate batch sender is not throttled by the hourly
-	// average alone. OutboundRateAction is what postfwd answers once the limit
-	// is reached: RateActionDefer (the sender retries later) or
-	// RateActionReject.
-	OutboundRateLimit  int
-	OutboundRateBurst  int
-	OutboundRateAction string
+	// average alone. OutboundRateAction is what postfwd answers once a cap is
+	// reached: RateActionDefer (the sender retries later) or RateActionReject.
+	OutboundRateLimit   int
+	OutboundRateDaily   int
+	OutboundRateMonthly int
+	OutboundRateBurst   int
+	OutboundRateAction  string
 }
 
 // What a domain's outgoing limit does when it is reached. Stored as text because
@@ -64,8 +71,12 @@ const (
 	RateActionReject = "reject" // 554 5.7.1: permanent
 )
 
-// RateLimited reports whether this domain has an outgoing rate limit at all.
-func (d Domain) RateLimited() bool { return d.OutboundRateLimit > 0 }
+// RateLimited reports whether this domain has an outgoing cap at all, in any
+// window. Every caller that only cares "is this domain limited" asks this, so a
+// domain that only has a daily or monthly cap is not treated as unlimited.
+func (d Domain) RateLimited() bool {
+	return d.OutboundRateLimit > 0 || d.OutboundRateDaily > 0 || d.OutboundRateMonthly > 0
+}
 
 // RateAction normalizes an unset action to the default, so a row written before
 // the column existed (or by hand) still renders a valid postfwd rule.

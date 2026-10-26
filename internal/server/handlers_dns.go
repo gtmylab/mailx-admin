@@ -213,13 +213,15 @@ func (s *Server) getDomainByID(ctx context.Context, id int64) (*models.Domain, e
         SELECT id, name, is_primary, dkim_selector,
                dkim_private_key_path, dkim_public_record,
                dkim_created_at, active, created_at, updated_at,
-               COALESCE(outbound_rate_limit, 0), COALESCE(outbound_rate_burst, 0),
+               COALESCE(outbound_rate_limit, 0), COALESCE(outbound_rate_daily, 0),
+               COALESCE(outbound_rate_monthly, 0), COALESCE(outbound_rate_burst, 0),
                COALESCE(outbound_rate_action, 'defer')
         FROM domains WHERE id = ?
     `, id).Scan(
 		&d.ID, &d.Name, &isPrimary, &d.DKIMSelector,
 		&dkimPriv, &dkimPub, &dkimCreated, &active, &d.CreatedAt, &d.UpdatedAt,
-		&d.OutboundRateLimit, &d.OutboundRateBurst, &d.OutboundRateAction,
+		&d.OutboundRateLimit, &d.OutboundRateDaily, &d.OutboundRateMonthly,
+		&d.OutboundRateBurst, &d.OutboundRateAction,
 	)
 	if err != nil {
 		return nil, err

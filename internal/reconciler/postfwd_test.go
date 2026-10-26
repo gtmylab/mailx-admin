@@ -26,13 +26,13 @@ func TestRenderPostfwdConfWritesOneRateRule(t *testing.T) {
 	out := string(RenderPostfwdConf(rateLimitSnapshot().Domains))
 
 	for _, want := range []string{
-		"id=RL_0001",
+		"id=RL_0001_H",
 		"sender_domain==example.com",
 		// Only authenticated submissions are counted: otherwise anyone could
 		// spend the domain's quota by sending it mail.
 		"sasl_username=~.+",
 		// 500 messages per 3600 seconds, answered with a temporary failure.
-		"action=rate(RL_0001/500/3600/450 4.7.1",
+		"action=rate(RL_0001_H/500/3600/450 4.7.1",
 		// The last rule keeps everything else out of the policy.
 		"id=DEFAULT; action=dunno",
 	} {
@@ -72,9 +72,9 @@ func TestRenderPostfwdConfBurstAndReject(t *testing.T) {
 		t.Fatalf("the hourly and burst rules share the counter key %q:\n%s", hourKey, out)
 	}
 	for _, want := range []string{
-		"id=RL_0007",
+		"id=RL_0007_H",
 		"id=RL_0007_BURST",
-		"action=rate(RL_0007/1000/3600/554 5.7.1",
+		"action=rate(RL_0007_H/1000/3600/554 5.7.1",
 		"action=rate(RL_0007_BURST/50/60/554 5.7.1",
 	} {
 		if !strings.Contains(out, want) {
@@ -83,6 +83,63 @@ func TestRenderPostfwdConfBurstAndReject(t *testing.T) {
 	}
 	if strings.Contains(out, "450 4.7.1") {
 		t.Errorf("a rejecting domain still answers with a temporary failure:\n%s", out)
+	}
+}
+
+// TestRenderPostfwdConfRendersEveryWindow pins the day and month caps: one rule
+// per window, each with its own counter key and its own interval.
+//
+// The key part is not cosmetic. postfwd keys a rate counter by the first argument
+// of rate(), so two windows sharing a key would share one bucket and whichever
+// limit came first would consume the other's allowance.
+func TestRenderPostfwdConfRendersEveryWindow(t *testing.T) {
+	out := string(RenderPostfwdConf([]models.Domain{{
+		ID: 12, Name: "news.example", Active: true,
+		OutboundRateLimit: 500, OutboundRateDaily: 4000, OutboundRateMonthly: 60000,
+		OutboundRateBurst: 50, OutboundRateAction: models.RateActionDefer,
+	}}))
+
+	for _, want := range []string{
+		"action=rate(RL_0012_H/500/3600/450 4.7.1",
+		"action=rate(RL_0012_D/4000/86400/450 4.7.1",
+		"action=rate(RL_0012_M/60000/2592000/450 4.7.1",
+		"action=rate(RL_0012_BURST/50/60/450 4.7.1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("postfwd config is missing %q:\n%s", want, out)
+		}
+	}
+
+	seen := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "action=rate(") {
+			continue
+		}
+		rest := strings.TrimPrefix(line, "action=rate(")
+		key := rest[:strings.IndexByte(rest, '/')]
+		if seen[key] {
+			t.Errorf("two rules share the counter key %q:\n%s", key, out)
+		}
+		seen[key] = true
+	}
+	if len(seen) != 4 {
+		t.Errorf("rendered %d rate rules, want 4:\n%s", len(seen), out)
+	}
+}
+
+// TestRenderPostfwdConfDailyOnly: a domain with only a daily cap is still a
+// limited domain, and it must not gain an hourly rule with a count of 0 --
+// postfwd would read that as "already over the limit" and hold all its mail.
+func TestRenderPostfwdConfDailyOnly(t *testing.T) {
+	out := string(RenderPostfwdConf([]models.Domain{
+		{ID: 4, Name: "daily.example", Active: true, OutboundRateDaily: 200},
+	}))
+	if !strings.Contains(out, "action=rate(RL_0004_D/200/86400/") {
+		t.Errorf("the daily-only cap was not rendered:\n%s", out)
+	}
+	if strings.Contains(out, "/3600/") {
+		t.Errorf("an hourly rule was rendered for a domain with no hourly cap:\n%s", out)
 	}
 }
 
