@@ -102,7 +102,11 @@
     <p class="text-xs dim mt-3">
       One row per message (by queue id), recorded by the log ingester, so these can lag slightly
       behind postfwd. The caps are enforced over the last 3600 seconds, 24 hours and 30 days —
-      not over calendar hours, days or months.
+      not over calendar hours, days or months. Webmail on this server counts too, and it never
+      logs in to Postfix, so postfwd is asked about it from the loopback address. If these numbers
+      move while nothing is refused, run <span class="mono">mailx-admin doctor</span>: its
+      “outgoing rate limits” check asks postfwd directly and says which submission path is not
+      matched.
     </p>
     {{else}}
     <p class="text-sm dim">

@@ -688,6 +688,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 			return res, err
 		}
 		order := []string{"opendkim", "dovecot", "postfwd", "postfix"}
+		postfwdReloaded := false
 		for _, svc := range order {
 			if !servicesToReload[svc] {
 				continue
@@ -702,6 +703,27 @@ func (r *Reconciler) Reconcile(ctx context.Context, snap *models.Snapshot) (*Res
 				return res, fmt.Errorf("reload %s: %w", svc, err)
 			}
 			res.ReloadedSvcs = append(res.ReloadedSvcs, svc)
+			if svc == "postfwd" {
+				postfwdReloaded = true
+			}
+		}
+
+		// Prove postfwd picked the new rules up.
+		//
+		// A successful reload means systemd delivered the signal, not that
+		// postfwd is answering with the new file -- and Postfix's DUNNO fallback
+		// turns a policy daemon that is down, or one that never matched a rule,
+		// into silently delivered mail. A limit that is written, loaded and
+		// enforced on nothing looks exactly like a working one from the panel,
+		// so the sync asks the daemon one question: the canary sender, which no
+		// real message can carry and which the rendered file answers
+		// unconditionally.
+		if postfwdReloaded {
+			if err := verifyPostfwdCanary(ctx); err != nil {
+				res.Warnings = append(res.Warnings,
+					"postfwd reloaded but does not answer with the new rules: "+err.Error()+
+						". The rate limits are written and not enforced; `journalctl -u postfwd` says why.")
+			}
 		}
 	}
 

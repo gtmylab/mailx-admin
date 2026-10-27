@@ -25,8 +25,9 @@
         <input class="input" type="number" name="per_hour" min="0" max="100000" step="1"
                value="{{.Domain.OutboundRateLimit}}" required>
         <span class="field-hint">
-          Counted over the last 60 minutes, per sender domain, for authenticated submissions.
-          0 disables the hourly cap.
+          Counted over the last 60 minutes, per sender domain. Mail submitted from this server
+          (webmail included, which does not log in to Postfix) and authenticated submissions from
+          mail clients both count. 0 disables the hourly cap.
         </span>
       </label>
 

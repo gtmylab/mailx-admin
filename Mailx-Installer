@@ -723,6 +723,57 @@ EOF
 # PHPMyAdmin Installation
 # ============================================================================
 
+# write_postfwd_unit MODE writes /etc/systemd/system/postfwd.service.
+#
+#   simple   postfwd stays in the foreground and systemd tracks it directly.
+#   forking  postfwd daemonises itself and systemd tracks the pidfile.
+#
+# Everything that matters to enforcement is in ExecStart: the config the panel
+# writes, the loopback socket Postfix was told to ask (smtpd_end_of_data_
+# restrictions in main.cf), and --keep_rates so a reload does not hand every
+# domain a fresh allowance.
+#
+# The heredoc is unquoted so the path and the flags expand here; $MAINPID is
+# escaped because systemd expands it, not the shell.
+write_postfwd_unit() {
+    local mode=${1:-simple}
+    local unit_type=simple
+    local daemon_flags=""
+
+    if [ "$mode" = "forking" ]; then
+        unit_type=forking
+        daemon_flags="--daemon --pidfile /run/postfwd/postfwd.pid"
+    fi
+
+    cat > /etc/systemd/system/postfwd.service <<EOF
+[Unit]
+Description=postfwd - Postfix policy daemon (outgoing rate limits)
+After=network.target postfix.service
+Wants=postfix.service
+
+[Service]
+Type=$unit_type
+# Privileges are dropped here, not with postfwd's --user/--group: not every
+# build has those options, and a rejected option means a daemon that never starts.
+User=postfw
+Group=postfw
+RuntimeDirectory=postfwd
+RuntimeDirectoryMode=0750
+ExecStart=$POSTFWD_BIN $daemon_flags --file /etc/postfwd.cf --interface 127.0.0.1 --port 10040 --keep_rates
+PIDFile=/run/postfwd/postfwd.pid
+# The panel reloads postfwd after writing the config; SIGHUP re-reads the rules
+# and keeps the counters (--keep_rates).
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
 # configure_postfwd installs the policy daemon the panel's per-domain outgoing
 # rate limits are enforced by.
 #
@@ -733,22 +784,46 @@ EOF
 # gets a postfwd that answers DUNNO to everything, which costs a policy lookup
 # per message and changes no behaviour.
 #
-# Two flags matter:
+# Three things have to be right or a configured limit is silently not enforced
+# (Postfix falls back to DUNNO and mail simply flows):
 #   --keep_rates  keeps the counters across a reload. The panel reloads postfwd
 #                 whenever the config changes, and without this every rate
 #                 limit would silently reset at that moment.
 #   --interface/--port keep it on the loopback address, where Postfix expects it
 #                 (smtpd_end_of_data_restrictions in main.cf) and where nobody
 #                 else can talk to it.
+#   the unit shape: postfwd may run in the foreground or fork into the
+#                 background, depending on the package (postfwd vs postfwd2) and
+#                 its version. The wrong Type= means systemd waits for a process
+#                 that never exits -- the unit times out, postfwd never serves,
+#                 and every limit is written and enforced on nothing. The shape
+#                 is therefore verified after starting, and the other one is
+#                 tried before giving up.
+#
+# Privileges are dropped by systemd (User=/Group=) rather than by postfwd's own
+# --user/--group flags, which not every version has.
 configure_postfwd() {
     log_info "Configuring postfwd (outgoing rate limits)..."
 
-    apt_install postfwd
+    apt_install postfwd || apt_install postfwd2 || true
 
-    if ! command_exists postfwd; then
+    # The Debian package ships /usr/sbin/postfwd; the upstream tarball and some
+    # distributions call the binary postfwd2. Resolving it here means the unit
+    # below starts whatever this host actually has.
+    POSTFWD_BIN=""
+    for candidate in "$(command -v postfwd 2>/dev/null)" "$(command -v postfwd2 2>/dev/null)" \
+                     /usr/sbin/postfwd /usr/sbin/postfwd2 /usr/local/sbin/postfwd /usr/local/sbin/postfwd2; do
+        if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+            POSTFWD_BIN="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$POSTFWD_BIN" ]; then
         log_warning "postfwd is not available; outgoing rate limits will not be enforced"
         return 0
     fi
+    log_info "Using $POSTFWD_BIN"
 
     if ! getent group postfw >/dev/null 2>&1; then
         groupadd -r postfw 2>/dev/null || true
@@ -768,38 +843,27 @@ EOF
         chmod 0644 /etc/postfwd.cf
     fi
 
-    cat > /etc/systemd/system/postfwd.service <<'EOF'
-[Unit]
-Description=postfwd - Postfix policy daemon (outgoing rate limits)
-After=network.target postfix.service
-Wants=postfix.service
-
-[Service]
-# postfwd forks itself into the background, which is what Type=forking tracks.
-Type=forking
-ExecStart=/usr/sbin/postfwd --file /etc/postfwd.cf --user postfw --group postfw --interface 127.0.0.1 --port 10040 --keep_rates
-# The panel reloads postfwd after writing the config; SIGHUP re-reads the rules
-# and keeps the counters (--keep_rates).
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
+    write_postfwd_unit simple
     systemctl daemon-reload
-
     systemctl enable postfwd >/dev/null 2>&1 || true
     systemctl restart postfwd >/dev/null 2>&1 || true
+    sleep 2
 
-    sleep 1
+    if ! systemctl is-active --quiet postfwd; then
+        # The other shape: this build daemonises itself, so Type=simple saw the
+        # parent exit and considers the service stopped. Type=forking with an
+        # explicit pidfile is then the one that tracks the real process.
+        log_info "postfwd did not stay in the foreground; trying the forking unit"
+        write_postfwd_unit forking
+        systemctl daemon-reload
+        systemctl restart postfwd >/dev/null 2>&1 || true
+        sleep 2
+    fi
+
     if systemctl is-active --quiet postfwd; then
-        log_info "postfwd listening on 127.0.0.1:10040"
+        log_info "postfwd listening on 127.0.0.1:10040 (enforcing /etc/postfwd.cf)"
     else
-        log_warning "postfwd did not start; check: journalctl -u postfwd -n 30"
+        log_warning "postfwd did not start, so outgoing rate limits are NOT enforced; check: journalctl -u postfwd -n 30"
     fi
 }
 

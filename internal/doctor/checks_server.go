@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/gtmylab/mailx-admin/internal/execx"
+	"github.com/gtmylab/mailx-admin/internal/models"
+	"github.com/gtmylab/mailx-admin/internal/postfwd"
+	"github.com/gtmylab/mailx-admin/internal/reconciler"
 	"github.com/gtmylab/mailx-admin/internal/seed"
 )
 
@@ -89,69 +92,73 @@ func serviceCheck(ctx context.Context, opts Options) Check {
 	return Check{Name: "services", Status: OK, Detail: "postfix, dovecot and opendkim are active"}
 }
 
+const (
+	postfwdCheckName = "outgoing rate limits"
+	postfwdService   = "postfwd"
+
+	// postfwdProbeClient stands for "a mail client somewhere out there".
+	// 203.0.113.0/24 is TEST-NET-3 (RFC 5737): never routed, so a probe can
+	// never be confused with a real submission.
+	postfwdProbeClient = "203.0.113.9"
+)
+
 // rateLimitCheck answers "is the thing I configured actually running?" for the
 // per-domain outgoing rate limits.
 //
 // The failure it exists for is a limit that looks configured in the panel and is
 // silently not enforced: the row is in the database, /etc/postfwd.cf is written,
 // main.cf tells Postfix to consult it -- and postfwd is not installed, not
-// running, or listening elsewhere. Nothing else in the panel shows that, and
-// Postfix's DUNNO fallback means mail keeps flowing, so the operator's only clue
-// is a limit that never triggers.
+// running, listening elsewhere, or loaded a file whose rules never match.
+// Nothing else in the panel shows that, and Postfix's DUNNO fallback means mail
+// keeps flowing, so the operator's only clue is a limit that never triggers.
+//
+// Every step below is a different way for that to happen, cheapest first: the
+// binary, the service, the Postfix hook, the reload flags, the file on disk, and
+// finally the running daemon itself -- asked the same questions its rules answer
+// (see postfwdProbeCheck).
 func rateLimitCheck(ctx context.Context, opts Options) Check {
-	const name = "outgoing rate limits"
 	if opts.Store == nil {
 		return Check{}
 	}
 
 	snap, err := opts.Store.Snapshot(ctx)
 	if err != nil {
-		return Check{Name: name, Status: Warn, Detail: "the configured limits could not be read: " + err.Error()}
+		return Check{Name: postfwdCheckName, Status: Warn, Detail: "the configured limits could not be read: " + err.Error()}
 	}
 
-	var limited []string
+	var limited []models.Domain
+	var described []string
 	for _, d := range snap.Domains {
 		if !d.Active || !d.RateLimited() {
 			continue
 		}
-		// Name the windows, not just one number: with day and month caps a
-		// bare "500/h" reads as the whole policy when it is one third of it.
-		var parts []string
-		if d.OutboundRateLimit > 0 {
-			parts = append(parts, fmt.Sprintf("%d/h", d.OutboundRateLimit))
-		}
-		if d.OutboundRateDaily > 0 {
-			parts = append(parts, fmt.Sprintf("%d/d", d.OutboundRateDaily))
-		}
-		if d.OutboundRateMonthly > 0 {
-			parts = append(parts, fmt.Sprintf("%d/mo", d.OutboundRateMonthly))
-		}
-		if d.OutboundRateBurst > 0 {
-			parts = append(parts, fmt.Sprintf("burst %d/min", d.OutboundRateBurst))
-		}
-		limited = append(limited, fmt.Sprintf("%s (%s)", d.Name, strings.Join(parts, " ")))
+		limited = append(limited, d)
+		described = append(described, fmt.Sprintf("%s (%s)", d.Name, rateLimitWindows(d)))
 	}
 	if len(limited) == 0 {
-		return Check{Name: name, Status: Info, Detail: "no domain has an outgoing rate limit"}
+		return Check{Name: postfwdCheckName, Status: Info, Detail: "no domain has an outgoing rate limit"}
 	}
-	sort.Strings(limited)
-	detail := fmt.Sprintf("%d domain(s): %s", len(limited), firstFew(limited, 4))
+	sort.Strings(described)
+	detail := fmt.Sprintf("%d domain(s): %s", len(limited), firstFew(described, 4))
 
 	if opts.SkipServices {
-		return Check{Name: name, Status: Info, Detail: detail}
+		return Check{Name: postfwdCheckName, Status: Info, Detail: detail}
 	}
-	if _, err := exec.LookPath("postfwd"); err != nil {
+
+	bin, ok := postfwdBinary()
+	if !ok {
 		return Check{
-			Name:    name,
+			Name:    postfwdCheckName,
 			Status:  Warn,
 			Detail:  detail + ", but postfwd is not installed",
 			Hint:    "the limits are written and Postfix asks for them, but nothing answers: install postfwd (re-running the installer does it)",
 			Command: "apt-get install postfwd",
 		}
 	}
-	if out, err := execx.Output(ctx, 10*time.Second, "systemctl", "is-active", "postfwd"); err != nil {
+
+	if out, err := execx.Output(ctx, 10*time.Second, "systemctl", "is-active", postfwdService); err != nil || strings.TrimSpace(string(out)) != "active" {
 		return Check{
-			Name:    name,
+			Name:    postfwdCheckName,
 			Status:  Warn,
 			Detail:  detail + ", but the postfwd service is " + strings.TrimSpace(string(out)),
 			Hint:    "Postfix falls back to DUNNO, so mail flows and nothing is limited; journalctl -u postfwd says why",
@@ -159,18 +166,73 @@ func rateLimitCheck(ctx context.Context, opts Options) Check {
 		}
 	}
 
+	if opts.Config == nil {
+		return Check{Name: postfwdCheckName, Status: Info, Detail: detail + "; not verified (no mail configuration in this run)"}
+	}
+
 	// Postfix is configured to ask for a policy decision only when a limit
 	// exists; a main.cf without that hook means the sync never ran.
-	if opts.Config != nil {
-		mainCF := filepath.Join(opts.Config.Mail.PostfixConfDir, "main.cf")
-		if src, err := os.ReadFile(mainCF); err == nil && !strings.Contains(string(src), "check_policy_service inet:127.0.0.1:10040") {
-			return Check{
-				Name:    name,
-				Status:  Warn,
-				Detail:  detail + ", and postfwd is running, but " + mainCF + " never asks it",
-				Hint:    "the queue accepts mail without consulting the limits; run `mailx-admin sync` to render main.cf",
-				Command: "mailx-admin sync",
-			}
+	mainCF := filepath.Join(opts.Config.Mail.PostfixConfDir, "main.cf")
+	if src, err := os.ReadFile(mainCF); err != nil {
+		return Check{
+			Name:   postfwdCheckName,
+			Status: Warn,
+			Detail: detail + ", but " + mainCF + " could not be read: " + err.Error(),
+		}
+	} else if !strings.Contains(string(src), "check_policy_service inet:"+postfwd.PolicyAddr) {
+		return Check{
+			Name:    postfwdCheckName,
+			Status:  Warn,
+			Detail:  detail + ", and postfwd is running, but " + mainCF + " never asks it",
+			Hint:    "the queue accepts mail without consulting the limits; run `mailx-admin sync` to render main.cf",
+			Command: "mailx-admin sync",
+		}
+	}
+
+	// --keep_rates is what keeps a counter across the reload the panel triggers
+	// on every config change. Without it each sync hands out a fresh allowance,
+	// which for a daily cap is the same as no cap at all.
+	if out, err := execx.Output(ctx, 10*time.Second, "systemctl", "show", "-p", "ExecStart", "--value", postfwdService); err == nil &&
+		strings.TrimSpace(string(out)) != "" && !strings.Contains(string(out), "keep_rates") {
+		return Check{
+			Name:    postfwdCheckName,
+			Status:  Warn,
+			Detail:  detail + ", but postfwd runs without --keep_rates, so every reload resets the counters",
+			Hint:    "a daily cap that restarts at each sync is not a daily cap; re-run the installer to rewrite the unit",
+			Command: "systemctl cat postfwd",
+		}
+	}
+
+	return postfwdConfigChecks(ctx, opts, snap, limited, detail, bin)
+}
+
+// postfwdConfigChecks covers the two things left once the daemon is up: the file
+// it is reading (is it the one the panel would render, and does postfwd's own
+// parser accept it) and what the daemon does with a message (postfwdProbeCheck).
+func postfwdConfigChecks(ctx context.Context, opts Options, snap *models.Snapshot, limited []models.Domain, detail, bin string) Check {
+	conf := postfwdConfPath(opts)
+
+	src, err := os.ReadFile(conf)
+	if err != nil {
+		return Check{
+			Name:    postfwdCheckName,
+			Status:  Warn,
+			Detail:  detail + ", but " + conf + " could not be read: " + err.Error(),
+			Hint:    "postfwd was started without the panel's rules; run `mailx-admin sync` to render them",
+			Command: "mailx-admin sync",
+		}
+	}
+
+	// The file on disk is the last thing a sync wrote, not the state of the
+	// database. Comparing them is the only way to tell "the limit was saved" from
+	// "the limit reached the daemon".
+	if want := string(reconciler.RenderPostfwdConf(snap.Domains)); want != string(src) {
+		return Check{
+			Name:    postfwdCheckName,
+			Status:  Warn,
+			Detail:  detail + ", but " + conf + " is not what the panel would render",
+			Hint:    "the saved limits have not reached postfwd (a failed or never-run sync does this); check the last sync below",
+			Command: "mailx-admin sync",
 		}
 	}
 
@@ -178,22 +240,179 @@ func rateLimitCheck(ctx context.Context, opts Options) Check {
 	// rejects is one Postfix asks about and postfwd answers DUNNO to, which is
 	// a limit that reads as configured and enforces nothing. `-C` parses the
 	// file and exits without touching the running daemon.
-	if opts.Config != nil {
-		conf := filepath.Join(filepath.Dir(opts.Config.Mail.PostfixConfDir), "postfwd.cf")
-		if _, err := os.Stat(conf); err == nil {
-			if out, err := execx.Output(ctx, 10*time.Second, "postfwd", "-C", "-f", conf); err != nil {
-				return Check{
-					Name:    name,
-					Status:  Warn,
-					Detail:  detail + ", but postfwd rejects " + conf + ": " + firstLine(string(out)),
-					Hint:    "a rule postfwd cannot parse is a rule it does not enforce; the file is rendered by the last sync",
-					Command: "postfwd -C -f " + conf,
-				}
-			}
+	if out, err := execx.Output(ctx, 20*time.Second, bin, "-C", "-f", conf); err != nil {
+		return Check{
+			Name:    postfwdCheckName,
+			Status:  Warn,
+			Detail:  detail + ", but " + bin + " rejects " + conf + ": " + firstLine(string(out)),
+			Hint:    "a rule postfwd cannot parse is a rule it does not enforce; the file is rendered by the last sync",
+			Command: bin + " -C -f " + conf,
 		}
 	}
 
-	return Check{Name: name, Status: OK, Detail: detail + ", enforced by postfwd"}
+	return postfwdProbeCheck(ctx, limited[0], conf, detail)
+}
+
+// postfwdPathProbe is one probe: the request to send, and the wording for when
+// the answer is not the one the probe rule gives.
+type postfwdPathProbe struct {
+	req     postfwd.Request
+	problem string
+	hint    string
+}
+
+// postfwdProbeCheck asks the running daemon what it would do -- the step that
+// makes "the limit is configured" and "the limit is enforced" two different
+// claims.
+//
+// Three questions, each aimed at a failure that is invisible from the outside:
+//
+//  1. The canary sender. Anything but the canary's own reply means the daemon is
+//     running some other file (never reloaded, started with --file elsewhere,
+//     or it rejected the file at load time).
+//  2. A message from this host (127.0.0.1, no SASL): the webmail path. This is
+//     the one that was silently unmatched -- the rule required a SASL username,
+//     and webmail submits without logging in to Postfix.
+//  3. A message from an authenticated client elsewhere: the rule a 587/465
+//     client hits, including the client-address condition that keeps the same
+//     message from being counted twice.
+//
+// The probe rules sit ahead of the rate rules, so none of this touches a counter
+// and none of it can exhaust a customer's allowance.
+func postfwdProbeCheck(ctx context.Context, d models.Domain, conf, detail string) Check {
+	const recipient = "postmaster@example.net"
+
+	canary := postfwd.Request{
+		Sender:        postfwd.CanarySender,
+		Recipient:     recipient,
+		ClientAddress: postfwdProbeClient,
+		QueueID:       "MAILXDOCTOR",
+	}
+	resp, err := postfwd.Ask(ctx, postfwd.PolicyAddr, canary)
+	if err != nil {
+		return Check{
+			Name:    postfwdCheckName,
+			Status:  Warn,
+			Detail:  detail + ", but nothing answered on " + postfwd.PolicyAddr + ": " + err.Error(),
+			Hint:    "Postfix accepts everything when its policy server is silent, so the limits do nothing; systemctl status postfwd says why",
+			Command: "systemctl status postfwd",
+		}
+	}
+	if resp.Action != postfwd.CanaryReply {
+		return Check{
+			Name:    postfwdCheckName,
+			Status:  Warn,
+			Detail:  fmt.Sprintf("%s, but postfwd answered %q to its canary rule instead of %q", detail, resp.Action, postfwd.CanaryReply),
+			Hint:    "the daemon is not running the file the panel wrote; reloading it makes it read " + conf,
+			Command: "systemctl reload postfwd",
+		}
+	}
+
+	probes := []postfwdPathProbe{
+		{
+			req: postfwd.Request{
+				Sender:        postfwd.ProbeSender(d.Name),
+				Recipient:     recipient,
+				ClientAddress: "127.0.0.1",
+				QueueID:       "MAILXDOCTOR",
+			},
+			problem: "a submission from this host for " + d.Name + " does not match its rules",
+			hint:    "webmail and the panel's own mail submit through 127.0.0.1 without SASL; the rules have to cover that path or the cap only ever applies to mail clients",
+		},
+		{
+			req: postfwd.Request{
+				Sender:        postfwd.ProbeSender(d.Name),
+				Recipient:     recipient,
+				ClientAddress: postfwdProbeClient,
+				SASLUsername:  "mailx-doctor",
+				SASLMethod:    "plain",
+				QueueID:       "MAILXDOCTOR",
+			},
+			problem: "an authenticated submission from another host for " + d.Name + " does not match its rules",
+			hint:    "the authenticated rule combines sasl_username=~.+ with a client_address pattern; check it in " + conf,
+		},
+	}
+	for _, p := range probes {
+		if c := postfwdExpect(ctx, p, postfwd.ProbeReply, conf, detail); c.Name != "" {
+			return c
+		}
+	}
+
+	return Check{
+		Name:   postfwdCheckName,
+		Status: OK,
+		Detail: detail + ", enforced by postfwd (both submission paths answered)",
+	}
+}
+
+// postfwdExpect sends one probe and reports a Check when the answer is not the
+// probe rule's own reply.
+func postfwdExpect(ctx context.Context, p postfwdPathProbe, want, conf, detail string) Check {
+	resp, err := postfwd.Ask(ctx, postfwd.PolicyAddr, p.req)
+	if err != nil {
+		return Check{
+			Name:    postfwdCheckName,
+			Status:  Warn,
+			Detail:  detail + ", but the probe for " + p.req.Sender + " failed: " + err.Error(),
+			Hint:    "systemctl status postfwd; the rules it loaded are in " + conf,
+			Command: "systemctl status postfwd",
+		}
+	}
+	if resp.Action != want {
+		return Check{
+			Name:    postfwdCheckName,
+			Status:  Warn,
+			Detail:  fmt.Sprintf("%s, but %s: postfwd answered %q where %q was expected", detail, p.problem, resp.Action, want),
+			Hint:    p.hint,
+			Command: "mailx-admin sync",
+		}
+	}
+	return Check{}
+}
+
+// postfwdBinary finds the daemon's executable.
+//
+// The Debian package is called postfwd and ships /usr/sbin/postfwd, but postfwd2
+// is the name the upstream tarball (and some distributions) use, and a panel
+// that only looked for one of them reported "not installed" while the daemon was
+// running.
+func postfwdBinary() (string, bool) {
+	for _, name := range []string{"postfwd", "postfwd2"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path, true
+		}
+	}
+	for _, path := range []string{"/usr/sbin/postfwd", "/usr/local/sbin/postfwd", "/usr/sbin/postfwd2", "/usr/local/sbin/postfwd2"} {
+		if st, err := os.Stat(path); err == nil && !st.IsDir() {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+// postfwdConfPath is the file the installer and the reconciler use:
+// /etc/postfwd.cf next to the Postfix configuration directory.
+func postfwdConfPath(opts Options) string {
+	return filepath.Join(filepath.Dir(opts.Config.Mail.PostfixConfDir), "postfwd.cf")
+}
+
+// rateLimitWindows names the caps a domain has, so a check about "example.com"
+// says which windows are configured instead of only the first one.
+func rateLimitWindows(d models.Domain) string {
+	var parts []string
+	if d.OutboundRateLimit > 0 {
+		parts = append(parts, fmt.Sprintf("%d/h", d.OutboundRateLimit))
+	}
+	if d.OutboundRateDaily > 0 {
+		parts = append(parts, fmt.Sprintf("%d/d", d.OutboundRateDaily))
+	}
+	if d.OutboundRateMonthly > 0 {
+		parts = append(parts, fmt.Sprintf("%d/mo", d.OutboundRateMonthly))
+	}
+	if d.OutboundRateBurst > 0 {
+		parts = append(parts, fmt.Sprintf("burst %d/min", d.OutboundRateBurst))
+	}
+	return strings.Join(parts, " ")
 }
 
 // firstLine keeps a command's complaint to one line, so a parser error does not
