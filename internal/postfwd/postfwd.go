@@ -39,6 +39,20 @@ const (
 	CanarySender = "rate-limit-canary@mailx-canary.invalid"
 	CanaryReply  = "554 5.7.1 mailx-admin rate-limit canary"
 
+	// RateCanarySender is the envelope sender of the marker rule that proves
+	// rate() counts, and RateCanaryReply the answer it gives once the allowance
+	// is spent.
+	//
+	// It is a different sender from CanarySender on purpose: the canary above is
+	// answered by a plain reject rule, which never reaches a rate() action and so
+	// says nothing about whether a counter is being kept. This one is
+	// `rate(sender/1/60/<RateCanaryReply>)` -- one message a minute is allowed,
+	// the next is refused -- which is what lets the doctor tell "the cap is
+	// loaded" from "the cap counts". Its bucket is keyed on this sender, reserved
+	// by RFC 2606, so asking never touches a customer's allowance.
+	RateCanarySender = "rate-counter-canary@mailx-canary.invalid"
+	RateCanaryReply  = "554 5.7.1 mailx-admin rate-limit counter"
+
 	// ProbeLocalPart is the local part of the per-domain probe rules. Each limited
 	// domain gets one probe rule per submission path (loopback and authenticated),
 	// ahead of its rate rules, answering ProbeReply. A probe therefore never
@@ -69,10 +83,14 @@ var LoopbackClients = []string{"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 
 // RemoteClientPattern matches every client address that is *not* this host.
 //
-// It exists so the two rules a window is split into -- "submitted from this
-// host" and "submitted with SASL" -- never both match the same message. They
-// share one rate() counter (one message must cost one unit), so they have to be
-// mutually exclusive or the counter would run at double speed.
+// It is used by the per-domain probe rules, which have to tell the two
+// submission paths apart so the doctor can prove that both of them reach the
+// file: the unauthenticated one from this host (webmail) and the authenticated
+// one from elsewhere.
+//
+// The rate rules do not use it. They key rate() on `sender_domain`, which
+// matches both paths with one rule, so there is no pair of rules to keep
+// disjoint and no message to count twice.
 //
 // Perl lookahead is used because postfwd has no "not in list" operator. Go's
 // regexp cannot compile this; nothing in the panel evaluates it, postfwd does.

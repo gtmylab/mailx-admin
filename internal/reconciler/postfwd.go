@@ -24,11 +24,27 @@ const (
 	postfwdMonthlyWindow = 2592000 // 30 days
 	postfwdBurstWindow   = 60
 
+	// postfwdRateItem is the postfwd request item a cap is counted on: the
+	// domain part of the envelope sender.
+	//
+	// It is not a label of our choosing. postfwd reads the first argument of
+	// rate() as the name of a request item, looks it up in the request, and skips
+	// the counting block when the lookup fails -- see RenderPostfwdConf.
+	postfwdRateItem = "sender_domain"
+
 	// postfwdCanaryID names the unconditional rule at the top of the file. Its
 	// only job is to be recognisable: the doctor sends it a message and expects
 	// its answer. Anything else -- DUNNO, a different reply, no answer at all --
 	// means the running daemon is not enforcing the file the panel wrote.
-	postfwdCanaryID   = "MAILX_CANARY"
+	postfwdCanaryID = "MAILX_CANARY"
+
+	// postfwdRateCanaryID names the rule that proves rate() itself counts, over
+	// postfwdRateCanaryWindow seconds. It answers a different question from the
+	// canary above: a plain reject rule never reaches a rate() action, so it
+	// still answers correctly in a file whose rate() rules count nothing.
+	postfwdRateCanaryID     = "MAILX_RATE_CANARY"
+	postfwdRateCanaryWindow = 60
+
 	postfwdProbeIDFmt = "PROBE_%04d"
 )
 
@@ -68,45 +84,45 @@ func hasRateLimits(snap *models.Snapshot) bool {
 }
 
 // RenderPostfwdConf produces /etc/postfwd.cf: the marker rules the doctor
-// probes with, one rate rule pair per cap and domain, and a final DUNNO so
+// probes with, one rate rule per cap and domain, and a final DUNNO so
 // everything else is untouched.
 //
 // The syntax is postfwd's, not Postfix's:
 //
-//	id=RL_0001_H_LOCAL
+//	id=RL_0001_H
 //	  sender_domain==example.com
-//	  client_address==127.0.0.1
-//	  action=rate(RL_0001_H/500/3600/450 4.7.1 ...)
+//	  action=rate(sender_domain/500/3600/450 4.7.1 ...)
 //
-// `rate(<key>/<count>/<seconds>/<reply>)` counts messages per key and answers
-// <reply> once <count> messages arrived within <seconds>; below <count> the
-// action is DUNNO, so the next rule still runs. That is what makes several
-// windows for one domain possible: the message has to pass the hourly, daily and
-// monthly rule in turn, and any one of them can stop it.
+// `rate(<item>/<count>/<seconds>/<reply>)` counts messages per value of <item>
+// and answers <reply> once <count> messages arrived within <seconds>; below
+// <count> the action is DUNNO, so the next rule still runs. That is what makes
+// several windows for one domain possible: the message has to pass the hourly,
+// daily and monthly rule in turn, and any one of them can stop it.
 //
-// # Why a window is two rules
+// # Why the first argument of rate() is an item, not a name we choose
 //
-// A message reaches Postfix through one of two paths, and only one of them is
-// authenticated:
+// postfwd does not count before it knows *what* to count: rate() reads its first
+// argument as the name of a request item, looks that name up in the request, and
+// wraps the whole counting block -- bucket creation, increment, comparison,
+// reply -- in `if (defined $request->{$item})`. A first argument it cannot find
+// there is not a harmless label: nothing is counted, no bucket is ever created,
+// and the rule answers DUNNO for every message, for ever. Both the Debian
+// package (postfwd 1.35) and upstream postfwd3 behave this way.
 //
-//   - Webmail on this host (Roundcube, the panel's own test-send, anything that
-//     submits to 127.0.0.1:25) arrives from the loopback address and carries no
-//     SASL username at all.
-//   - A mail client arrives over 587/465 and carries the mailbox it logged in as.
+// v1.6.38 passed the rule id instead -- `action=rate(RL_0001_H/500/3600/...)` --
+// believing it merely named the bucket. Nothing counted, so nothing capped: a
+// domain limited to 2/day sent six messages and postfwd answered DUNNO to all
+// six, while the doctor reported the limits enforced, because its probes are
+// plain rejects that never reach a rate() rule.
 //
-// A single rule that required `sasl_username` therefore never matched webmail,
-// and postfwd answered DUNNO to every message the panel was supposed to stop:
-// the cap was configured, written, loaded, and enforced on nothing. Each window
-// is now two rules that cover both paths and share one counter:
-//
-//	RL_0001_H         the counter key (one window = one bucket)
-//	RL_0001_H_LOCAL:   sender_domain==<domain> + client_address==<loopback>
-//	RL_0001_H_AUTH:    sender_domain==<domain> + sasl_username=~.+ + remote client
-//
-// The two condition sets are disjoint -- the authenticated rule excludes the
-// loopback addresses with postfwd.RemoteClientPattern -- which is what makes
-// sharing the key safe: exactly one of them matches a given message, so a
-// message costs one unit and not two.
+// The key is `sender_domain`, a request item postfwd derives from the envelope
+// sender, and the same thing the rule matches on -- so one rule counts one
+// domain across every submission path. The bucket a rule counts into is the rule
+// id plus its limit (`<id>+<count>_<seconds>`), so one rule per window keeps the
+// windows independent and a message costs exactly one unit. Nothing is split by
+// client address or SASL: `sender_domain` matches webmail, which submits from
+// the loopback address without authenticating, and a mail client on 587/465
+// alike.
 //
 // `sender_domain` is the envelope sender's domain: the cap covers what the
 // domain sends, not what is sent to it, so inbound mail cannot spend a
@@ -118,12 +134,13 @@ func hasRateLimits(snap *models.Snapshot) bool {
 // # Why the marker rules
 //
 // The first two rules of each domain (`PROBE_0001_LOCAL`, `PROBE_0001_AUTH`) and
-// the canary at the top answer a fixed 554 for a sender nothing else can use
-// (postfwd.ProbeSender, postfwd.CanarySender). They sit ahead of the rate rules,
-// so asking them costs no allowance -- checking a limit must not spend it. The
-// doctor sends exactly those messages and reads the answers, which turns "the
-// rule never matches" from a silent failure into a warning that names the path
-// that is broken.
+// the two canaries at the top answer a fixed 554 for senders nothing else can
+// use (postfwd.ProbeSender, postfwd.CanarySender, postfwd.RateCanarySender).
+// They sit ahead of the rate rules, so asking them costs no allowance --
+// checking a limit must not spend it. The doctor sends exactly those messages
+// and reads the answers, which turns two silent failures into warnings: "the
+// rule never matches" (the probes) and "the rule never counts" (the rate canary,
+// the only rule that reaches rate() with a key that belongs to nobody).
 //
 // Domains are sorted by name so the file is stable: postfwd's counters survive a
 // reload (--keep_rates), and an unstable file would make every sync look like a
@@ -133,16 +150,26 @@ func RenderPostfwdConf(domains []models.Domain) []byte {
 	b.WriteString("# Managed by mailx-admin -- DO NOT EDIT\n")
 	b.WriteString("# Outgoing rate limits per sender domain, asked by Postfix through\n")
 	b.WriteString("# smtpd_end_of_data_restrictions (see main.cf).\n")
-	b.WriteString("# Windows are rolling (3600/86400/2592000s); the key is the rule id and\n")
-	b.WriteString("# --keep_rates keeps counters across reloads.\n")
-	b.WriteString("# Each window is two rules (local submission / authenticated submission)\n")
-	b.WriteString("# sharing one counter; the probe and canary rules are what `mailx-admin\n")
-	b.WriteString("# doctor` asks to prove the limits are really enforced.\n\n")
+	b.WriteString("# Windows are rolling (3600/86400/2592000s). rate() is keyed on the\n")
+	b.WriteString("# sender domain -- postfwd counts nothing when its first argument is not\n")
+	b.WriteString("# one of its request items -- and the bucket is the rule id, so one rule\n")
+	b.WriteString("# per window is enough. --keep_rates keeps counters across reloads. The\n")
+	b.WriteString("# probe and canary rules are what `mailx-admin doctor` asks to prove the\n")
+	b.WriteString("# limits are really enforced.\n\n")
 
 	// The canary comes first and is unconditional: it is the answer to "is the
 	// daemon enforcing this file at all".
 	fmt.Fprintf(&b, "id=%s; sender==%s; action=%s\n\n",
 		postfwdCanaryID, postfwd.CanarySender, postfwd.CanaryReply)
+
+	// The rate canary is the only rule that reaches rate() with a key belonging
+	// to nobody, and therefore the only answer to "do the caps count?" -- the
+	// plain rejects above answer even in a file whose rate() rules count nothing.
+	// One message per minute is allowed and the next is refused, so the doctor
+	// asks twice; the bucket is keyed on this sender and expires on its own, so
+	// asking never spends a customer's allowance.
+	fmt.Fprintf(&b, "id=%s; sender==%s; action=rate(sender/1/%d/%s)\n\n",
+		postfwdRateCanaryID, postfwd.RateCanarySender, postfwdRateCanaryWindow, postfwd.RateCanaryReply)
 
 	limited := make([]models.Domain, 0, len(domains))
 	for _, d := range domains {
@@ -162,16 +189,16 @@ func RenderPostfwdConf(domains []models.Domain) []byte {
 		// rejection (the hourly cap) is asked before the day and month counters
 		// are touched.
 		if d.OutboundRateLimit > 0 {
-			writePostfwdRateRules(&b, base+"_H", d, d.OutboundRateLimit, postfwdRateWindow, "hour")
+			writePostfwdRateRule(&b, base+"_H", d, d.OutboundRateLimit, postfwdRateWindow, "hour")
 		}
 		if d.OutboundRateDaily > 0 {
-			writePostfwdRateRules(&b, base+"_D", d, d.OutboundRateDaily, postfwdDailyWindow, "day")
+			writePostfwdRateRule(&b, base+"_D", d, d.OutboundRateDaily, postfwdDailyWindow, "day")
 		}
 		if d.OutboundRateMonthly > 0 {
-			writePostfwdRateRules(&b, base+"_M", d, d.OutboundRateMonthly, postfwdMonthlyWindow, "month")
+			writePostfwdRateRule(&b, base+"_M", d, d.OutboundRateMonthly, postfwdMonthlyWindow, "month")
 		}
 		if d.OutboundRateBurst > 0 {
-			writePostfwdRateRules(&b, base+"_BURST", d, d.OutboundRateBurst, postfwdBurstWindow, "minute")
+			writePostfwdRateRule(&b, base+"_BURST", d, d.OutboundRateBurst, postfwdBurstWindow, "minute")
 		}
 	}
 
@@ -211,10 +238,18 @@ func writePostfwdProbes(b *bytes.Buffer, d models.Domain) {
 	fmt.Fprintf(b, "  action=%s\n\n", postfwd.ProbeReply)
 }
 
-// writePostfwdRateRules emits the two rules that make up one window of one
-// domain: the counter key is base, shared by both, and each rule carries the
-// counter with the same count, interval and reply.
-func writePostfwdRateRules(b *bytes.Buffer, base string, d models.Domain, count, window int, unit string) {
+// writePostfwdRateRule emits one window of one domain: the rule matches every
+// message whose envelope sender is in the domain and counts it in a rate()
+// bucket keyed on that domain.
+//
+// One rule, not one per submission path: `sender_domain` matches webmail
+// (loopback, no SASL) and a mail client on 587/465 (SASL) alike, so a single
+// rule covers both and a message can only be counted once -- which is also why
+// there is no client-address condition to get wrong.
+//
+// The first argument of rate() has to be a request item: see
+// RenderPostfwdConf for what postfwd does when it is not.
+func writePostfwdRateRule(b *bytes.Buffer, id string, d models.Domain, count, window int, unit string) {
 	reply := fmt.Sprintf("450 4.7.1 Rate limit exceeded for %s: %d messages per %s. Try again later.",
 		d.Name, count, unit)
 	if d.RateAction() == models.RateActionReject {
@@ -222,23 +257,9 @@ func writePostfwdRateRules(b *bytes.Buffer, base string, d models.Domain, count,
 			d.Name, count, unit)
 	}
 
-	// Submitted from this host (webmail, the panel's own mail, cron jobs that go
-	// through an smtpd). No sasl condition: this traffic has no SASL at all.
-	fmt.Fprintf(b, "id=%s_LOCAL\n", base)
+	fmt.Fprintf(b, "id=%s\n", id)
 	fmt.Fprintf(b, "  sender_domain==%s\n", d.Name)
-	for _, addr := range postfwd.LoopbackClients {
-		fmt.Fprintf(b, "  client_address==%s\n", addr)
-	}
-	fmt.Fprintf(b, "  action=rate(%s/%d/%d/%s)\n\n", base, count, window, reply)
-
-	// Submitted by an authenticated client from anywhere else. The client
-	// condition is what keeps the message from also matching the local rule and
-	// being counted twice against the same key.
-	fmt.Fprintf(b, "id=%s_AUTH\n", base)
-	fmt.Fprintf(b, "  sender_domain==%s\n", d.Name)
-	b.WriteString("  sasl_username=~.+\n")
-	fmt.Fprintf(b, "  client_address=~%s\n", postfwd.RemoteClientPattern)
-	fmt.Fprintf(b, "  action=rate(%s/%d/%d/%s)\n\n", base, count, window, reply)
+	fmt.Fprintf(b, "  action=rate(%s/%d/%d/%s)\n\n", postfwdRateItem, count, window, reply)
 }
 
 // postfwdCanaryWait bounds how long a sync waits for the reloaded daemon to

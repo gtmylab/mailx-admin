@@ -265,20 +265,24 @@ type postfwdPathProbe struct {
 // makes "the limit is configured" and "the limit is enforced" two different
 // claims.
 //
-// Three questions, each aimed at a failure that is invisible from the outside:
+// Four questions, each aimed at a failure that is invisible from the outside:
 //
 //  1. The canary sender. Anything but the canary's own reply means the daemon is
 //     running some other file (never reloaded, started with --file elsewhere,
 //     or it rejected the file at load time).
-//  2. A message from this host (127.0.0.1, no SASL): the webmail path. This is
-//     the one that was silently unmatched -- the rule required a SASL username,
-//     and webmail submits without logging in to Postfix.
+//  2. A message from this host (127.0.0.1, no SASL): the webmail path. A rule
+//     that only matched authenticated submissions would answer DUNNO to exactly
+//     the mail the cap exists for, and this is the probe that notices.
 //  3. A message from an authenticated client elsewhere: the rule a 587/465
-//     client hits, including the client-address condition that keeps the same
-//     message from being counted twice.
+//     client hits.
+//  4. The rate canary (postfwdRateCanary): "do the caps count at all?". The
+//     first three only prove a message *matches* the file -- none of them
+//     reaches a rate() action, so a file whose rate() rules count nothing
+//     answers all three correctly.
 //
-// The probe rules sit ahead of the rate rules, so none of this touches a counter
-// and none of it can exhaust a customer's allowance.
+// The probe rules sit ahead of the rate rules, so none of this touches a
+// customer's counter and none of it can exhaust an allowance; the rate canary
+// has a bucket of its own.
 func postfwdProbeCheck(ctx context.Context, d models.Domain, conf, detail string) Check {
 	const recipient = "postmaster@example.net"
 
@@ -338,10 +342,14 @@ func postfwdProbeCheck(ctx context.Context, d models.Domain, conf, detail string
 		}
 	}
 
+	if c := postfwdRateCanary(ctx, recipient, conf, detail); c.Name != "" {
+		return c
+	}
+
 	return Check{
 		Name:   postfwdCheckName,
 		Status: OK,
-		Detail: detail + ", enforced by postfwd (both submission paths answered)",
+		Detail: detail + ", enforced by postfwd (both submission paths answered, and rate() counted)",
 	}
 }
 
@@ -368,6 +376,83 @@ func postfwdExpect(ctx context.Context, p postfwdPathProbe, want, conf, detail s
 		}
 	}
 	return Check{}
+}
+
+// maxRateCanaryAsks bounds how often postfwdRateCanary asks. The canary rule
+// allows one message a minute, so a run inside a fresh window needs two asks --
+// the allowed one, then the refusal. The third is slack for a window that
+// happens to expire between two asks; it costs one more request and nothing
+// else.
+const maxRateCanaryAsks = 3
+
+// postfwdRateCanary asks the running daemon the one question a reject rule
+// cannot answer: does rate() count?
+//
+// That is the question the last release got wrong. postfwd counts nothing unless
+// the first argument of rate() names one of its request items -- it evaluates
+// `if (defined $request->{$item})` around the whole counting block, bucket
+// creation included -- so a rule keyed on a name of the panel's own invention is
+// written, parsed, loaded, and silently answers DUNNO to every message. The
+// probes above cannot see that: they are plain reject rules and never reach a
+// rate().
+//
+// The canary rule in the rendered file is `rate(sender/1/60/<reply>)`, keyed on a
+// sender reserved by RFC 2606, so the first message inside a window is allowed
+// and the next is refused -- and a refusal is the proof that a counter was kept.
+// Starting from a fresh window the doctor therefore has to ask twice. Any
+// refusal counts, so the check does not depend on whether postfwd charges the
+// message it allows or the one it refuses.
+func postfwdRateCanary(ctx context.Context, recipient, conf, detail string) Check {
+	req := postfwd.Request{
+		Sender:        postfwd.RateCanarySender,
+		Recipient:     recipient,
+		ClientAddress: postfwdProbeClient,
+		QueueID:       "MAILXDOCTOR",
+	}
+
+	answers := make([]string, 0, maxRateCanaryAsks)
+	for i := 0; i < maxRateCanaryAsks; i++ {
+		resp, err := postfwd.Ask(ctx, postfwd.PolicyAddr, req)
+		if err != nil {
+			return Check{
+				Name:    postfwdCheckName,
+				Status:  Warn,
+				Detail:  detail + ", but the rate() canary failed: " + err.Error(),
+				Hint:    "systemctl status postfwd; the rules it loaded are in " + conf,
+				Command: "systemctl status postfwd",
+			}
+		}
+		answers = append(answers, resp.Action)
+		if resp.Action == postfwd.RateCanaryReply {
+			break
+		}
+	}
+
+	return rateCanaryVerdict(answers, conf, detail)
+}
+
+// rateCanaryVerdict is the decision half of postfwdRateCanary, kept pure so its
+// wording and its tolerance can be tested without a daemon.
+//
+// Three DUNNOs mean the file is loaded and matching (the probes proved that) but
+// rate() is not counting, which is exactly the state in which a cap reads as
+// configured and enforces nothing -- a state that lasted a whole release.
+func rateCanaryVerdict(answers []string, conf, detail string) Check {
+	for _, a := range answers {
+		if a == postfwd.RateCanaryReply {
+			return Check{}
+		}
+	}
+
+	return Check{
+		Name:   postfwdCheckName,
+		Status: Warn,
+		Detail: fmt.Sprintf("%s, but postfwd never refused the rate() canary (answers: %q), so the caps count nothing", detail, answers),
+		Hint: "postfwd skips its whole counting block unless the first argument of rate() is one of its request items " +
+			"(`if (defined $request{$item})`); the rules in " + conf + " must key rate() on sender_domain, and " +
+			"`mailx-admin sync` renders them that way",
+		Command: "mailx-admin sync",
+	}
 }
 
 // postfwdBinary finds the daemon's executable.

@@ -173,9 +173,9 @@ func TestSetDomainRateLimitReachesThePostfwdConfig(t *testing.T) {
 		"id=" + rule + "_D",
 		"id=" + rule + "_M",
 		"id=" + rule + "_BURST",
-		"action=rate(" + rule + "_H/250/3600/554 5.7.1",
-		"action=rate(" + rule + "_D/1000/86400/554 5.7.1",
-		"action=rate(" + rule + "_M/20000/2592000/554 5.7.1",
+		"action=rate(sender_domain/250/3600/554 5.7.1",
+		"action=rate(sender_domain/1000/86400/554 5.7.1",
+		"action=rate(sender_domain/20000/2592000/554 5.7.1",
 	} {
 		if !strings.Contains(conf, want) {
 			t.Errorf("postfwd config is missing %q:\n%s", want, conf)
