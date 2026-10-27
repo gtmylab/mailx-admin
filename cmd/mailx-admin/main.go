@@ -18,6 +18,21 @@ import (
 )
 
 func main() {
+	if err := newRootCmd().Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// newRootCmd builds the command tree.
+//
+// It is a function rather than the body of main for one reason: every hint the
+// panel prints ends with "run `mailx-admin <something>`", and v1.6.39 shipped
+// hints naming a command that does not exist (`mailx-admin sync`, which is only
+// a subcommand of `roundcube`). A tree a test can walk is what makes those
+// strings checkable -- see commands_test.go, which fails if any command the
+// panel tells an operator to run is not in here.
+func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:     "mailx-admin",
 		Short:   "MailX Admin — control plane for MailX mail servers",
@@ -38,10 +53,7 @@ func main() {
 		cmdCron(),
 	)
 
-	if err := root.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
+	return root
 }
 
 func openAll(cfgPath string) (*config.Config, *db.DB, *store.Store, error) {
@@ -92,8 +104,19 @@ func cmdReconcile() *cobra.Command {
 		jsonOut bool
 	)
 	cmd := &cobra.Command{
-		Use:   "reconcile",
-		Short: "Render and apply daemon configs from DB state",
+		Use: "reconcile",
+		// `sync` is the word the panel uses for this everywhere an operator can
+		// see it (the banner, the dashboard, "the last sync"), so it is also the
+		// word people type. It is an alias rather than a second command: one
+		// implementation, two spellings, and a hint that says `sync` still runs
+		// instead of dying with "unknown command".
+		Aliases: []string{"sync"},
+		Short:   "Render and apply daemon configs from DB state",
+		Long: `Render every managed configuration file from the database, apply the ones
+that changed, validate them, and reload the services that read them.
+
+The panel calls this a sync, and so does this command: ` + "`mailx-admin sync`" + ` is an
+alias for it. Nothing is written when --dry-run is set.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, database, st, err := openAll(cfgPath)
 			if err != nil {

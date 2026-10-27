@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -184,8 +185,8 @@ func rateLimitCheck(ctx context.Context, opts Options) Check {
 			Name:    postfwdCheckName,
 			Status:  Warn,
 			Detail:  detail + ", and postfwd is running, but " + mainCF + " never asks it",
-			Hint:    "the queue accepts mail without consulting the limits; run `mailx-admin sync` to render main.cf",
-			Command: "mailx-admin sync",
+			Hint:    "the queue accepts mail without consulting the limits; run `mailx-admin reconcile` to render main.cf",
+			Command: "mailx-admin reconcile",
 		}
 	}
 
@@ -218,8 +219,8 @@ func postfwdConfigChecks(ctx context.Context, opts Options, snap *models.Snapsho
 			Name:    postfwdCheckName,
 			Status:  Warn,
 			Detail:  detail + ", but " + conf + " could not be read: " + err.Error(),
-			Hint:    "postfwd was started without the panel's rules; run `mailx-admin sync` to render them",
-			Command: "mailx-admin sync",
+			Hint:    "postfwd was started without the panel's rules; run `mailx-admin reconcile` to render them",
+			Command: "mailx-admin reconcile",
 		}
 	}
 
@@ -228,11 +229,12 @@ func postfwdConfigChecks(ctx context.Context, opts Options, snap *models.Snapsho
 	// "the limit reached the daemon".
 	if want := string(reconciler.RenderPostfwdConf(snap.Domains)); want != string(src) {
 		return Check{
-			Name:    postfwdCheckName,
-			Status:  Warn,
-			Detail:  detail + ", but " + conf + " is not what the panel would render",
-			Hint:    "the saved limits have not reached postfwd (a failed or never-run sync does this); check the last sync below",
-			Command: "mailx-admin sync",
+			Name:   postfwdCheckName,
+			Status: Warn,
+			Detail: detail + ", but " + conf + " is not what the panel would render: " +
+				firstFileDifference(string(src), want),
+			Hint:    "the saved limits have not reached postfwd (a failed or never-run reconcile does this); check the last sync below",
+			Command: "mailx-admin reconcile",
 		}
 	}
 
@@ -251,6 +253,112 @@ func postfwdConfigChecks(ctx context.Context, opts Options, snap *models.Snapsho
 	}
 
 	return postfwdProbeCheck(ctx, limited[0], conf, detail)
+}
+
+// firstFileDifference names the rule that makes two renders differ.
+//
+// "the file is not what the panel would render" is, on its own, a true and
+// useless sentence. It is what the doctor printed for a host still carrying
+// v1.6.38's rules -- `action=rate(RL_0001_D/2/86400/...)` -- and nothing in it
+// said that the on-disk rule counts nothing, because its first argument is a rule
+// id where postfwd needs one of its request items. Quoting both lines answers
+// the question the operator is about to ask.
+//
+// The comparison is by rule, not by position: a release that rewords the header
+// shifts every line number, and reporting "line 4 differs" for what is really a
+// comment would bury the one line worth reading. Comment and blank lines are
+// ignored while looking for the difference, and only when every rule matches
+// does it quote the first textual difference instead.
+func firstFileDifference(have, want string) string {
+	const maxQuoted = 120
+
+	haveLines := strings.Split(have, "\n")
+	wantLines := strings.Split(want, "\n")
+
+	onDiskAt := unmatchedRule(haveLines, wantLines)
+	expectedAt := unmatchedRule(wantLines, haveLines)
+
+	switch {
+	case onDiskAt >= 0 && expectedAt >= 0:
+		return fmt.Sprintf("line %d on disk is %s where %s (line %d of the render) is expected",
+			onDiskAt+1, quotedLine(haveLines, onDiskAt, maxQuoted),
+			quotedLine(wantLines, expectedAt, maxQuoted), expectedAt+1)
+	case onDiskAt >= 0:
+		return fmt.Sprintf("line %d on disk is %s, which the panel no longer renders",
+			onDiskAt+1, quotedLine(haveLines, onDiskAt, maxQuoted))
+	case expectedAt >= 0:
+		return fmt.Sprintf("the render adds %s (line %d), which the file does not have",
+			quotedLine(wantLines, expectedAt, maxQuoted), expectedAt+1)
+	}
+
+	// The same rules on both sides, so what differs is a comment or the order.
+	line := firstDifferingLine(haveLines, wantLines)
+	if line >= len(haveLines) || line >= len(wantLines) {
+		return fmt.Sprintf("the two differ only in length (%d and %d line(s))", len(haveLines), len(wantLines))
+	}
+	return fmt.Sprintf("line %d differs: %s on disk, %s in the render",
+		line+1, quotedLine(haveLines, line, maxQuoted), quotedLine(wantLines, line, maxQuoted))
+}
+
+// unmatchedRule returns the index of the first rule line in lines that appears
+// nowhere in other, or -1 when every rule has a counterpart.
+func unmatchedRule(lines, other []string) int {
+	known := make(map[string]bool, len(other))
+	for _, line := range other {
+		if !isCommentOrBlank(line) {
+			known[strings.TrimSpace(line)] = true
+		}
+	}
+	for i, line := range lines {
+		if isCommentOrBlank(line) {
+			continue
+		}
+		if !known[strings.TrimSpace(line)] {
+			return i
+		}
+	}
+	return -1
+}
+
+// firstDifferingLine returns the index of the first line that matters, or the
+// length of the shorter file when one is a prefix of the other.
+func firstDifferingLine(have, want []string) int {
+	first := -1
+	for i := 0; i < len(have) && i < len(want); i++ {
+		if have[i] == want[i] {
+			continue
+		}
+		if first < 0 {
+			first = i
+		}
+		if !isCommentOrBlank(have[i]) || !isCommentOrBlank(want[i]) {
+			return i
+		}
+	}
+	if first < 0 {
+		return min(len(have), len(want))
+	}
+	return first
+}
+
+// isCommentOrBlank reports whether a rendered line carries no rule.
+func isCommentOrBlank(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return trimmed == "" || strings.HasPrefix(trimmed, "#")
+}
+
+// quotedLine renders one line for a message: quoted, CRLF-neutralised (a file
+// saved with CRLF endings is not a rule difference) and clipped, so one absurd
+// line cannot bury the finding.
+func quotedLine(lines []string, i, max int) string {
+	if i >= len(lines) {
+		return "nothing (the file ends)"
+	}
+	line := strings.TrimRight(lines[i], "\r")
+	if len(line) > max {
+		line = line[:max] + "…"
+	}
+	return strconv.Quote(line)
 }
 
 // postfwdPathProbe is one probe: the request to send, and the wording for when
@@ -372,7 +480,7 @@ func postfwdExpect(ctx context.Context, p postfwdPathProbe, want, conf, detail s
 			Status:  Warn,
 			Detail:  fmt.Sprintf("%s, but %s: postfwd answered %q where %q was expected", detail, p.problem, resp.Action, want),
 			Hint:    p.hint,
-			Command: "mailx-admin sync",
+			Command: "mailx-admin reconcile",
 		}
 	}
 	return Check{}
@@ -450,8 +558,8 @@ func rateCanaryVerdict(answers []string, conf, detail string) Check {
 		Detail: fmt.Sprintf("%s, but postfwd never refused the rate() canary (answers: %q), so the caps count nothing", detail, answers),
 		Hint: "postfwd skips its whole counting block unless the first argument of rate() is one of its request items " +
 			"(`if (defined $request{$item})`); the rules in " + conf + " must key rate() on sender_domain, and " +
-			"`mailx-admin sync` renders them that way",
-		Command: "mailx-admin sync",
+			"`mailx-admin reconcile` renders them that way",
+		Command: "mailx-admin reconcile",
 	}
 }
 

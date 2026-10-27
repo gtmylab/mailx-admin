@@ -234,7 +234,7 @@ func (s *Server) logSourceInfo(ctx context.Context) logSourceInfo {
 			_ = f.Close()
 		} else {
 			info.Hints = append(info.Hints,
-				"The log file exists but the panel cannot read it. Run mailx-admin as a user in the "+
+				"The log file exists but the panel cannot read it. Run the panel as a user in the "+
 					"adm (or systemd-journal) group, or make the file readable, then restart the service.")
 		}
 	} else if info.Source == "journal" {
